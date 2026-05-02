@@ -1,0 +1,40 @@
+{
+  "manifest_version": 3,
+  "name": "Reduce",
+  "version": "0.1.0",
+  "description": "Reduce a sprawling tab list: close duplicates, or clip pages to your Obsidian vault and close them.",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "tab-dedup@addons.local",
+      "strict_min_version": "121.0",
+      "data_collection_permissions": {
+        "required": ["none"]
+      }
+    }
+  },
+  "permissions": ["tabs", "storage", "scripting", "activeTab"],
+  "host_permissions": ["*://*/*"],
+  "background": {
+    "scripts": ["src/background.js"],
+    "type": "module"
+  },
+  "action": {
+    "default_popup": "popup/popup.html",
+    "default_title": "Reduce",
+    "default_icon": "icons/icon.svg"
+  },
+  "icons": {
+    "48": "icons/icon.svg",
+    "96": "icons/icon.svg"
+  },
+  "options_ui": {
+    "page": "options/options.html",
+    "open_in_tab": false
+  },
+  "commands": {
+    "_execute_action": {
+      "suggested_key": { "default": "Alt+Shift+D" },
+      "description": "Open Reduce"
+    }
+  }
+}

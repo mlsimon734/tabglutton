@@ -1,0 +1,7 @@
+node_modules/
+web-ext-artifacts/
+dist/
+.DS_Store
+*.log
+.dev-profile/
+.dev-profile-firefox/

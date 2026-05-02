@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Reduce — Settings</title>
+    <link rel="stylesheet" href="options.css" />
+  </head>
+  <body>
+    <div class="surface">
+      <header class="page-header">
+        <div>
+          <h1 class="title">Reduce</h1>
+          <p class="subtitle">Settings</p>
+        </div>
+        <p id="status" class="status" aria-live="polite"></p>
+      </header>
+
+      <section>
+        <h2 class="section-title">Deduplication</h2>
+
+        <div class="setting">
+          <div class="setting-text">
+            <strong>Strip URL fragment</strong>
+            <small>
+              Treat <code>page#a</code> and <code>page#b</code> as the same URL
+              when finding duplicates.
+            </small>
+          </div>
+          <div class="setting-control">
+            <label class="switch">
+              <input type="checkbox" id="stripFragment" />
+              <span class="switch-track" aria-hidden="true">
+                <span class="switch-thumb"></span>
+              </span>
+            </label>
+          </div>
+        </div>
+
+        <div class="setting block">
+          <div class="setting-text">
+            <strong>Extra params to strip</strong>
+            <small>
+              Comma-separated. Always stripped:
+              <code>utm_*</code>, <code>fbclid</code>, <code>gclid</code>,
+              <code>ysclid</code>, <code>msclkid</code>, <code>ref</code>.
+            </small>
+          </div>
+          <div class="setting-control">
+            <input
+              type="text"
+              id="extraStripParams"
+              placeholder="e.g. spm, source"
+            />
+          </div>
+        </div>
+
+        <div class="setting block">
+          <div class="setting-text">
+            <strong>Scope</strong>
+            <small>Which tabs to consider when looking for duplicates.</small>
+          </div>
+          <div class="setting-control radio-stack">
+            <label class="radio-card">
+              <input type="radio" name="scope" value="hidden-false" />
+              <span class="radio-card-body">
+                <strong>Active workspace (Zen)</strong>
+                <small>
+                  Only consider visible tabs. Falls back to all tabs on regular
+                  Firefox.
+                </small>
+              </span>
+            </label>
+            <label class="radio-card">
+              <input type="radio" name="scope" value="current-window" />
+              <span class="radio-card-body">
+                <strong>Current window only</strong>
+                <small>
+                  Use this if the workspace heuristic isn't working in your Zen
+                  build.
+                </small>
+              </span>
+            </label>
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <h2 class="section-title">Obsidian</h2>
+
+        <div class="setting block">
+          <div class="setting-text">
+            <strong>Obsidian vault</strong>
+            <small>
+              Vault name used by Clip Reduce. Notes are created under
+              <code>Clippings/</code> with the clipped page title.
+            </small>
+          </div>
+          <div class="setting-control">
+            <input type="text" id="obsidianVault" placeholder="My Vault" />
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <script type="module" src="options.js"></script>
+  </body>
+</html>
