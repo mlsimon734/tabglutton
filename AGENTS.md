@@ -9,7 +9,9 @@ This is a Bun-powered TypeScript WebExtension for Zen Browser and Firefox; the p
 - `bun install`: install dependencies.
 - `bun run build`: type-compile sources and prepare `dist/`.
 - `bun run typecheck`: run `tsc --noEmit` without producing output.
-- `bun run lint`: build, then run `web-ext lint` against `dist/`.
+- `bun run format` / `format:check`: run oxfmt over the tree (or check only).
+- `bun run lint`: runs `lint:js` (oxlint) then `lint:ext` (build + `web-ext lint`).
+- `bun run check`: typecheck + format:check + lint. Run before committing.
 - `bun run start`: build and launch Zen Browser with the extension loaded from `dist/`.
 - `bun run start:firefox`: build and launch regular Firefox with a persistent dev profile.
 - `bun run package`: build a zip in `web-ext-artifacts/`.
@@ -21,6 +23,14 @@ Use TypeScript ES modules with explicit relative `.js` import specifiers, as in 
 ## Testing Guidelines
 
 There is no dedicated automated test suite yet. For every change, run `bun run typecheck` and `bun run lint`; use `bun run start` or `bun run start:firefox` for live browser checks. If adding tests, colocate them near the related module or under `tests/`, name them after the behavior under test, such as `normalize.test.ts`, and prioritize pure modules like `normalize.ts` and `dedup.ts`.
+
+CI (`.github/workflows/ci.yml`) runs typecheck → format:check → oxlint → web-ext lint → package on every push and PR. Locally, `prek install` wires fast format/lint hooks into pre-commit; see `.pre-commit-config.yaml`.
+
+## Version Control
+
+This repo uses [jj](https://github.com/martinvonz/jj) in colocated mode — `.git` and `.jj` coexist, and standard `git` commands work normally on the working tree. **Default to plain `git` commands** (`git status`, `git diff`, `git log`, `git commit`, `git push`) for everyday VCS work. They are well-understood and produce predictable results.
+
+Reach for `jj` only when its unique features are explicitly needed — e.g. `jj op log` / `jj undo` to recover from a mistake, `jj split` / `jj absorb` for hunk-level commit surgery, or `jj describe` to rewrite a description. Do not run `jj bookmark`, `jj rebase`, or other history-rewriting commands without checking with the user first; divergent change-ids and bookmark conflicts are easy to create and hard to clean up non-interactively.
 
 ## Commit & Pull Request Guidelines
 
