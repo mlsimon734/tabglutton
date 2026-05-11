@@ -6,10 +6,7 @@ import type {
   PopupTab,
 } from "../src/background.js";
 import { normalizeUrl } from "../src/normalize.js";
-import {
-  normalizeOptsFrom,
-  type Settings,
-} from "../src/storage.js";
+import { normalizeOptsFrom, type Settings } from "../src/storage.js";
 
 interface PopupState {
   scopedTabs: PopupTab[];
@@ -37,36 +34,22 @@ const TOAST_DURATION_SEC = 6;
 
 const groupsEl = document.getElementById("groups") as HTMLUListElement;
 const emptyEl = document.getElementById("empty") as HTMLDivElement;
-const emptyTitleEl = document.getElementById(
-  "empty-title",
-) as HTMLParagraphElement;
+const emptyTitleEl = document.getElementById("empty-title") as HTMLParagraphElement;
 const emptySubEl = document.getElementById("empty-sub") as HTMLParagraphElement;
 const warningEl = document.getElementById("warning") as HTMLDivElement;
 const filterInput = document.getElementById("filter") as HTMLInputElement;
-const selectAllBtn = document.getElementById(
-  "select-all",
-) as HTMLButtonElement;
-const selectionSummaryEl = document.getElementById(
-  "selection-summary",
-) as HTMLSpanElement;
+const selectAllBtn = document.getElementById("select-all") as HTMLButtonElement;
+const selectionSummaryEl = document.getElementById("selection-summary") as HTMLSpanElement;
 const dedupBtn = document.getElementById("dedup") as HTMLButtonElement;
 const dedupCountEl = document.getElementById("dedup-count") as HTMLSpanElement;
 const optionsBtn = document.getElementById("open-options") as HTMLButtonElement;
-const clipCurrentBtn = document.getElementById(
-  "clip-current",
-) as HTMLButtonElement;
+const clipCurrentBtn = document.getElementById("clip-current") as HTMLButtonElement;
 const copyUrlsBtn = document.getElementById("copy-urls") as HTMLButtonElement;
-const closeSelectedBtn = document.getElementById(
-  "close-selected",
-) as HTMLButtonElement;
+const closeSelectedBtn = document.getElementById("close-selected") as HTMLButtonElement;
 const toastEl = document.getElementById("toast") as HTMLDivElement;
 const toastTextEl = document.getElementById("toast-text") as HTMLSpanElement;
-const toastUndoBtn = document.getElementById(
-  "toast-undo",
-) as HTMLButtonElement;
-const shortcutHintEl = document.getElementById(
-  "shortcut-hint",
-) as HTMLElement | null;
+const toastUndoBtn = document.getElementById("toast-undo") as HTMLButtonElement;
+const shortcutHintEl = document.getElementById("shortcut-hint") as HTMLElement | null;
 
 const state: PopupState = {
   scopedTabs: [],
@@ -121,10 +104,7 @@ function visibleGroups(): DomainGroup[] {
   }
   const groups: DomainGroup[] = [];
   for (const [host, tabs] of byHost) {
-    tabs.sort(
-      (a, b) =>
-        (a.windowId ?? 0) - (b.windowId ?? 0) || a.index - b.index,
-    );
+    tabs.sort((a, b) => (a.windowId ?? 0) - (b.windowId ?? 0) || a.index - b.index);
     groups.push({ host, tabs });
   }
   groups.sort((a, b) => b.tabs.length - a.tabs.length || a.host.localeCompare(b.host));
@@ -227,12 +207,9 @@ function renderGroup(group: DomainGroup): HTMLLIElement {
   const selectBtn = document.createElement("button");
   selectBtn.className = `select-toggle ${sel}`;
   selectBtn.type = "button";
-  selectBtn.textContent =
-    sel === "all" ? "Deselect" : sel === "partial" ? "Select rest" : "Select";
+  selectBtn.textContent = sel === "all" ? "Deselect" : sel === "partial" ? "Select rest" : "Select";
   selectBtn.title =
-    sel === "all"
-      ? "Deselect all tabs in this group"
-      : "Select all tabs in this group";
+    sel === "all" ? "Deselect all tabs in this group" : "Select all tabs in this group";
   selectBtn.addEventListener("click", () => {
     setGroupSelection(group, sel !== "all");
     render();
@@ -323,9 +300,7 @@ function renderSelectionSummary(visibleIds: number[]): void {
 
   const allVisibleSelected =
     visibleIds.length > 0 && visibleIds.every((id) => state.selected.has(id));
-  selectAllBtn.textContent = allVisibleSelected
-    ? "Deselect all"
-    : "Select all";
+  selectAllBtn.textContent = allVisibleSelected ? "Deselect all" : "Select all";
   selectAllBtn.disabled = visibleIds.length === 0;
 
   const hasSelection = selected > 0;
@@ -555,8 +530,7 @@ filterInput.addEventListener("input", () => {
 selectAllBtn.addEventListener("click", () => {
   const groups = visibleGroups();
   const ids = visibleTabIds(groups);
-  const allSelected =
-    ids.length > 0 && ids.every((id) => state.selected.has(id));
+  const allSelected = ids.length > 0 && ids.every((id) => state.selected.has(id));
   if (allSelected) {
     for (const id of ids) state.selected.delete(id);
   } else {

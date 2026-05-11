@@ -1,23 +1,12 @@
 import type { ScopeMode, Settings } from "../src/storage.js";
 
-const stripFragment = document.getElementById(
-  "stripFragment",
-) as HTMLInputElement;
-const extraStripParams = document.getElementById(
-  "extraStripParams",
-) as HTMLInputElement;
-const obsidianVault = document.getElementById(
-  "obsidianVault",
-) as HTMLInputElement;
-const scopeRadios = document.querySelectorAll<HTMLInputElement>(
-  'input[name="scope"]',
-);
+const stripFragment = document.getElementById("stripFragment") as HTMLInputElement;
+const extraStripParams = document.getElementById("extraStripParams") as HTMLInputElement;
+const obsidianVault = document.getElementById("obsidianVault") as HTMLInputElement;
+const scopeRadios = document.querySelectorAll<HTMLInputElement>('input[name="scope"]');
 const statusEl = document.getElementById("status") as HTMLParagraphElement;
 
-const DEFAULTS: Pick<
-  Settings,
-  "stripFragment" | "extraStripParams" | "scope" | "obsidianVault"
-> = {
+const DEFAULTS: Pick<Settings, "stripFragment" | "extraStripParams" | "scope" | "obsidianVault"> = {
   stripFragment: true,
   extraStripParams: [],
   scope: "hidden-false",
@@ -32,9 +21,7 @@ function parseParams(text: string): string[] {
 }
 
 async function load(): Promise<void> {
-  const stored = (await browser.storage.local.get(
-    Object.keys(DEFAULTS),
-  )) as Partial<Settings>;
+  const stored = (await browser.storage.local.get(Object.keys(DEFAULTS))) as Partial<Settings>;
   const settings = { ...DEFAULTS, ...stored };
   stripFragment.checked = settings.stripFragment;
   extraStripParams.value = (settings.extraStripParams ?? []).join(", ");

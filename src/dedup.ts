@@ -7,10 +7,7 @@ export interface DupGroup {
   tabs: Tab[];
 }
 
-export function groupDuplicates(
-  tabs: Tab[],
-  normalizeOpts: NormalizeOpts,
-): DupGroup[] {
+export function groupDuplicates(tabs: Tab[], normalizeOpts: NormalizeOpts): DupGroup[] {
   const groups = new Map<string, Tab[]>();
   for (const tab of tabs) {
     const key = normalizeUrl(tab.url, normalizeOpts);

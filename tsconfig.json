@@ -22,10 +22,6 @@
     "declaration": false,
     "removeComments": false
   },
-  "include": [
-    "src/**/*.ts",
-    "popup/popup.ts",
-    "options/options.ts"
-  ],
+  "include": ["src/**/*.ts", "popup/popup.ts", "options/options.ts"],
   "exclude": ["node_modules", "dist", "build.ts"]
 }

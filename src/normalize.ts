@@ -29,10 +29,7 @@ function shouldStripParam(key: string, extras: Set<string>): boolean {
   return false;
 }
 
-export function normalizeUrl(
-  rawUrl: string | undefined,
-  opts: NormalizeOpts = {},
-): string | null {
+export function normalizeUrl(rawUrl: string | undefined, opts: NormalizeOpts = {}): string | null {
   const { stripFragment = true, extraStripParams = [] } = opts;
   if (!rawUrl) return null;
 

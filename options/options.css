@@ -20,10 +20,8 @@
   --duration-fast: 120ms;
   --duration: 220ms;
 
-  --font-ui: -apple-system, "SF Pro Text", system-ui,
-    "Segoe UI Variable", "Segoe UI", sans-serif;
-  --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", "Cascadia Mono",
-    Menlo, monospace;
+  --font-ui: -apple-system, "SF Pro Text", system-ui, "Segoe UI Variable", "Segoe UI", sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", "Cascadia Mono", Menlo, monospace;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -119,7 +117,8 @@ body {
   border-radius: var(--radius-pill);
   opacity: 0;
   transform: translateY(2px);
-  transition: opacity var(--duration-fast) ease-out,
+  transition:
+    opacity var(--duration-fast) ease-out,
     transform var(--duration-fast) ease-out;
   white-space: nowrap;
 }
@@ -210,7 +209,8 @@ input[type="number"] {
   padding: 7px 10px;
   width: 100%;
   outline: 0;
-  transition: border-color var(--duration-fast) ease-out,
+  transition:
+    border-color var(--duration-fast) ease-out,
     background var(--duration-fast) ease-out,
     box-shadow var(--duration-fast) ease-out;
 }
@@ -299,7 +299,8 @@ code {
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   cursor: pointer;
-  transition: border-color var(--duration-fast) ease-out,
+  transition:
+    border-color var(--duration-fast) ease-out,
     background var(--duration-fast) ease-out;
 }
 

@@ -2,23 +2,17 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <title>Reduce</title>
+    <title>Tabglutton</title>
     <link rel="stylesheet" href="popup.css" />
   </head>
   <body>
     <div class="surface">
       <header>
         <div class="row title-row">
-          <h1 class="title">Reduce</h1>
+          <h1 class="title">Tabglutton</h1>
           <kbd id="shortcut-hint" class="shortcut-hint" aria-hidden="true"></kbd>
           <div class="title-spacer"></div>
-          <button
-            id="dedup"
-            type="button"
-            class="primary"
-            disabled
-            title="Close duplicate tabs"
-          >
+          <button id="dedup" type="button" class="primary" disabled title="Close duplicate tabs">
             <span class="primary-label">Dedup</span>
             <span id="dedup-count" class="count-badge" hidden>0</span>
           </button>
@@ -44,21 +38,8 @@
 
         <div class="row search-row">
           <div class="search">
-            <svg
-              class="search-glyph"
-              viewBox="0 0 16 16"
-              width="13"
-              height="13"
-              aria-hidden="true"
-            >
-              <circle
-                cx="7"
-                cy="7"
-                r="4.4"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="1.4"
-              />
+            <svg class="search-glyph" viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
+              <circle cx="7" cy="7" r="4.4" fill="none" stroke="currentColor" stroke-width="1.4" />
               <path
                 d="M10.4 10.4 13.5 13.5"
                 stroke="currentColor"
@@ -66,20 +47,13 @@
                 stroke-linecap="round"
               />
             </svg>
-            <input
-              type="search"
-              id="filter"
-              placeholder="Filter URL or title"
-              autocomplete="off"
-            />
+            <input type="search" id="filter" placeholder="Filter URL or title" autocomplete="off" />
             <kbd class="search-hint" aria-hidden="true">/</kbd>
           </div>
         </div>
 
         <div class="row selection-row">
-          <button id="select-all" type="button" class="select-toggle quiet">
-            Select all
-          </button>
+          <button id="select-all" type="button" class="select-toggle quiet">Select all</button>
           <span id="selection-summary" class="muted">0 selected</span>
         </div>
 
@@ -101,21 +75,14 @@
               id="clip-current"
               type="button"
               disabled
-              title="Clip selected tabs into Obsidian (Defuddle parse) and close them."
+              title="Devour selected tabs into Obsidian (Defuddle parse) and close them."
             >
-              Clip Reduce
+              Devour
             </button>
             <button id="copy-urls" type="button" disabled>Copy URLs</button>
           </div>
           <span class="bulk-divider" aria-hidden="true"></span>
-          <button
-            id="close-selected"
-            type="button"
-            class="danger"
-            disabled
-          >
-            Close
-          </button>
+          <button id="close-selected" type="button" class="danger" disabled>Close</button>
         </div>
       </footer>
     </div>

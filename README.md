@@ -1,10 +1,10 @@
-# Reduce
+# Tabglutton
 
-A Firefox / Zen Browser extension for shrinking a sprawling tab list — close duplicates in a workspace, or clip pages into your Obsidian vault and close them.
+A Firefox / Zen Browser extension that devours your sprawling tab list — closing duplicates in a workspace, or saving pages into your Obsidian vault and closing them.
 
 ## Why
 
-Zen workspaces accumulate tabs fast. Some are honest duplicates (the same Reddit thread opened twice, the same blog post followed from two different links, the same X post via a notification). Others are pages you've already mentally finished with but want to keep — they belong in a notes vault, not in the tab strip. Reduce handles both: it deduplicates on demand, and it offers a one-click pipeline from open tab to Obsidian note.
+Zen workspaces accumulate tabs fast. Some are honest duplicates (the same Reddit thread opened twice, the same blog post followed from two different links, the same X post via a notification). Others are pages you've already mentally finished with but want to keep — they belong in a notes vault, not in the tab strip. Tabglutton handles both: it deduplicates on demand, and it offers a one-click pipeline from open tab to Obsidian note.
 
 ## What it does
 
@@ -16,9 +16,9 @@ The toolbar icon shows a red badge with the number of duplicate tabs currently i
 - **Per-tab actions**: pick which copy to close yourself, or focus an existing tab instead of closing.
 - **Undo**: a toast appears for ~6 seconds after a bulk close. Click Undo to reopen the closed tabs in their original positions.
 
-### Clip Reduce → Obsidian
+### Devour → Obsidian
 
-Select tabs in the popup and click **Clip Reduce**. For each selected tab, Reduce:
+Select tabs in the popup and click **Devour**. For each selected tab, Tabglutton:
 
 1. injects a Defuddle-based extractor into the page (`src/clip-current.ts`),
 2. formats the result as markdown with frontmatter — title, source URL, author, site, published date (`src/clip-format.ts:markdownForClip`),
@@ -29,7 +29,7 @@ Requires the **Obsidian vault** option to be set. Only `http(s)` pages are clipp
 
 ## Scope
 
-- **Zen Browser**: tries to scope to the *active workspace* by filtering on `tab.hidden === false`. Zen's workspace API is not exposed to extensions — this is a heuristic. If the heuristic looks broken (every tab in the window is "visible"), the popup shows a warning and you can fall back to "current window only" in options.
+- **Zen Browser**: tries to scope to the _active workspace_ by filtering on `tab.hidden === false`. Zen's workspace API is not exposed to extensions — this is a heuristic. If the heuristic looks broken (every tab in the window is "visible"), the popup shows a warning and you can fall back to "current window only" in options.
 - **Regular Firefox**: scope falls through to "current window only" since Firefox has no workspaces.
 
 ## Settings
@@ -39,7 +39,7 @@ Open via right-click → Manage Extension → Preferences.
 - **Strip URL fragment** (default ON): treat `page#a` and `page#b` as the same URL when grouping.
 - **Extra params to strip**: comma-separated query params to drop in addition to the built-in tracking-param list.
 - **Scope**: `Active workspace (Zen)` (the `hidden-false` heuristic) or `Current window only`.
-- **Obsidian vault**: vault name used by Clip Reduce. Required for clipping; ignored by dedup.
+- **Obsidian vault**: vault name used by Devour. Required for clipping; ignored by dedup.
 
 ## URL normalization
 
@@ -71,8 +71,4 @@ The toolchain: TypeScript compiles `src/`, `popup/`, `options/` into `dist/` mir
 
 ## Roadmap
 
-The current build does dedup and clip-to-Obsidian by direct rules. A planned next step is to put a local Claude Code or Codex agent on the loop — looking at each open tab and proposing keep / clip / discard, with the user approving. The Clip Reduce pipeline is the seam where that swaps in.
-
-## Note on the addon ID
-
-The gecko addon ID is still `tab-dedup@addons.local` even though the product is now called Reduce. The ID is kept stable so existing installs don't lose their stored settings.
+The current build does dedup and clip-to-Obsidian by direct rules. A planned next step is to put a local Claude Code or Codex agent on the loop — looking at each open tab and proposing keep / clip / discard, with the user approving. The Devour pipeline is the seam where that swaps in.

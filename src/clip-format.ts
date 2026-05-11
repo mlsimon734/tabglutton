@@ -26,8 +26,7 @@ function localIsoTimestamp(date = new Date()): string {
   const sign = offsetMin >= 0 ? "+" : "-";
   const abs = Math.abs(offsetMin);
   const offset =
-    `${sign}${String(Math.floor(abs / 60)).padStart(2, "0")}:` +
-    String(abs % 60).padStart(2, "0");
+    `${sign}${String(Math.floor(abs / 60)).padStart(2, "0")}:` + String(abs % 60).padStart(2, "0");
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}T${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}:${String(date.getSeconds()).padStart(2, "0")}${offset}`;
 }
 
@@ -83,9 +82,7 @@ function generateClipperFrontmatter(properties: ClipperProperty[]): string {
         break;
       default:
         frontmatter +=
-          property.value.trim() !== ""
-            ? ` "${escapeDoubleQuotes(property.value)}"\n`
-            : "\n";
+          property.value.trim() !== "" ? ` "${escapeDoubleQuotes(property.value)}"\n` : "\n";
     }
   }
   frontmatter += "---\n";
@@ -114,11 +111,7 @@ export function markdownForClip(payload: ClipPayload): string {
   return generateClipperFrontmatter(properties) + content;
 }
 
-export function obsidianNewNoteUrl(
-  payload: ClipPayload,
-  vault: string,
-  content: string,
-): string {
+export function obsidianNewNoteUrl(payload: ClipPayload, vault: string, content: string): string {
   const file = `${CLIPPER_PATH}/${sanitizeFileName(payload.title || payload.url)}`;
   let url = `obsidian://new?file=${encodeURIComponent(file)}`;
   if (vault) url += `&vault=${encodeURIComponent(vault)}`;

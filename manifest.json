@@ -1,11 +1,11 @@
 {
   "manifest_version": 3,
-  "name": "Reduce",
+  "name": "Tabglutton",
   "version": "0.1.0",
-  "description": "Reduce a sprawling tab list: close duplicates, or clip pages to your Obsidian vault and close them.",
+  "description": "Devour a sprawling tab list: close duplicates, or save pages into your Obsidian vault and close them.",
   "browser_specific_settings": {
     "gecko": {
-      "id": "tab-dedup@addons.local",
+      "id": "tabglutton@addons.local",
       "strict_min_version": "121.0",
       "data_collection_permissions": {
         "required": ["none"]
@@ -20,7 +20,7 @@
   },
   "action": {
     "default_popup": "popup/popup.html",
-    "default_title": "Reduce",
+    "default_title": "Tabglutton",
     "default_icon": "icons/icon.svg"
   },
   "icons": {
@@ -34,7 +34,7 @@
   "commands": {
     "_execute_action": {
       "suggested_key": { "default": "Alt+Shift+D" },
-      "description": "Open Reduce"
+      "description": "Open Tabglutton"
     }
   }
 }

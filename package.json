@@ -1,25 +1,32 @@
 {
-  "name": "tab-dedup",
+  "name": "tabglutton",
   "version": "0.1.0",
-  "description": "Deduplicate tabs in Zen Browser workspaces (and regular Firefox).",
   "private": true,
+  "description": "Devour duplicate tabs and save the keepers into Obsidian. For Zen Browser and Firefox.",
   "type": "module",
   "scripts": {
     "build": "bun build.ts",
     "watch": "bunx tsc --watch --preserveWatchOutput",
     "typecheck": "bunx tsc --noEmit",
+    "format": "bunx oxfmt .",
+    "format:check": "bunx oxfmt --check .",
+    "lint:js": "bunx oxlint .",
+    "lint:ext": "bun run build && bunx web-ext lint --source-dir=dist",
+    "lint": "bun run lint:js && bun run lint:ext",
+    "check": "bun run typecheck && bun run format:check && bun run lint",
     "start": "bun run build && bunx web-ext run --source-dir=dist --firefox=/Applications/Zen.app/Contents/MacOS/zen --browser-console --firefox-profile=./.dev-profile --profile-create-if-missing --keep-profile-changes",
     "start:fresh": "bun run build && bunx web-ext run --source-dir=dist --firefox=/Applications/Zen.app/Contents/MacOS/zen --browser-console",
     "start:firefox": "bun run build && bunx web-ext run --source-dir=dist --firefox-profile=./.dev-profile-firefox --profile-create-if-missing --keep-profile-changes",
-    "lint": "bun run build && bunx web-ext lint --source-dir=dist",
     "package": "bun run build && bunx web-ext build --source-dir=dist --overwrite-dest"
-  },
-  "devDependencies": {
-    "@types/firefox-webext-browser": "^143.0.0",
-    "typescript": "^6.0.3",
-    "web-ext": "^8.3.0"
   },
   "dependencies": {
     "defuddle": "^0.18.1"
+  },
+  "devDependencies": {
+    "@types/firefox-webext-browser": "^143.0.0",
+    "oxfmt": "latest",
+    "oxlint": "^1",
+    "typescript": "^6.0.3",
+    "web-ext": "^8.3.0"
   }
 }

@@ -24,17 +24,14 @@
   --gap: 8px;
   --tight: 4px;
 
-  --shadow-toast: 0 8px 24px rgba(0, 0, 0, 0.18),
-    0 1px 0 rgba(255, 255, 255, 0.04) inset;
+  --shadow-toast: 0 8px 24px rgba(0, 0, 0, 0.18), 0 1px 0 rgba(255, 255, 255, 0.04) inset;
 
   --easing: cubic-bezier(0.2, 0.8, 0.2, 1);
   --duration-fast: 120ms;
   --duration: 180ms;
 
-  --font-ui: -apple-system, "SF Pro Text", system-ui,
-    "Segoe UI Variable", "Segoe UI", sans-serif;
-  --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", "Cascadia Mono",
-    Menlo, monospace;
+  --font-ui: -apple-system, "SF Pro Text", system-ui, "Segoe UI Variable", "Segoe UI", sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", "Cascadia Mono", Menlo, monospace;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -48,8 +45,7 @@
     --danger: #f87171;
     --danger-soft: color-mix(in srgb, var(--danger) 18%, transparent);
     --success: #34d399;
-    --shadow-toast: 0 12px 32px rgba(0, 0, 0, 0.55),
-      0 1px 0 rgba(255, 255, 255, 0.04) inset;
+    --shadow-toast: 0 12px 32px rgba(0, 0, 0, 0.55), 0 1px 0 rgba(255, 255, 255, 0.04) inset;
   }
 }
 
@@ -158,7 +154,8 @@ button {
   border-radius: var(--radius);
   padding: 5px 10px;
   cursor: pointer;
-  transition: background var(--duration-fast) ease-out,
+  transition:
+    background var(--duration-fast) ease-out,
     border-color var(--duration-fast) ease-out,
     color var(--duration-fast) ease-out;
   display: inline-flex;
@@ -278,7 +275,8 @@ button.primary:disabled .count-badge {
   border-radius: var(--radius);
   padding: 0 10px 0 30px;
   height: 32px;
-  transition: border-color var(--duration-fast) ease-out,
+  transition:
+    border-color var(--duration-fast) ease-out,
     background var(--duration-fast) ease-out,
     box-shadow var(--duration-fast) ease-out;
 }
@@ -469,11 +467,7 @@ body.initial-load .group {
   content: "";
   flex: 1;
   height: 1px;
-  background-image: linear-gradient(
-    to right,
-    var(--border) 0 4px,
-    transparent 4px 8px
-  );
+  background-image: linear-gradient(to right, var(--border) 0 4px, transparent 4px 8px);
   background-size: 8px 1px;
   background-repeat: repeat-x;
   align-self: center;
@@ -583,10 +577,7 @@ body.initial-load .group {
 footer {
   border-block-start: 1px solid var(--border);
   padding: 10px var(--pad);
-  background: linear-gradient(
-    transparent,
-    color-mix(in srgb, currentColor 2%, transparent)
-  );
+  background: linear-gradient(transparent, color-mix(in srgb, currentColor 2%, transparent));
 }
 
 .bulk-bar {

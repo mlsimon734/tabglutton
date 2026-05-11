@@ -1,8 +1,4 @@
-import {
-  markdownForClip,
-  obsidianNewNoteUrl,
-  type ClipPayload,
-} from "./clip-format.js";
+import { markdownForClip, obsidianNewNoteUrl, type ClipPayload } from "./clip-format.js";
 import { groupDuplicates, pickKeeper, type Tab } from "./dedup.js";
 import {
   defaults,
@@ -117,7 +113,7 @@ async function refreshBadge(tabsHint?: Tab[]): Promise<void> {
       await browser.action.setBadgeBackgroundColor({ color: "#ef4444" });
     }
   } catch (err) {
-    console.warn("[tab-dedup] badge update failed", err);
+    console.warn("[tabglutton] badge update failed", err);
   }
 }
 
@@ -140,7 +136,7 @@ async function probeHeuristic(): Promise<void> {
     const heuristicLooksBroken =
       allInWindow.length === visibleInWindow.length && allInWindow.length > 0;
     console.log(
-      "[tab-dedup] zen probe: total=%d visible=%d broken=%s",
+      "[tabglutton] zen probe: total=%d visible=%d broken=%s",
       allInWindow.length,
       visibleInWindow.length,
       heuristicLooksBroken,
@@ -150,7 +146,7 @@ async function probeHeuristic(): Promise<void> {
       settings.heuristicWarning = heuristicLooksBroken;
     }
   } catch (err) {
-    console.warn("[tab-dedup] probe failed", err);
+    console.warn("[tabglutton] probe failed", err);
   }
 }
 
@@ -207,8 +203,7 @@ function errorMessage(err: unknown): string {
 }
 
 function setClipRequestId(requestId: string): void {
-  (window as Window & { __tabDedupClipRequestId?: string })
-    .__tabDedupClipRequestId = requestId;
+  (window as Window & { __tabDedupClipRequestId?: string }).__tabDedupClipRequestId = requestId;
 }
 
 function waitForClipResult(requestId: string): Promise<ClipCurrentResponse> {
@@ -291,9 +286,7 @@ async function triggerObsidianUrl(url: string): Promise<void> {
   }
 }
 
-async function clipSelectedTabs(
-  tabIds: number[],
-): Promise<ClipSelectedTabsResponse> {
+async function clipSelectedTabs(tabIds: number[]): Promise<ClipSelectedTabsResponse> {
   const vault = settings.obsidianVault.trim();
   if (!vault) return { succeeded: 0, failed: 0, vaultMissing: true };
 
@@ -304,7 +297,7 @@ async function clipSelectedTabs(
       const res = await clipTab(tabId);
       if (!res.ok || !res.payload) {
         failed += 1;
-        console.warn("[tab-dedup] clip failed for tab", tabId, res.error);
+        console.warn("[tabglutton] clip failed for tab", tabId, res.error);
         continue;
       }
       const content = markdownForClip(res.payload);
@@ -314,109 +307,104 @@ async function clipSelectedTabs(
       try {
         await browser.tabs.remove(tabId);
       } catch (err) {
-        console.warn("[tab-dedup] close failed for tab", tabId, err);
+        console.warn("[tabglutton] close failed for tab", tabId, err);
       }
       succeeded += 1;
     } catch (err) {
       failed += 1;
-      console.warn("[tab-dedup] clip threw for tab", tabId, err);
+      console.warn("[tabglutton] clip threw for tab", tabId, err);
     }
   }
   return { succeeded, failed };
 }
 
-browser.runtime.onMessage.addListener(
-  async (rawMsg: unknown): Promise<unknown> => {
-    if (!rawMsg || typeof rawMsg !== "object") return undefined;
-    const msg = rawMsg as IncomingMessage;
-    switch (msg.type) {
-      case "clip-current-result":
-        return finishClipResult(msg);
-      case "get-scoped-tabs": {
-        const tabs = (await queryScopedTabs()).filter(tabInScope);
-        const response: GetScopedTabsResponse = {
-          tabs: tabs
-            .map(tabToPopupTab)
-            .sort(
-              (a, b) =>
-                (a.windowId ?? 0) - (b.windowId ?? 0) || a.index - b.index,
-            ),
-          settings,
-        };
-        return response;
-      }
-      case "clip-selected-tabs":
-        return clipSelectedTabs(Array.isArray(msg.tabIds) ? msg.tabIds : []);
-      case "close-duplicates": {
-        const tabs = await queryScopedTabs();
-        const opts = normalizeOptsFrom(settings);
-        const groups = groupDuplicates(tabs, opts);
-        const restorable: ClosedTabRecord[] = [];
-        const closeIds: number[] = [];
-        for (const group of groups) {
-          const keeper = pickKeeper(group.tabs);
-          for (const t of group.tabs) {
-            if (t.id === undefined || t.id === keeper.id) continue;
-            closeIds.push(t.id);
-            const rec = tabToClosedRecord(t);
-            if (rec) restorable.push(rec);
-          }
-        }
-        if (closeIds.length) {
-          await browser.tabs.remove(closeIds);
-        }
-        const response: CloseDuplicatesResponse = {
-          closed: closeIds.length,
-          restorable,
-        };
-        return response;
-      }
-      case "close-tabs": {
-        const ids = Array.isArray(msg.tabIds) ? msg.tabIds : [];
-        if (ids.length) {
-          await browser.tabs.remove(ids);
-        }
-        return { closed: ids.length };
-      }
-      case "focus-tab": {
-        const tab = await browser.tabs.get(msg.tabId);
-        if (tab.id !== undefined) {
-          await browser.tabs.update(tab.id, { active: true });
-        }
-        if (tab.windowId !== undefined) {
-          await browser.windows.update(tab.windowId, { focused: true });
-        }
-        return { ok: true };
-      }
-      case "reopen-tabs": {
-        const records = Array.isArray(msg.records) ? msg.records : [];
-        let restored = 0;
-        for (const rec of records) {
-          if (!rec || typeof rec.url !== "string") continue;
-          try {
-            await browser.tabs.create({
-              url: rec.url,
-              windowId: rec.windowId,
-              index: rec.index,
-              pinned: rec.pinned,
-              active: false,
-            });
-            restored += 1;
-          } catch (err) {
-            console.warn("[tab-dedup] reopen failed for", rec.url, err);
-          }
-        }
-        await refreshBadge();
-        return { restored };
-      }
+browser.runtime.onMessage.addListener(async (rawMsg: unknown): Promise<unknown> => {
+  if (!rawMsg || typeof rawMsg !== "object") return undefined;
+  const msg = rawMsg as IncomingMessage;
+  switch (msg.type) {
+    case "clip-current-result":
+      return finishClipResult(msg);
+    case "get-scoped-tabs": {
+      const tabs = (await queryScopedTabs()).filter(tabInScope);
+      const response: GetScopedTabsResponse = {
+        tabs: tabs
+          .map(tabToPopupTab)
+          .sort((a, b) => (a.windowId ?? 0) - (b.windowId ?? 0) || a.index - b.index),
+        settings,
+      };
+      return response;
     }
-    return undefined;
-  },
-);
+    case "clip-selected-tabs":
+      return clipSelectedTabs(Array.isArray(msg.tabIds) ? msg.tabIds : []);
+    case "close-duplicates": {
+      const tabs = await queryScopedTabs();
+      const opts = normalizeOptsFrom(settings);
+      const groups = groupDuplicates(tabs, opts);
+      const restorable: ClosedTabRecord[] = [];
+      const closeIds: number[] = [];
+      for (const group of groups) {
+        const keeper = pickKeeper(group.tabs);
+        for (const t of group.tabs) {
+          if (t.id === undefined || t.id === keeper.id) continue;
+          closeIds.push(t.id);
+          const rec = tabToClosedRecord(t);
+          if (rec) restorable.push(rec);
+        }
+      }
+      if (closeIds.length) {
+        await browser.tabs.remove(closeIds);
+      }
+      const response: CloseDuplicatesResponse = {
+        closed: closeIds.length,
+        restorable,
+      };
+      return response;
+    }
+    case "close-tabs": {
+      const ids = Array.isArray(msg.tabIds) ? msg.tabIds : [];
+      if (ids.length) {
+        await browser.tabs.remove(ids);
+      }
+      return { closed: ids.length };
+    }
+    case "focus-tab": {
+      const tab = await browser.tabs.get(msg.tabId);
+      if (tab.id !== undefined) {
+        await browser.tabs.update(tab.id, { active: true });
+      }
+      if (tab.windowId !== undefined) {
+        await browser.windows.update(tab.windowId, { focused: true });
+      }
+      return { ok: true };
+    }
+    case "reopen-tabs": {
+      const records = Array.isArray(msg.records) ? msg.records : [];
+      let restored = 0;
+      for (const rec of records) {
+        if (!rec || typeof rec.url !== "string") continue;
+        try {
+          await browser.tabs.create({
+            url: rec.url,
+            windowId: rec.windowId,
+            index: rec.index,
+            pinned: rec.pinned,
+            active: false,
+          });
+          restored += 1;
+        } catch (err) {
+          console.warn("[tabglutton] reopen failed for", rec.url, err);
+        }
+      }
+      await refreshBadge();
+      return { restored };
+    }
+  }
+  return undefined;
+});
 
 void (async function init() {
   settings = await loadSettings();
   await probeHeuristic();
   await refreshBadge();
-  console.log("[tab-dedup] ready", settings);
+  console.log("[tabglutton] ready", settings);
 })();

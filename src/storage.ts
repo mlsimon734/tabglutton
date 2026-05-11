@@ -23,9 +23,7 @@ export function defaults(): Settings {
 }
 
 export async function loadSettings(): Promise<Settings> {
-  const stored = (await browser.storage.local.get(
-    Object.keys(DEFAULTS),
-  )) as Partial<Settings>;
+  const stored = (await browser.storage.local.get(Object.keys(DEFAULTS))) as Partial<Settings>;
   return { ...defaults(), ...stored };
 }
 
