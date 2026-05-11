@@ -1,0 +1,46 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck
+        run: bun run typecheck
+
+      - name: Format check (oxfmt)
+        run: bun run format:check
+
+      - name: Lint JS/TS (oxlint)
+        run: bun run lint:js
+
+      - name: Lint extension (web-ext)
+        run: bun run lint:ext
+
+      - name: Package
+        run: bun run package
+
+      - name: Upload extension zip
+        uses: actions/upload-artifact@v4
+        with:
+          name: webext-zip
+          path: web-ext-artifacts/*.zip
+          if-no-files-found: error
+          retention-days: 14

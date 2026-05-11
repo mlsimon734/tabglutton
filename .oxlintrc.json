@@ -1,0 +1,18 @@
+{
+  "$schema": "https://raw.githubusercontent.com/oxc-project/oxc/main/npm/oxlint/configuration_schema.json",
+  "env": {
+    "browser": true,
+    "webextensions": true,
+    "es2022": true
+  },
+  "ignorePatterns": [
+    "dist",
+    "web-ext-artifacts",
+    "node_modules",
+    ".dev-profile",
+    ".dev-profile-firefox"
+  ],
+  "rules": {
+    "no-unused-vars": "off"
+  }
+}
