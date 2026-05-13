@@ -8,10 +8,11 @@ This is a Bun-powered TypeScript WebExtension for Zen Browser and Firefox; the p
 
 - `bun install`: install dependencies.
 - `bun run build`: type-compile sources and prepare `dist/`.
-- `bun run typecheck`: run `tsc --noEmit` without producing output.
+- `bun run typecheck`: run `tsc --noEmit -p tsconfig.test.json` (covers `src/` + `tests/`).
+- `bun run test`: run the Bun test suite under `tests/`.
 - `bun run format` / `format:check`: run oxfmt over the tree (or check only).
 - `bun run lint`: runs `lint:js` (oxlint) then `lint:ext` (build + `web-ext lint`).
-- `bun run check`: typecheck + format:check + lint. Run before committing.
+- `bun run check`: typecheck + format:check + lint + test. Run before committing.
 - `bun run start`: build and launch Zen Browser with the extension loaded from `dist/`.
 - `bun run start:firefox`: build and launch regular Firefox with a persistent dev profile.
 - `bun run package`: build a zip in `web-ext-artifacts/`.
@@ -22,9 +23,9 @@ Use TypeScript ES modules with explicit relative `.js` import specifiers, as in 
 
 ## Testing Guidelines
 
-There is no dedicated automated test suite yet. For every change, run `bun run typecheck` and `bun run lint`; use `bun run start` or `bun run start:firefox` for live browser checks. If adding tests, colocate them near the related module or under `tests/`, name them after the behavior under test, such as `normalize.test.ts`, and prioritize pure modules like `normalize.ts` and `dedup.ts`.
+Pure-module unit tests live in `tests/` and run via `bun test`. Each test file mirrors a module name (`normalize.test.ts`, `dedup.test.ts`, `clip-format.test.ts`, `storage.test.ts`). Scope is intentionally limited to pure logic — browser-API surfaces (`background.ts`, async `storage` helpers, the Defuddle content script) are exercised via `bun run start` or `bun run start:firefox` in a live browser. Test files are typechecked through `tsconfig.test.json` but excluded from `dist/` (the build still uses base `tsconfig.json`).
 
-CI (`.github/workflows/ci.yml`) runs typecheck → format:check → oxlint → web-ext lint → package on every push and PR. Locally, `prek install` wires fast format/lint hooks into pre-commit; see `.pre-commit-config.yaml`.
+CI (`.github/workflows/ci.yml`) runs typecheck → test → format:check → oxlint → web-ext lint → package on every push and PR. Locally, `prek install` wires fast format/lint hooks into pre-commit; see `.pre-commit-config.yaml`.
 
 ## Version Control
 

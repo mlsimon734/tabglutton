@@ -1,0 +1,8 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "types": ["firefox-webext-browser", "bun-types"]
+  },
+  "include": ["src/**/*.ts", "tests/**/*.ts", "popup/popup.ts", "options/options.ts"]
+}
