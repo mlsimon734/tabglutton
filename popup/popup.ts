@@ -1,4 +1,6 @@
 import type {
+  ClipFailure,
+  ClipFailureReason,
   ClipSelectedTabsResponse,
   ClosedTabRecord,
   CloseDuplicatesResponse,
@@ -16,6 +18,7 @@ interface PopupState {
   dedupCount: number;
   toast: ToastState | null;
   clipping: boolean;
+  devourFailures: ClipFailure[];
 }
 
 interface ToastState {
@@ -50,6 +53,11 @@ const toastEl = document.getElementById("toast") as HTMLDivElement;
 const toastTextEl = document.getElementById("toast-text") as HTMLSpanElement;
 const toastUndoBtn = document.getElementById("toast-undo") as HTMLButtonElement;
 const shortcutHintEl = document.getElementById("shortcut-hint") as HTMLElement | null;
+const devourFailuresEl = document.getElementById("devour-failures") as HTMLElement;
+const devourFailuresCountEl = document.getElementById("devour-failures-count") as HTMLSpanElement;
+const devourFailuresListEl = document.getElementById("devour-failures-list") as HTMLUListElement;
+const devourRetryAllBtn = document.getElementById("devour-retry-all") as HTMLButtonElement;
+const devourDismissBtn = document.getElementById("devour-dismiss") as HTMLButtonElement;
 
 const state: PopupState = {
   scopedTabs: [],
@@ -59,6 +67,7 @@ const state: PopupState = {
   dedupCount: 0,
   toast: null,
   clipping: false,
+  devourFailures: [],
 };
 
 function hostOf(url: string | undefined): string {
@@ -329,6 +338,64 @@ function renderToast(): void {
   toastTextEl.textContent = `${state.toast.text} · Undo (${state.toast.remainingSec})`;
 }
 
+function reasonLabel(reason: ClipFailureReason): string {
+  switch (reason) {
+    case "extract-failed":
+      return "extract failed";
+    case "trigger-failed":
+      return "open failed";
+    case "content-too-large":
+      return "too large";
+  }
+}
+
+function reasonTooltip(f: ClipFailure): string {
+  if (f.reason === "content-too-large" && f.byteSize !== undefined) {
+    return `${Math.round(f.byteSize / 1024)} KB exceeds obsidian:// URL limit`;
+  }
+  return f.detail?.trim() ?? "";
+}
+
+function renderFailureRow(f: ClipFailure): HTMLLIElement {
+  const li = document.createElement("li");
+  li.className = "devour-failures-row";
+
+  const title = document.createElement("span");
+  title.className = "devour-failures-title-text";
+  title.textContent = f.title.trim() || f.url.trim() || `Tab ${f.tabId}`;
+  if (f.url) title.title = f.url;
+
+  const pill = document.createElement("span");
+  pill.className = "reason-pill";
+  pill.textContent = reasonLabel(f.reason);
+  const tooltip = reasonTooltip(f);
+  if (tooltip) pill.title = tooltip;
+
+  const retry = document.createElement("button");
+  retry.type = "button";
+  retry.className = "retry";
+  retry.textContent = "Retry";
+  retry.disabled = state.clipping;
+  retry.addEventListener("click", () => void retryFailures([f.tabId]));
+
+  li.append(title, pill, retry);
+  return li;
+}
+
+function renderDevourFailures(): void {
+  const failures = state.devourFailures;
+  if (!failures.length) {
+    devourFailuresEl.hidden = true;
+    devourFailuresListEl.replaceChildren();
+    return;
+  }
+  devourFailuresEl.hidden = false;
+  devourFailuresCountEl.textContent = String(failures.length);
+  devourRetryAllBtn.disabled = state.clipping;
+  devourDismissBtn.disabled = state.clipping;
+  devourFailuresListEl.replaceChildren(...failures.map(renderFailureRow));
+}
+
 function render(): void {
   renderWarning();
   const groups = visibleGroups();
@@ -342,6 +409,7 @@ function render(): void {
   renderSelectionSummary(visibleTabIds(groups));
   renderDedupBadge();
   renderToast();
+  renderDevourFailures();
 }
 
 async function refresh(): Promise<void> {
@@ -404,6 +472,26 @@ async function copyUrls(): Promise<void> {
   }
 }
 
+async function dispatchClipSelected(
+  tabIds: number[],
+): Promise<ClipSelectedTabsResponse | undefined> {
+  try {
+    return (await browser.runtime.sendMessage({
+      type: "clip-selected-tabs",
+      tabIds,
+    })) as ClipSelectedTabsResponse | undefined;
+  } catch (err) {
+    console.warn("[tab-triage] clip dispatch failed", err);
+    return undefined;
+  }
+}
+
+function mergeClipFailures(retriedTabIds: number[], newFailures: ClipFailure[]): void {
+  const retried = new Set(retriedTabIds);
+  state.devourFailures = state.devourFailures.filter((f) => !retried.has(f.tabId));
+  state.devourFailures.push(...newFailures);
+}
+
 async function clipSelected(): Promise<void> {
   const queue = selectedTabsInUiOrder();
   if (!queue.length) return;
@@ -433,15 +521,7 @@ async function clipSelected(): Promise<void> {
   clipCurrentBtn.textContent = `Clipping ${queue.length}…`;
 
   const tabIds = queue.map((t) => t.id);
-  let res: ClipSelectedTabsResponse | undefined;
-  try {
-    res = (await browser.runtime.sendMessage({
-      type: "clip-selected-tabs",
-      tabIds,
-    })) as ClipSelectedTabsResponse | undefined;
-  } catch (err) {
-    console.warn("[tab-triage] clip dispatch failed", err);
-  }
+  const res = await dispatchClipSelected(tabIds);
 
   if (!res) {
     restore("Clip failed", 1800);
@@ -451,12 +531,32 @@ async function clipSelected(): Promise<void> {
     restore("Set vault", 2200);
     return;
   }
+  mergeClipFailures(tabIds, res.failures);
   await refresh();
   const summary =
     res.failed === 0
       ? `Clipped ${res.succeeded}`
       : `Clipped ${res.succeeded}, ${res.failed} failed`;
   restore(summary, res.failed === 0 ? 1400 : 2200);
+}
+
+async function retryFailures(tabIds: number[]): Promise<void> {
+  if (state.clipping || !tabIds.length) return;
+  if (!state.settings?.obsidianVault.trim()) return;
+  state.clipping = true;
+  render();
+  const res = await dispatchClipSelected(tabIds);
+  if (res && !res.vaultMissing) {
+    mergeClipFailures(tabIds, res.failures);
+  }
+  state.clipping = false;
+  await refresh();
+}
+
+function dismissDevourFailures(): void {
+  if (state.clipping) return;
+  state.devourFailures = [];
+  render();
 }
 
 async function closeSelected(): Promise<void> {
@@ -542,6 +642,11 @@ clipCurrentBtn.addEventListener("click", () => void clipSelected());
 copyUrlsBtn.addEventListener("click", () => void copyUrls());
 closeSelectedBtn.addEventListener("click", () => void closeSelected());
 toastUndoBtn.addEventListener("click", () => void undoDedup());
+devourRetryAllBtn.addEventListener("click", () => {
+  const ids = state.devourFailures.map((f) => f.tabId);
+  void retryFailures(ids);
+});
+devourDismissBtn.addEventListener("click", () => dismissDevourFailures());
 
 document.addEventListener("keydown", (e) => {
   if (e.key !== "/" || e.metaKey || e.ctrlKey || e.altKey) return;

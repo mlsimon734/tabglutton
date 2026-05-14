@@ -572,6 +572,93 @@ body.initial-load .group {
   height: 22px;
 }
 
+/* ---------- devour failures ---------- */
+
+.devour-failures {
+  margin: 0 var(--pad) var(--gap);
+  padding: var(--gap);
+  border-radius: var(--radius);
+  background: var(--danger-soft);
+  border: 1px solid color-mix(in srgb, var(--danger) 25%, transparent);
+  font-size: 12px;
+}
+
+.devour-failures-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--gap);
+  margin-bottom: var(--tight);
+}
+
+.devour-failures-title {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--tight);
+  color: var(--danger);
+  font-weight: 500;
+}
+
+.count-badge.danger {
+  background: color-mix(in srgb, var(--danger) 18%, transparent);
+  color: var(--danger);
+}
+
+.devour-failures-actions {
+  display: flex;
+  gap: var(--tight);
+}
+
+.devour-failures-actions button {
+  font-size: 11px;
+  padding: 3px 8px;
+}
+
+.devour-failures-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 144px;
+  overflow: auto;
+  scrollbar-width: thin;
+}
+
+.devour-failures-row {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  align-items: center;
+  gap: var(--gap);
+  padding: 4px 6px;
+  border-radius: var(--radius-sm);
+}
+
+.devour-failures-row .devour-failures-title-text {
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.devour-failures-row .reason-pill {
+  font: 500 10px/1 var(--font-mono);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+  padding: 3px 6px;
+  border-radius: var(--radius-pill);
+}
+
+.devour-failures-row .retry {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+}
+
 /* ---------- footer ---------- */
 
 footer {

@@ -68,6 +68,20 @@
         <ul id="groups"></ul>
       </main>
 
+      <section id="devour-failures" class="devour-failures" hidden aria-live="polite">
+        <header class="devour-failures-header">
+          <span class="devour-failures-title">
+            Devour failures
+            <span id="devour-failures-count" class="count-badge danger">0</span>
+          </span>
+          <div class="devour-failures-actions">
+            <button id="devour-retry-all" type="button">Retry all</button>
+            <button id="devour-dismiss" type="button" class="quiet">Dismiss</button>
+          </div>
+        </header>
+        <ul id="devour-failures-list" class="devour-failures-list"></ul>
+      </section>
+
       <footer>
         <div id="bulk-bar" class="bulk-bar">
           <div class="bulk-cluster">

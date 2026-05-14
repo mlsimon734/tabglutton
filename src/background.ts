@@ -1,4 +1,9 @@
-import { markdownForClip, obsidianNewNoteUrl, type ClipPayload } from "./clip-format.js";
+import {
+  markdownForClip,
+  MAX_OBSIDIAN_URL_LENGTH,
+  obsidianNewNoteUrl,
+  type ClipPayload,
+} from "./clip-format.js";
 import { groupDuplicates, pickKeeper, type Tab } from "./dedup.js";
 import {
   defaults,
@@ -29,10 +34,22 @@ export type IncomingMessage =
   | FocusTabMessage
   | ReopenTabsMessage;
 
+export type ClipFailureReason = "extract-failed" | "trigger-failed" | "content-too-large";
+
+export interface ClipFailure {
+  tabId: number;
+  title: string;
+  url: string;
+  reason: ClipFailureReason;
+  detail?: string;
+  byteSize?: number;
+}
+
 export interface ClipSelectedTabsResponse {
   succeeded: number;
   failed: number;
   vaultMissing?: boolean;
+  failures: ClipFailure[];
 }
 
 export interface PopupTab {
@@ -286,36 +303,113 @@ async function triggerObsidianUrl(url: string): Promise<void> {
   }
 }
 
+async function resolveTabMeta(tabId: number): Promise<{ title: string; url: string }> {
+  try {
+    const t = await browser.tabs.get(tabId);
+    return { title: t.title ?? "", url: t.url ?? "" };
+  } catch {
+    return { title: "", url: "" };
+  }
+}
+
 async function clipSelectedTabs(tabIds: number[]): Promise<ClipSelectedTabsResponse> {
   const vault = settings.obsidianVault.trim();
-  if (!vault) return { succeeded: 0, failed: 0, vaultMissing: true };
+  if (!vault) return { succeeded: 0, failed: 0, vaultMissing: true, failures: [] };
+
+  const metaEntries = await Promise.all(
+    tabIds.map(
+      async (tabId): Promise<[number, { title: string; url: string }]> => [
+        tabId,
+        await resolveTabMeta(tabId),
+      ],
+    ),
+  );
+  const metaById = new Map(metaEntries);
+  const metaOf = (tabId: number) => metaById.get(tabId) ?? { title: "", url: "" };
 
   let succeeded = 0;
-  let failed = 0;
+  const failures: ClipFailure[] = [];
   for (const tabId of tabIds) {
+    let res: ClipCurrentResponse;
     try {
-      const res = await clipTab(tabId);
-      if (!res.ok || !res.payload) {
-        failed += 1;
-        console.warn("[tabglutton] clip failed for tab", tabId, res.error);
-        continue;
-      }
-      const content = markdownForClip(res.payload);
-      const url = obsidianNewNoteUrl(res.payload, vault, content);
-      await triggerObsidianUrl(url);
-      await delay(200);
-      try {
-        await browser.tabs.remove(tabId);
-      } catch (err) {
-        console.warn("[tabglutton] close failed for tab", tabId, err);
-      }
-      succeeded += 1;
+      res = await clipTab(tabId);
     } catch (err) {
-      failed += 1;
+      const m = metaOf(tabId);
+      failures.push({
+        tabId,
+        title: m.title,
+        url: m.url,
+        reason: "extract-failed",
+        detail: errorMessage(err),
+      });
       console.warn("[tabglutton] clip threw for tab", tabId, err);
+      continue;
     }
+    if (!res.ok || !res.payload) {
+      const m = metaOf(tabId);
+      failures.push({
+        tabId,
+        title: m.title,
+        url: m.url,
+        reason: "extract-failed",
+        detail: res.error,
+      });
+      console.warn("[tabglutton] clip failed for tab", tabId, res.error);
+      continue;
+    }
+
+    let url: string;
+    try {
+      const content = markdownForClip(res.payload);
+      url = obsidianNewNoteUrl(res.payload, vault, content);
+    } catch (err) {
+      const m = metaOf(tabId);
+      failures.push({
+        tabId,
+        title: res.payload.title || m.title,
+        url: res.payload.url || m.url,
+        reason: "extract-failed",
+        detail: errorMessage(err),
+      });
+      console.warn("[tabglutton] format failed for tab", tabId, err);
+      continue;
+    }
+
+    if (url.length > MAX_OBSIDIAN_URL_LENGTH) {
+      failures.push({
+        tabId,
+        title: res.payload.title,
+        url: res.payload.url,
+        reason: "content-too-large",
+        byteSize: url.length,
+      });
+      console.warn("[tabglutton] clip too large for tab", tabId, `${url.length} bytes`);
+      continue;
+    }
+
+    try {
+      await triggerObsidianUrl(url);
+    } catch (err) {
+      failures.push({
+        tabId,
+        title: res.payload.title,
+        url: res.payload.url,
+        reason: "trigger-failed",
+        detail: errorMessage(err),
+      });
+      console.warn("[tabglutton] trigger failed for tab", tabId, err);
+      continue;
+    }
+
+    await delay(200);
+    try {
+      await browser.tabs.remove(tabId);
+    } catch (err) {
+      console.warn("[tabglutton] close failed for tab", tabId, err);
+    }
+    succeeded += 1;
   }
-  return { succeeded, failed };
+  return { succeeded, failed: failures.length, failures };
 }
 
 browser.runtime.onMessage.addListener(async (rawMsg: unknown): Promise<unknown> => {

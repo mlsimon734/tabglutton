@@ -11,6 +11,8 @@ export interface ClipPayload {
 
 const CLIPPER_PATH = "Clippings";
 
+export const MAX_OBSIDIAN_URL_LENGTH = 30_000;
+
 interface ClipperProperty {
   name: string;
   value: string;
