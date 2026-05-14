@@ -72,3 +72,7 @@ The toolchain: TypeScript compiles `src/`, `popup/`, `options/` into `dist/` mir
 ## Roadmap
 
 The current build does dedup and clip-to-Obsidian by direct rules. A planned next step is to put a local Claude Code or Codex agent on the loop — looking at each open tab and proposing keep / clip / discard, with the user approving. The Devour pipeline is the seam where that swaps in.
+
+## Acknowledgements
+
+Devour's page extraction is powered by [Defuddle](https://github.com/kepano/defuddle) by Steph Ango ([@kepano](https://github.com/kepano)), used under the MIT license. Defuddle is the same engine behind Obsidian's Web Clipper, which makes it a natural fit for this extension's "page → markdown → Obsidian vault" pipeline. The packaged extension ships Defuddle's license alongside the bundled code under `THIRD_PARTY_LICENSES/`.

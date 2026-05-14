@@ -337,6 +337,30 @@ code {
   background: var(--accent-soft);
 }
 
+/* ---------- credits ---------- */
+
+.credits {
+  margin-top: 28px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--muted);
+  text-align: center;
+}
+
+.credits a {
+  color: inherit;
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, currentColor 35%, transparent);
+  text-underline-offset: 2px;
+  transition: color var(--duration-fast) ease-out;
+}
+
+.credits a:hover {
+  color: var(--accent);
+}
+
 /* ---------- reduced motion ---------- */
 
 @media (prefers-reduced-motion: reduce) {

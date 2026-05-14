@@ -33,4 +33,7 @@ mkdirSync(`${DIST}/options`, { recursive: true });
 cpSync("options/options.html", `${DIST}/options/options.html`);
 cpSync("options/options.css", `${DIST}/options/options.css`);
 
+mkdirSync(`${DIST}/THIRD_PARTY_LICENSES`, { recursive: true });
+cpSync("node_modules/defuddle/LICENSE", `${DIST}/THIRD_PARTY_LICENSES/defuddle-LICENSE.txt`);
+
 console.log("[build] dist/ ready");
