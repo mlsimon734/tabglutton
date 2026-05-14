@@ -29,6 +29,6 @@
     "oxfmt": "latest",
     "oxlint": "^1",
     "typescript": "^6.0.3",
-    "web-ext": "^8.3.0"
+    "web-ext": "^10.0.0"
   }
 }
