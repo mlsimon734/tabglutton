@@ -64,10 +64,40 @@ bun run lint           # type-check + manifest/WebExtension lint
 bun run build          # one-shot TS compile + asset copy into dist/
 bun run watch          # tsc --watch for fast iteration (run alongside bun start)
 bun run typecheck      # tsc --noEmit
-bun run package        # produce a signed-ready .zip in web-ext-artifacts/
+bun run package        # produce an unsigned .zip (for CI artifact / web-ext lint)
 ```
 
 The toolchain: TypeScript compiles `src/`, `popup/`, `options/` into `dist/` mirroring the structure; static assets (HTML, CSS, manifest, icons) are copied alongside. `web-ext` runs against `dist/` only — never against source. The `dist/` directory is gitignored.
+
+## Install (dogfood / signed)
+
+To run Tabglutton on your real Zen profile (not a `.dev-profile`) so it survives restarts, sign the build via Mozilla AMO's unlisted channel and drag the resulting `.xpi` into Zen. AMO unlisted means the addon is signed but not publicly listed in the store.
+
+**One-time setup**:
+
+1. Create a Mozilla AMO developer account at https://addons.mozilla.org/developers/.
+2. Generate JWT credentials at https://addons.mozilla.org/developers/addon/api/key/.
+3. Store them in `~/.config/tabglutton/amo-credentials` (chmod 600):
+
+   ```bash
+   export WEB_EXT_API_KEY="user:XXXX:YYY"
+   export WEB_EXT_API_SECRET="<64 hex chars>"
+   ```
+
+**Sign and install**:
+
+```bash
+source ~/.config/tabglutton/amo-credentials
+bun run sign
+```
+
+`web-ext` uploads `dist/` to AMO, which lints and typically auto-signs in minutes for the unlisted channel. The signed `.xpi` lands in `web-ext-artifacts/tabglutton-<version>.xpi`.
+
+Open Zen → `about:addons` → drag the `.xpi` onto the page (or use the gear menu → "Install Add-on from File") → accept the install prompt.
+
+Rare: broad host permissions can route the first submission to human review. If `web-ext` exits with a "pending review" message, watch the AMO developer dashboard / email — meanwhile, `bun start` is the right temporary fallback.
+
+**Updating**: bump `version` in both `manifest.json` and `package.json` (AMO rejects re-uploads of the same version), then re-run `bun run sign` and drag the new `.xpi` into `about:addons`. The upgrade is in-place; extension storage is preserved.
 
 ## Roadmap
 
