@@ -28,7 +28,28 @@ declare global {
 
 function htmlDocumentSnapshot(): Document {
   const html = `<!doctype html>${document.documentElement.outerHTML}`;
-  return new DOMParser().parseFromString(html, "text/html");
+  const snapshot = new DOMParser().parseFromString(html, "text/html");
+  removeMalformedJsonLd(snapshot);
+  return snapshot;
+}
+
+function cleanJsonLd(content: string): string {
+  return content
+    .replace(/\/\*[\s\S]*?\*\/|^\s*\/\/.*$/gm, "")
+    .replace(/^\s*<!\[CDATA\[([\s\S]*?)\]\]>\s*$/, "$1")
+    .replace(/^\s*(\*\/|\/\*)\s*|\s*(\*\/|\/\*)\s*$/g, "")
+    .trim();
+}
+
+function removeMalformedJsonLd(doc: Document): void {
+  const scripts = doc.querySelectorAll('script[type="application/ld+json"]');
+  scripts.forEach((script) => {
+    try {
+      JSON.parse(cleanJsonLd(script.textContent || ""));
+    } catch {
+      script.remove();
+    }
+  });
 }
 
 function markdownFrom(result: DefuddleResponse): string {

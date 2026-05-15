@@ -344,15 +344,10 @@ function reasonLabel(reason: ClipFailureReason): string {
       return "extract failed";
     case "trigger-failed":
       return "open failed";
-    case "content-too-large":
-      return "too large";
   }
 }
 
 function reasonTooltip(f: ClipFailure): string {
-  if (f.reason === "content-too-large" && f.byteSize !== undefined) {
-    return `${Math.round(f.byteSize / 1024)} KB exceeds obsidian:// URL limit`;
-  }
   return f.detail?.trim() ?? "";
 }
 
@@ -420,7 +415,7 @@ async function refresh(): Promise<void> {
   state.scopedTabs = res.tabs;
   state.settings = res.settings;
   const live = new Set(state.scopedTabs.map((t) => t.id));
-  for (const id of [...state.selected]) {
+  for (const id of state.selected) {
     if (!live.has(id)) state.selected.delete(id);
   }
   render();

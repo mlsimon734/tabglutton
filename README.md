@@ -59,6 +59,7 @@ Used to canonicalize URLs before grouping (see `src/normalize.ts`):
 ```bash
 bun install
 bun start              # build (TypeScript → dist/) + launch Zen with the extension loaded
+bun run start:console  # same, with Zen's Browser Console open for chrome logs
 bun run start:firefox  # same, against regular Firefox
 bun run lint           # type-check + manifest/WebExtension lint
 bun run build          # one-shot TS compile + asset copy into dist/

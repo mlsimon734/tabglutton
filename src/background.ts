@@ -1,9 +1,4 @@
-import {
-  markdownForClip,
-  MAX_OBSIDIAN_URL_LENGTH,
-  obsidianNewNoteUrl,
-  type ClipPayload,
-} from "./clip-format.js";
+import { markdownForClip, obsidianNewNoteUrl, type ClipPayload } from "./clip-format.js";
 import { groupDuplicates, pickKeeper, type Tab } from "./dedup.js";
 import {
   defaults,
@@ -34,7 +29,7 @@ export type IncomingMessage =
   | FocusTabMessage
   | ReopenTabsMessage;
 
-export type ClipFailureReason = "extract-failed" | "trigger-failed" | "content-too-large";
+export type ClipFailureReason = "extract-failed" | "trigger-failed";
 
 export interface ClipFailure {
   tabId: number;
@@ -42,7 +37,6 @@ export interface ClipFailure {
   url: string;
   reason: ClipFailureReason;
   detail?: string;
-  byteSize?: number;
 }
 
 export interface ClipSelectedTabsResponse {
@@ -372,18 +366,6 @@ async function clipSelectedTabs(tabIds: number[]): Promise<ClipSelectedTabsRespo
         detail: errorMessage(err),
       });
       console.warn("[tabglutton] format failed for tab", tabId, err);
-      continue;
-    }
-
-    if (url.length > MAX_OBSIDIAN_URL_LENGTH) {
-      failures.push({
-        tabId,
-        title: res.payload.title,
-        url: res.payload.url,
-        reason: "content-too-large",
-        byteSize: url.length,
-      });
-      console.warn("[tabglutton] clip too large for tab", tabId, `${url.length} bytes`);
       continue;
     }
 

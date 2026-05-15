@@ -11,6 +11,7 @@
   --accent-fg: #ffffff;
   --accent-soft: color-mix(in srgb, var(--accent) 14%, transparent);
   --success: #059669;
+  --warning: #b45309;
 
   --radius: 8px;
   --radius-lg: 12px;
@@ -33,6 +34,7 @@
     --accent: #8b8bf0;
     --accent-fg: #0b0b0e;
     --success: #34d399;
+    --warning: #fbbf24;
   }
 }
 
@@ -194,7 +196,8 @@ section:last-of-type {
 }
 
 .setting.block .setting-control {
-  justify-content: stretch;
+  flex-direction: column;
+  align-items: stretch;
 }
 
 /* ---------- inputs ---------- */
@@ -224,6 +227,14 @@ input[type="number"]:focus {
 
 input::placeholder {
   color: var(--muted);
+}
+
+/* ---------- vault warning ---------- */
+
+.vault-warning {
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: var(--warning);
 }
 
 code {

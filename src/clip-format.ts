@@ -11,8 +11,6 @@ export interface ClipPayload {
 
 const CLIPPER_PATH = "Clippings";
 
-export const MAX_OBSIDIAN_URL_LENGTH = 30_000;
-
 interface ClipperProperty {
   name: string;
   value: string;
@@ -47,10 +45,16 @@ function sourceUrl(url: string): string {
   return url.replace(/#:~:text=[^&]+(&|$)/, "");
 }
 
+function stripAsciiControlChars(value: string): string {
+  return Array.from(value)
+    .filter((char) => char.charCodeAt(0) >= 32)
+    .join("");
+}
+
 function sanitizeFileName(fileName: string): string {
-  let sanitized = fileName
-    .replace(/[#|\^\[\]]/g, "")
-    .replace(/[\/:\x00-\x1F]/g, "")
+  let sanitized = stripAsciiControlChars(fileName)
+    .replace(/[#[\]|^]/g, "")
+    .replace(/[/:]/g, "")
     .replace(/^\./, "")
     .replace(/^\.+/, "")
     .trim()
@@ -66,7 +70,7 @@ function generateClipperFrontmatter(properties: ClipperProperty[]): string {
     switch (property.type) {
       case "multitext": {
         const items = property.value
-          .split(/,(?![^\[]*\]\])/)
+          .split(/,(?![^[]*]])/)
           .map((item) => item.trim())
           .filter(Boolean);
         if (items.length > 0) {

@@ -1,8 +1,10 @@
 import type { ScopeMode, Settings } from "../src/storage.js";
+import { vaultWarningFor } from "../src/vault-warning.js";
 
 const stripFragment = document.getElementById("stripFragment") as HTMLInputElement;
 const extraStripParams = document.getElementById("extraStripParams") as HTMLInputElement;
 const obsidianVault = document.getElementById("obsidianVault") as HTMLInputElement;
+const vaultWarning = document.getElementById("vaultWarning") as HTMLParagraphElement;
 const scopeRadios = document.querySelectorAll<HTMLInputElement>('input[name="scope"]');
 const statusEl = document.getElementById("status") as HTMLParagraphElement;
 
@@ -26,6 +28,7 @@ async function load(): Promise<void> {
   stripFragment.checked = settings.stripFragment;
   extraStripParams.value = (settings.extraStripParams ?? []).join(", ");
   obsidianVault.value = settings.obsidianVault;
+  updateVaultWarning();
   for (const radio of scopeRadios) {
     radio.checked = radio.value === settings.scope;
   }
@@ -60,8 +63,15 @@ extraStripParams.addEventListener("input", () => {
   saveTimer = setTimeout(() => void save(), 400);
 });
 obsidianVault.addEventListener("input", () => {
+  updateVaultWarning();
   if (saveTimer) clearTimeout(saveTimer);
   saveTimer = setTimeout(() => void save(), 400);
 });
+
+function updateVaultWarning(): void {
+  const msg = vaultWarningFor(obsidianVault.value);
+  vaultWarning.textContent = msg;
+  vaultWarning.hidden = !msg;
+}
 
 void load();
