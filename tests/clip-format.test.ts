@@ -1,5 +1,9 @@
 import { describe, test, expect } from "bun:test";
 import { markdownForClip, obsidianNewNoteUrl, type ClipPayload } from "../src/clip-format.js";
+import { BUILT_IN_RULES, type SiteRule } from "../src/site-rules.js";
+
+const githubRule = BUILT_IN_RULES.find((r) => r.id === "github") as SiteRule;
+const socialRule = BUILT_IN_RULES.find((r) => r.id === "social-x") as SiteRule;
 
 function makePayload(partial: Partial<ClipPayload> = {}): ClipPayload {
   return {
@@ -148,6 +152,30 @@ describe("obsidianNewNoteUrl", () => {
   test("content is URL-encoded (newlines, ampersands)", () => {
     const url = obsidianNewNoteUrl(makePayload(), "", "line1\nline2&more");
     expect(url).toContain("content=line1%0Aline2%26more");
+  });
+});
+
+describe("obsidianNewNoteUrl - site rule subfolder routing", () => {
+  test("places file under Clippings/<subfolder>/ when a rule is provided", () => {
+    const url = obsidianNewNoteUrl(makePayload({ title: "Repo Readme" }), "", "body", githubRule);
+    expect(url).toContain("file=Clippings%2FGitHub%2FRepo%20Readme");
+  });
+
+  test("uses the social-x rule's subfolder for x.com/twitter clips", () => {
+    const url = obsidianNewNoteUrl(makePayload({ title: "Thread" }), "", "body", socialRule);
+    expect(url).toContain("file=Clippings%2FSocial%2FThread");
+  });
+
+  test("falls back to Clippings/ when rule is null (current default behavior)", () => {
+    const url = obsidianNewNoteUrl(makePayload({ title: "Plain" }), "", "body", null);
+    expect(url).toContain("file=Clippings%2FPlain");
+    expect(url).not.toContain("Clippings%2FGitHub");
+    expect(url).not.toContain("Clippings%2FSocial");
+  });
+
+  test("falls back to Clippings/ when rule arg is omitted", () => {
+    const url = obsidianNewNoteUrl(makePayload({ title: "Plain" }), "", "body");
+    expect(url).toContain("file=Clippings%2FPlain");
   });
 });
 

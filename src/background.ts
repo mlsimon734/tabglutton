@@ -1,4 +1,5 @@
 import { markdownForClip, obsidianNewNoteUrl, type ClipPayload } from "./clip-format.js";
+import { pickRule } from "./site-rules.js";
 import { groupDuplicates, pickKeeper, type Tab } from "./dedup.js";
 import {
   defaults,
@@ -354,8 +355,9 @@ async function clipSelectedTabs(tabIds: number[]): Promise<ClipSelectedTabsRespo
 
     let url: string;
     try {
+      const rule = pickRule(res.payload.url);
       const content = markdownForClip(res.payload);
-      url = obsidianNewNoteUrl(res.payload, vault, content);
+      url = obsidianNewNoteUrl(res.payload, vault, content, rule);
     } catch (err) {
       const m = metaOf(tabId);
       failures.push({

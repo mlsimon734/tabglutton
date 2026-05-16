@@ -1,3 +1,5 @@
+import type { SiteRule } from "./site-rules.js";
+
 export interface ClipPayload {
   title: string;
   url: string;
@@ -10,6 +12,10 @@ export interface ClipPayload {
 }
 
 const CLIPPER_PATH = "Clippings";
+
+function folderForRule(rule: SiteRule | null): string {
+  return rule ? `${CLIPPER_PATH}/${rule.subfolder}` : CLIPPER_PATH;
+}
 
 interface ClipperProperty {
   name: string;
@@ -117,8 +123,13 @@ export function markdownForClip(payload: ClipPayload): string {
   return generateClipperFrontmatter(properties) + content;
 }
 
-export function obsidianNewNoteUrl(payload: ClipPayload, vault: string, content: string): string {
-  const file = `${CLIPPER_PATH}/${sanitizeFileName(payload.title || payload.url)}`;
+export function obsidianNewNoteUrl(
+  payload: ClipPayload,
+  vault: string,
+  content: string,
+  rule: SiteRule | null = null,
+): string {
+  const file = `${folderForRule(rule)}/${sanitizeFileName(payload.title || payload.url)}`;
   let url = `obsidian://new?file=${encodeURIComponent(file)}`;
   if (vault) url += `&vault=${encodeURIComponent(vault)}`;
   url += `&content=${encodeURIComponent(content)}`;
