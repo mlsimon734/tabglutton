@@ -480,6 +480,20 @@ browser.runtime.onMessage.addListener(async (rawMsg: unknown): Promise<unknown> 
   return undefined;
 });
 
+browser.runtime.onInstalled.addListener(async (details) => {
+  if (details.reason !== "install") return;
+  const current = await loadSettings();
+  if (current.onboardingComplete) return;
+  try {
+    await browser.tabs.create({
+      url: browser.runtime.getURL("onboarding/onboarding.html"),
+      active: true,
+    });
+  } catch (err) {
+    console.warn("[tabglutton] failed to open onboarding tab", err);
+  }
+});
+
 void (async function init() {
   settings = await loadSettings();
   await probeHeuristic();

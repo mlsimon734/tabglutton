@@ -4,5 +4,11 @@
     "noEmit": true,
     "types": ["firefox-webext-browser", "bun-types"]
   },
-  "include": ["src/**/*.ts", "tests/**/*.ts", "popup/popup.ts", "options/options.ts"]
+  "include": [
+    "src/**/*.ts",
+    "tests/**/*.ts",
+    "popup/popup.ts",
+    "options/options.ts",
+    "onboarding/onboarding.ts"
+  ]
 }

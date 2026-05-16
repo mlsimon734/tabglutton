@@ -74,4 +74,11 @@ function updateVaultWarning(): void {
   vaultWarning.hidden = !msg;
 }
 
+const rerunLink = document.getElementById("rerunOnboarding") as HTMLAnchorElement | null;
+rerunLink?.addEventListener("click", async (e) => {
+  e.preventDefault();
+  await browser.storage.local.set({ onboardingComplete: false });
+  await browser.tabs.create({ url: browser.runtime.getURL("onboarding/onboarding.html") });
+});
+
 void load();

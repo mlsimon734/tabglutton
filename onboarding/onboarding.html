@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Tabglutton — Setup</title>
+    <link rel="stylesheet" href="onboarding.css" />
+  </head>
+  <body>
+    <div class="surface">
+      <header class="page-header">
+        <div>
+          <h1 class="title">Welcome to Tabglutton</h1>
+          <p class="subtitle">Setup walkthrough</p>
+        </div>
+        <ol class="stepper" id="stepper" aria-label="Setup steps">
+          <li data-step-indicator="1">Welcome</li>
+          <li data-step-indicator="2">Vault</li>
+          <li data-step-indicator="3">Permissions</li>
+          <li data-step-indicator="4">Rules</li>
+        </ol>
+      </header>
+
+      <section class="panel" data-step="1" data-active>
+        <h2 class="section-title">Step 1 — Welcome</h2>
+        <p>
+          Tabglutton dedupes the tabs you've accumulated and clips the keepers into Obsidian as
+          markdown notes with frontmatter. This setup takes about 30 seconds and configures three
+          things you'll otherwise have to chase down later.
+        </p>
+        <p class="muted-note">
+          You can revisit this walkthrough anytime from the extension's options page.
+        </p>
+      </section>
+
+      <section class="panel" data-step="2" hidden>
+        <h2 class="section-title">Step 2 — Obsidian vault</h2>
+        <div class="setting block">
+          <div class="setting-text">
+            <strong>What's your Obsidian vault called?</strong>
+            <small>
+              Open Obsidian → click the vault picker (cloud icon, bottom-left) → copy the exact name
+              as it appears in the list. Capitalization and spaces matter.
+            </small>
+          </div>
+          <div class="setting-control">
+            <input type="text" id="obsidianVault" placeholder="My Vault" autocomplete="off" />
+            <p id="vaultWarning" class="vault-warning" role="status" hidden></p>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel" data-step="3" hidden>
+        <h2 class="section-title">Step 3 — Approve obsidian:// in your browser</h2>
+        <p>
+          Tabglutton hands clipped notes to Obsidian using the <code>obsidian://</code> URL scheme.
+          The first time your browser sees one, it may ask permission to open the link with
+          Obsidian.
+        </p>
+        <p>
+          Click below to send a harmless test — it opens your vault in Obsidian, no note is created.
+          If a prompt appears, click <strong>Open Link</strong> to approve. If nothing visible
+          happens but Obsidian focuses, you're already set.
+        </p>
+        <p class="link-row">
+          <a id="approveLink" class="primary-link" target="_blank" rel="noopener">
+            Open my Obsidian vault now
+          </a>
+        </p>
+        <details class="muted-note">
+          <summary>Didn't see anything happen?</summary>
+          <p>
+            Some browsers (newer Zen builds in particular) suppress the prompt without surfacing it.
+            To allow <code>obsidian://</code> permanently:
+          </p>
+          <ol>
+            <li>
+              Go to <code>about:preferences#general</code> → scroll to
+              <strong>Applications</strong> → set <code>obsidian</code> to
+              <strong>Use Obsidian</strong>.
+            </li>
+            <li>
+              If clips still silently fail, open <code>about:config</code>, search
+              <code>network.protocol-handler.warn-external.obsidian</code>, and set it to
+              <code>false</code> (create it as a Boolean if missing).
+            </li>
+          </ol>
+        </details>
+      </section>
+
+      <section class="panel" data-step="4" hidden>
+        <h2 class="section-title">Step 4 — How your clips will be filed</h2>
+        <p>
+          Tabglutton routes clipped pages into subfolders by site, so heterogeneous tab batches
+          don't pile into one folder:
+        </p>
+        <ul class="rules-list" id="rulesList"></ul>
+        <p class="muted-note">
+          Built-in rules only for now — a custom rules editor is on the roadmap.
+        </p>
+      </section>
+
+      <footer class="nav-row">
+        <button type="button" class="ghost" id="backBtn" hidden>Back</button>
+        <span class="nav-spacer"></span>
+        <button type="button" class="primary" id="nextBtn">Next</button>
+        <button type="button" class="primary" id="doneBtn" hidden>Done</button>
+      </footer>
+    </div>
+
+    <script type="module" src="onboarding.js"></script>
+  </body>
+</html>

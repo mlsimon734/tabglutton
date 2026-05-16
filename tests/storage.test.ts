@@ -11,7 +11,12 @@ describe("defaults()", () => {
       scope: "hidden-false",
       heuristicWarning: false,
       obsidianVault: "",
+      onboardingComplete: false,
     });
+  });
+
+  test("onboardingComplete defaults to false (first-run flow gate)", () => {
+    expect(defaults().onboardingComplete).toBe(false);
   });
 
   test("mutating the result does not affect subsequent calls (extraStripParams is cloned)", () => {
@@ -36,6 +41,7 @@ describe("normalizeOptsFrom()", () => {
       scope: "current-window",
       heuristicWarning: true,
       obsidianVault: "v",
+      onboardingComplete: true,
     };
     expect(normalizeOptsFrom(settings)).toEqual({
       stripFragment: false,

@@ -348,10 +348,30 @@ code {
   background: var(--accent-soft);
 }
 
+/* ---------- re-run onboarding ---------- */
+
+.rerun-row {
+  margin: 24px 0 0;
+  text-align: center;
+  font-size: 12px;
+}
+
+.rerun-row a {
+  color: var(--muted);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, currentColor 35%, transparent);
+  text-underline-offset: 2px;
+  transition: color var(--duration-fast) ease-out;
+}
+
+.rerun-row a:hover {
+  color: var(--accent);
+}
+
 /* ---------- credits ---------- */
 
 .credits {
-  margin-top: 28px;
+  margin-top: 14px;
   padding-top: 14px;
   border-top: 1px solid var(--border);
   font-size: 11px;

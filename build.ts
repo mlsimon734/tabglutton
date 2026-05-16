@@ -22,6 +22,19 @@ if (!clipBuild.success) {
   process.exit(1);
 }
 
+const onboardingBuild = await Bun.build({
+  entrypoints: ["onboarding/onboarding.ts"],
+  outdir: `${DIST}/onboarding`,
+  target: "browser",
+  format: "esm",
+  minify: true,
+  sourcemap: "external",
+});
+if (!onboardingBuild.success) {
+  for (const log of onboardingBuild.logs) console.error(log);
+  process.exit(1);
+}
+
 cpSync("manifest.json", `${DIST}/manifest.json`);
 cpSync("icons", `${DIST}/icons`, { recursive: true });
 
@@ -32,6 +45,9 @@ cpSync("popup/popup.css", `${DIST}/popup/popup.css`);
 mkdirSync(`${DIST}/options`, { recursive: true });
 cpSync("options/options.html", `${DIST}/options/options.html`);
 cpSync("options/options.css", `${DIST}/options/options.css`);
+
+cpSync("onboarding/onboarding.html", `${DIST}/onboarding/onboarding.html`);
+cpSync("onboarding/onboarding.css", `${DIST}/onboarding/onboarding.css`);
 
 mkdirSync(`${DIST}/THIRD_PARTY_LICENSES`, { recursive: true });
 cpSync("node_modules/defuddle/LICENSE", `${DIST}/THIRD_PARTY_LICENSES/defuddle-LICENSE.txt`);

@@ -8,6 +8,7 @@ export interface Settings {
   scope: ScopeMode;
   heuristicWarning: boolean;
   obsidianVault: string;
+  onboardingComplete: boolean;
 }
 
 const DEFAULTS: Readonly<Settings> = Object.freeze({
@@ -16,6 +17,7 @@ const DEFAULTS: Readonly<Settings> = Object.freeze({
   scope: "hidden-false",
   heuristicWarning: false,
   obsidianVault: "",
+  onboardingComplete: false,
 });
 
 export function defaults(): Settings {
