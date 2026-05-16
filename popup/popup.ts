@@ -682,7 +682,7 @@ function prettifyShortcut(raw: string): string {
 
 async function renderShortcutHint(): Promise<void> {
   if (!shortcutHintEl) return;
-  const fallback = prettifyShortcut("Alt+Shift+D");
+  const fallback = prettifyShortcut("Alt+Shift+G");
   try {
     const commands = await browser.commands.getAll();
     const action = commands.find((c) => c.name === "_execute_action");

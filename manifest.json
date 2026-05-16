@@ -37,7 +37,7 @@
   "commands": {
     "_execute_action": {
       "suggested_key": {
-        "default": "Alt+Shift+D"
+        "default": "Alt+Shift+G"
       },
       "description": "Open Tabglutton"
     }

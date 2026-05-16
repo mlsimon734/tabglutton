@@ -52,7 +52,7 @@ Used to canonicalize URLs before grouping (see `src/normalize.ts`):
 
 ## Keyboard shortcut
 
-`Alt+Shift+D` opens the popup. Inside the popup, `/` focuses the search field.
+`Alt+Shift+G` opens the popup. Inside the popup, `/` focuses the search field.
 
 ## Install (development)
 
