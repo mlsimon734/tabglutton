@@ -24,3 +24,24 @@ repos:
         language: system
         files: \.(ts|tsx|js|jsx)$
         pass_filenames: true
+
+      - id: web-ext-lint
+        name: web-ext lint (build + addons-linter)
+        entry: bun run lint:ext
+        language: system
+        pass_filenames: false
+        stages: [pre-push]
+
+      - id: typecheck
+        name: typecheck (tsc --noEmit)
+        entry: bun run typecheck
+        language: system
+        pass_filenames: false
+        stages: [pre-push]
+
+      - id: test
+        name: tests (bun test)
+        entry: bun test
+        language: system
+        pass_filenames: false
+        stages: [pre-push]
