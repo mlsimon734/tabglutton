@@ -20,7 +20,7 @@
     "start:fresh": "bun run build && bunx web-ext run --source-dir=dist --firefox=/Applications/Zen.app/Contents/MacOS/zen",
     "start:fresh:console": "bun run build && bunx web-ext run --source-dir=dist --firefox=/Applications/Zen.app/Contents/MacOS/zen --browser-console",
     "start:firefox": "bun run build && bunx web-ext run --source-dir=dist --firefox-profile=./.dev-profile-firefox --profile-create-if-missing --keep-profile-changes",
-    "package": "bun run build && bunx web-ext build --source-dir=dist --overwrite-dest",
+    "package": "bun run build && bunx web-ext build --source-dir=dist --overwrite-dest && bun package-source.ts",
     "sign": "bun run build && bunx web-ext sign --source-dir=dist --artifacts-dir=web-ext-artifacts --channel=unlisted"
   },
   "dependencies": {
