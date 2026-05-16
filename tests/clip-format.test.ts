@@ -1,5 +1,10 @@
 import { describe, test, expect } from "bun:test";
-import { markdownForClip, obsidianNewNoteUrl, type ClipPayload } from "../src/clip-format.js";
+import {
+  CLIPBOARD_FALLBACK_CONTENT,
+  markdownForClip,
+  obsidianClipRequest,
+  type ClipPayload,
+} from "../src/clip-format.js";
 import { BUILT_IN_RULES, type SiteRule } from "../src/site-rules.js";
 
 const githubRule = BUILT_IN_RULES.find((r) => r.id === "github") as SiteRule;
@@ -110,113 +115,235 @@ describe("markdownForClip - created timestamp", () => {
   });
 });
 
-describe("obsidianNewNoteUrl", () => {
+describe("obsidianClipRequest - legacy-uri mode", () => {
   test("uses Clippings/<title> as the file path", () => {
-    const url = obsidianNewNoteUrl(makePayload({ title: "Hello" }), "", "body");
+    const { url } = obsidianClipRequest(
+      makePayload({ title: "Hello" }),
+      "",
+      "body",
+      null,
+      "legacy-uri",
+    );
     expect(url).toContain("file=Clippings%2FHello");
   });
 
   test("encodes spaces and special chars in the file component", () => {
-    const url = obsidianNewNoteUrl(makePayload({ title: "Hello World & Co" }), "", "body");
+    const { url } = obsidianClipRequest(
+      makePayload({ title: "Hello World & Co" }),
+      "",
+      "body",
+      null,
+      "legacy-uri",
+    );
     expect(url).toContain("file=Clippings%2FHello%20World%20%26%20Co");
   });
 
   test("falls back to URL when title is empty", () => {
-    const url = obsidianNewNoteUrl(
+    const { url } = obsidianClipRequest(
       makePayload({ title: "", url: "https://example.com/a" }),
       "",
       "body",
+      null,
+      "legacy-uri",
     );
     expect(url).toContain("file=Clippings%2F");
     expect(url).toContain("example.com");
   });
 
   test("includes vault only when non-empty", () => {
-    const withVault = obsidianNewNoteUrl(makePayload(), "MyVault", "body");
-    expect(withVault).toContain("&vault=MyVault");
-    const withoutVault = obsidianNewNoteUrl(makePayload(), "", "body");
-    expect(withoutVault).not.toContain("&vault=");
+    const withVault = obsidianClipRequest(makePayload(), "MyVault", "body", null, "legacy-uri");
+    expect(withVault.url).toContain("&vault=MyVault");
+    const withoutVault = obsidianClipRequest(makePayload(), "", "body", null, "legacy-uri");
+    expect(withoutVault.url).not.toContain("&vault=");
   });
 
   test("URL starts with obsidian://new?file= and ends with &content=...", () => {
-    const url = obsidianNewNoteUrl(makePayload(), "v", "hello");
+    const { url } = obsidianClipRequest(makePayload(), "v", "hello", null, "legacy-uri");
     expect(url.startsWith("obsidian://new?file=")).toBe(true);
     expect(url).toContain("&content=hello");
   });
 
+  test("does NOT include the &clipboard flag", () => {
+    const { url } = obsidianClipRequest(makePayload(), "v", "hello", null, "legacy-uri");
+    expect(url).not.toContain("&clipboard");
+  });
+
+  test("clipboard payload is null", () => {
+    const { clipboard } = obsidianClipRequest(makePayload(), "v", "hello", null, "legacy-uri");
+    expect(clipboard).toBeNull();
+  });
+
   test("vault name is URL-encoded", () => {
-    const url = obsidianNewNoteUrl(makePayload(), "My Vault", "body");
+    const { url } = obsidianClipRequest(makePayload(), "My Vault", "body", null, "legacy-uri");
     expect(url).toContain("&vault=My%20Vault");
   });
 
   test("content is URL-encoded (newlines, ampersands)", () => {
-    const url = obsidianNewNoteUrl(makePayload(), "", "line1\nline2&more");
+    const { url } = obsidianClipRequest(makePayload(), "", "line1\nline2&more", null, "legacy-uri");
     expect(url).toContain("content=line1%0Aline2%26more");
   });
 });
 
-describe("obsidianNewNoteUrl - site rule subfolder routing", () => {
+describe("obsidianClipRequest - clipboard mode", () => {
+  test("URL includes the &clipboard flag", () => {
+    const { url } = obsidianClipRequest(makePayload(), "v", "hello", null, "clipboard");
+    expect(url).toContain("&clipboard");
+  });
+
+  test("URL's &content= carries only the fallback string, not the real markdown", () => {
+    const realContent = "real markdown body that should NOT appear in the URL";
+    const { url } = obsidianClipRequest(makePayload(), "v", realContent, null, "clipboard");
+    expect(url).toContain(`&content=${encodeURIComponent(CLIPBOARD_FALLBACK_CONTENT)}`);
+    expect(url).not.toContain(encodeURIComponent(realContent));
+  });
+
+  test("clipboard payload equals the full content", () => {
+    const realContent = "# Heading\n\nFull body with & special chars.";
+    const { clipboard } = obsidianClipRequest(makePayload(), "v", realContent, null, "clipboard");
+    expect(clipboard).toBe(realContent);
+  });
+
+  test("file path and vault are encoded the same as in legacy mode", () => {
+    const { url } = obsidianClipRequest(
+      makePayload({ title: "Hello World" }),
+      "My Vault",
+      "body",
+      null,
+      "clipboard",
+    );
+    expect(url).toContain("file=Clippings%2FHello%20World");
+    expect(url).toContain("&vault=My%20Vault");
+  });
+
+  test("&clipboard appears before &content= so Obsidian sees the flag", () => {
+    const { url } = obsidianClipRequest(makePayload(), "", "body", null, "clipboard");
+    const clipboardIdx = url.indexOf("&clipboard");
+    const contentIdx = url.indexOf("&content=");
+    expect(clipboardIdx).toBeGreaterThan(0);
+    expect(contentIdx).toBeGreaterThan(clipboardIdx);
+  });
+});
+
+describe("obsidianClipRequest - site rule subfolder routing", () => {
   test("places file under Clippings/<subfolder>/ when a rule is provided", () => {
-    const url = obsidianNewNoteUrl(makePayload({ title: "Repo Readme" }), "", "body", githubRule);
+    const { url } = obsidianClipRequest(
+      makePayload({ title: "Repo Readme" }),
+      "",
+      "body",
+      githubRule,
+      "legacy-uri",
+    );
     expect(url).toContain("file=Clippings%2FGitHub%2FRepo%20Readme");
   });
 
   test("uses the social-x rule's subfolder for x.com/twitter clips", () => {
-    const url = obsidianNewNoteUrl(makePayload({ title: "Thread" }), "", "body", socialRule);
+    const { url } = obsidianClipRequest(
+      makePayload({ title: "Thread" }),
+      "",
+      "body",
+      socialRule,
+      "legacy-uri",
+    );
     expect(url).toContain("file=Clippings%2FSocial%2FThread");
   });
 
-  test("falls back to Clippings/ when rule is null (current default behavior)", () => {
-    const url = obsidianNewNoteUrl(makePayload({ title: "Plain" }), "", "body", null);
+  test("falls back to Clippings/ when rule is null", () => {
+    const { url } = obsidianClipRequest(
+      makePayload({ title: "Plain" }),
+      "",
+      "body",
+      null,
+      "legacy-uri",
+    );
     expect(url).toContain("file=Clippings%2FPlain");
     expect(url).not.toContain("Clippings%2FGitHub");
     expect(url).not.toContain("Clippings%2FSocial");
   });
 
-  test("falls back to Clippings/ when rule arg is omitted", () => {
-    const url = obsidianNewNoteUrl(makePayload({ title: "Plain" }), "", "body");
-    expect(url).toContain("file=Clippings%2FPlain");
+  test("subfolder routing also applies in clipboard mode", () => {
+    const { url } = obsidianClipRequest(
+      makePayload({ title: "Repo Readme" }),
+      "",
+      "body",
+      githubRule,
+      "clipboard",
+    );
+    expect(url).toContain("file=Clippings%2FGitHub%2FRepo%20Readme");
   });
 });
 
-describe("obsidianNewNoteUrl - sanitizeFileName robustness", () => {
+describe("obsidianClipRequest - sanitizeFileName robustness", () => {
   function fileSegment(url: string): string {
     const m = url.match(/file=([^&]+)/)!;
     return decodeURIComponent(m[1]!).replace(/^Clippings\//, "");
   }
 
   test("strips # | ^ [ ]", () => {
-    const seg = fileSegment(obsidianNewNoteUrl(makePayload({ title: "a#b|c^d[e]f" }), "", "x"));
-    expect(seg).toBe("abcdef");
+    const { url } = obsidianClipRequest(
+      makePayload({ title: "a#b|c^d[e]f" }),
+      "",
+      "x",
+      null,
+      "legacy-uri",
+    );
+    expect(fileSegment(url)).toBe("abcdef");
   });
 
   test("strips / and : ", () => {
-    const seg = fileSegment(obsidianNewNoteUrl(makePayload({ title: "a/b:c" }), "", "x"));
-    expect(seg).toBe("abc");
+    const { url } = obsidianClipRequest(
+      makePayload({ title: "a/b:c" }),
+      "",
+      "x",
+      null,
+      "legacy-uri",
+    );
+    expect(fileSegment(url)).toBe("abc");
   });
 
   test("strips ASCII control characters", () => {
-    const seg = fileSegment(obsidianNewNoteUrl(makePayload({ title: "a\x00b\x1fc" }), "", "x"));
-    expect(seg).toBe("abc");
+    const { url } = obsidianClipRequest(
+      makePayload({ title: "a\x00b\x1fc" }),
+      "",
+      "x",
+      null,
+      "legacy-uri",
+    );
+    expect(fileSegment(url)).toBe("abc");
   });
 
   test("strips leading dot(s)", () => {
-    const seg = fileSegment(obsidianNewNoteUrl(makePayload({ title: "...hidden" }), "", "x"));
-    expect(seg).toBe("hidden");
+    const { url } = obsidianClipRequest(
+      makePayload({ title: "...hidden" }),
+      "",
+      "x",
+      null,
+      "legacy-uri",
+    );
+    expect(fileSegment(url)).toBe("hidden");
   });
 
   test("empty/whitespace-only/all-stripped title falls back to 'Untitled'", () => {
-    expect(fileSegment(obsidianNewNoteUrl(makePayload({ title: "   " }), "", "x"))).toBe(
-      "Untitled",
-    );
-    expect(fileSegment(obsidianNewNoteUrl(makePayload({ title: "###|||" }), "", "x"))).toBe(
-      "Untitled",
-    );
+    expect(
+      fileSegment(
+        obsidianClipRequest(makePayload({ title: "   " }), "", "x", null, "legacy-uri").url,
+      ),
+    ).toBe("Untitled");
+    expect(
+      fileSegment(
+        obsidianClipRequest(makePayload({ title: "###|||" }), "", "x", null, "legacy-uri").url,
+      ),
+    ).toBe("Untitled");
   });
 
   test("caps file name at 245 characters", () => {
     const longTitle = "a".repeat(500);
-    const seg = fileSegment(obsidianNewNoteUrl(makePayload({ title: longTitle }), "", "x"));
-    expect(seg.length).toBe(245);
+    const { url } = obsidianClipRequest(
+      makePayload({ title: longTitle }),
+      "",
+      "x",
+      null,
+      "legacy-uri",
+    );
+    expect(fileSegment(url).length).toBe(245);
   });
 });

@@ -1,6 +1,7 @@
 import type { NormalizeOpts } from "./normalize.js";
 
 export type ScopeMode = "hidden-false" | "current-window";
+export type ClipMode = "clipboard" | "legacy-uri";
 
 export interface Settings {
   stripFragment: boolean;
@@ -8,6 +9,7 @@ export interface Settings {
   scope: ScopeMode;
   heuristicWarning: boolean;
   obsidianVault: string;
+  clipMode: ClipMode;
   onboardingComplete: boolean;
 }
 
@@ -17,6 +19,7 @@ const DEFAULTS: Readonly<Settings> = Object.freeze({
   scope: "hidden-false",
   heuristicWarning: false,
   obsidianVault: "",
+  clipMode: "clipboard",
   onboardingComplete: false,
 });
 

@@ -1,4 +1,9 @@
-import { markdownForClip, obsidianNewNoteUrl, type ClipPayload } from "./clip-format.js";
+import {
+  markdownForClip,
+  obsidianClipRequest,
+  type ClipPayload,
+  type ObsidianClipRequest,
+} from "./clip-format.js";
 import { pickRule } from "./site-rules.js";
 import { groupDuplicates, pickKeeper, type Tab } from "./dedup.js";
 import {
@@ -290,7 +295,40 @@ function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function triggerObsidianUrl(url: string): Promise<void> {
+// Runs inside the source tab's content-script world. With `clipboardWrite`
+// permission, document.execCommand("copy") works without a user gesture there —
+// unlike in the background page, where it requires page focus we can't get.
+// Throws on failure so the caller (executeScript) rejects.
+function copyInTab(textToCopy: string): void {
+  const ta = document.createElement("textarea");
+  ta.value = textToCopy;
+  ta.setAttribute("readonly", "");
+  ta.style.position = "fixed";
+  ta.style.top = "0";
+  ta.style.left = "0";
+  ta.style.opacity = "0";
+  document.body.appendChild(ta);
+  ta.select();
+  const ok = document.execCommand("copy");
+  ta.remove();
+  if (!ok) throw new Error("execCommand copy returned false");
+}
+
+async function copyToClipboardViaTab(tabId: number, text: string): Promise<boolean> {
+  try {
+    await browser.scripting.executeScript({
+      target: { tabId },
+      func: copyInTab,
+      args: [text],
+    });
+    return true;
+  } catch (err) {
+    console.warn("[tabglutton] copyToClipboardViaTab failed", err);
+    return false;
+  }
+}
+
+async function openObsidianUrl(url: string): Promise<void> {
   const ephemeral = await browser.tabs.create({ url, active: false });
   if (ephemeral.id !== undefined) {
     const ephemeralId = ephemeral.id;
@@ -355,11 +393,22 @@ async function clipSelectedTabs(tabIds: number[]): Promise<ClipSelectedTabsRespo
       continue;
     }
 
-    let url: string;
+    let req: ObsidianClipRequest;
     try {
       const rule = pickRule(res.payload.url);
       const content = markdownForClip(res.payload);
-      url = obsidianNewNoteUrl(res.payload, vault, content, rule);
+      req = obsidianClipRequest(res.payload, vault, content, rule, settings.clipMode);
+      if (req.clipboard !== null) {
+        const copied = await copyToClipboardViaTab(tabId, req.clipboard);
+        if (!copied) {
+          console.warn(
+            "[tabglutton] clipboard write failed for tab",
+            tabId,
+            "— falling back to legacy URI",
+          );
+          req = obsidianClipRequest(res.payload, vault, content, rule, "legacy-uri");
+        }
+      }
     } catch (err) {
       const m = metaOf(tabId);
       failures.push({
@@ -374,7 +423,7 @@ async function clipSelectedTabs(tabIds: number[]): Promise<ClipSelectedTabsRespo
     }
 
     try {
-      await triggerObsidianUrl(url);
+      await openObsidianUrl(req.url);
     } catch (err) {
       failures.push({
         tabId,

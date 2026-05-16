@@ -1,4 +1,5 @@
 import type { SiteRule } from "./site-rules.js";
+import type { ClipMode } from "./storage.js";
 
 export interface ClipPayload {
   title: string;
@@ -123,15 +124,28 @@ export function markdownForClip(payload: ClipPayload): string {
   return generateClipperFrontmatter(properties) + content;
 }
 
-export function obsidianNewNoteUrl(
+export const CLIPBOARD_FALLBACK_CONTENT =
+  "[Tabglutton] Clipboard handoff failed — re-run the clip.";
+
+export interface ObsidianClipRequest {
+  url: string;
+  clipboard: string | null;
+}
+
+export function obsidianClipRequest(
   payload: ClipPayload,
   vault: string,
   content: string,
-  rule: SiteRule | null = null,
-): string {
+  rule: SiteRule | null,
+  mode: ClipMode,
+): ObsidianClipRequest {
   const file = `${folderForRule(rule)}/${sanitizeFileName(payload.title || payload.url)}`;
   let url = `obsidian://new?file=${encodeURIComponent(file)}`;
   if (vault) url += `&vault=${encodeURIComponent(vault)}`;
+  if (mode === "clipboard") {
+    url += `&clipboard&content=${encodeURIComponent(CLIPBOARD_FALLBACK_CONTENT)}`;
+    return { url, clipboard: content };
+  }
   url += `&content=${encodeURIComponent(content)}`;
-  return url;
+  return { url, clipboard: null };
 }

@@ -95,6 +95,35 @@
             <p id="vaultWarning" class="vault-warning" role="status" hidden></p>
           </div>
         </div>
+
+        <div class="setting block">
+          <div class="setting-text">
+            <strong>Clipping mode</strong>
+            <small> How the page content is handed off to Obsidian. </small>
+          </div>
+          <div class="setting-control radio-stack">
+            <label class="radio-card">
+              <input type="radio" name="clipMode" value="clipboard" />
+              <span class="radio-card-body">
+                <strong>Clipboard handoff (recommended)</strong>
+                <small>
+                  Copies the note to the system clipboard and tells Obsidian to read from it. Works
+                  for arbitrarily long pages. Requires Obsidian 1.7+.
+                </small>
+              </span>
+            </label>
+            <label class="radio-card">
+              <input type="radio" name="clipMode" value="legacy-uri" />
+              <span class="radio-card-body">
+                <strong>Legacy URI</strong>
+                <small>
+                  Embeds the note in an <code>obsidian://new</code> URL. Compatible with Obsidian
+                  1.6.7 and earlier, but long pages may truncate or fail silently.
+                </small>
+              </span>
+            </label>
+          </div>
+        </div>
       </section>
 
       <p class="rerun-row">

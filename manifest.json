@@ -15,7 +15,7 @@
       "strict_min_version": "142.0"
     }
   },
-  "permissions": ["tabs", "storage", "scripting", "activeTab"],
+  "permissions": ["tabs", "storage", "scripting", "activeTab", "clipboardWrite"],
   "host_permissions": ["*://*/*"],
   "background": {
     "scripts": ["src/background.js"],

@@ -1,4 +1,4 @@
-import type { ScopeMode, Settings } from "../src/storage.js";
+import type { ClipMode, ScopeMode, Settings } from "../src/storage.js";
 import { vaultWarningFor } from "../src/vault-warning.js";
 
 const stripFragment = document.getElementById("stripFragment") as HTMLInputElement;
@@ -6,13 +6,18 @@ const extraStripParams = document.getElementById("extraStripParams") as HTMLInpu
 const obsidianVault = document.getElementById("obsidianVault") as HTMLInputElement;
 const vaultWarning = document.getElementById("vaultWarning") as HTMLParagraphElement;
 const scopeRadios = document.querySelectorAll<HTMLInputElement>('input[name="scope"]');
+const clipModeRadios = document.querySelectorAll<HTMLInputElement>('input[name="clipMode"]');
 const statusEl = document.getElementById("status") as HTMLParagraphElement;
 
-const DEFAULTS: Pick<Settings, "stripFragment" | "extraStripParams" | "scope" | "obsidianVault"> = {
+const DEFAULTS: Pick<
+  Settings,
+  "stripFragment" | "extraStripParams" | "scope" | "obsidianVault" | "clipMode"
+> = {
   stripFragment: true,
   extraStripParams: [],
   scope: "hidden-false",
   obsidianVault: "",
+  clipMode: "clipboard",
 };
 
 function parseParams(text: string): string[] {
@@ -32,6 +37,9 @@ async function load(): Promise<void> {
   for (const radio of scopeRadios) {
     radio.checked = radio.value === settings.scope;
   }
+  for (const radio of clipModeRadios) {
+    radio.checked = radio.value === settings.clipMode;
+  }
 }
 
 let saveTimer: ReturnType<typeof setTimeout> | undefined;
@@ -46,16 +54,19 @@ function flashStatus(msg: string): void {
 async function save(): Promise<void> {
   const checked = [...scopeRadios].find((r) => r.checked);
   const scope: ScopeMode = (checked?.value as ScopeMode) ?? "hidden-false";
+  const checkedClipMode = [...clipModeRadios].find((r) => r.checked);
+  const clipMode: ClipMode = (checkedClipMode?.value as ClipMode) ?? "clipboard";
   await browser.storage.local.set({
     stripFragment: stripFragment.checked,
     extraStripParams: parseParams(extraStripParams.value),
     scope,
     obsidianVault: obsidianVault.value.trim(),
+    clipMode,
   });
   flashStatus("Saved");
 }
 
-for (const el of [stripFragment, ...scopeRadios]) {
+for (const el of [stripFragment, ...scopeRadios, ...clipModeRadios]) {
   el.addEventListener("change", () => void save());
 }
 extraStripParams.addEventListener("input", () => {
