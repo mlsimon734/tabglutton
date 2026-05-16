@@ -3,6 +3,9 @@
     { "filename": "package.json", "type": "json" },
     { "filename": "manifest.json", "type": "json" }
   ],
+  "scripts": {
+    "postbump": "bunx oxfmt package.json manifest.json"
+  },
   "header": "# Changelog\n\nAll notable changes to Tabglutton are documented here.\n",
   "types": [
     { "type": "feat", "section": "Features" },
