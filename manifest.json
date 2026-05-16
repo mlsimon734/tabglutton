@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Tabglutton",
-  "version": "0.1.0",
+  "version": "0.1.1-alpha.1",
   "description": "Devour a sprawling tab list: close duplicates, or save pages into your Obsidian vault and close them.",
   "browser_specific_settings": {
     "gecko": {
@@ -36,7 +36,9 @@
   },
   "commands": {
     "_execute_action": {
-      "suggested_key": { "default": "Alt+Shift+D" },
+      "suggested_key": {
+        "default": "Alt+Shift+D"
+      },
       "description": "Open Tabglutton"
     }
   }
