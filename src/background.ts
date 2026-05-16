@@ -261,11 +261,48 @@ async function resolveTargetTab(tabId?: number): Promise<Tab | null> {
   return tab ?? null;
 }
 
+// Auto Tab Discard (and Firefox's own unloader) puts inactive tabs into a
+// discarded state with no live document — scripting.executeScript fails on
+// those. Reload via tabs.reload(); tabs.update({ discarded: false }) is
+// inconsistent across Firefox versions.
+async function ensureTabReady(tabId: number, timeoutMs: number): Promise<void> {
+  const tab = await browser.tabs.get(tabId);
+  if (!tab.discarded && tab.status === "complete") return;
+
+  if (tab.discarded) {
+    await browser.tabs.reload(tabId);
+  }
+
+  await new Promise<void>((resolve, reject) => {
+    const listener = (updatedTabId: number, changeInfo: { status?: string }): void => {
+      if (updatedTabId !== tabId) return;
+      if (changeInfo.status !== "complete") return;
+      cleanup();
+      resolve();
+    };
+    const timer = setTimeout(() => {
+      cleanup();
+      reject(new Error(`Tab did not finish loading within ${timeoutMs}ms`));
+    }, timeoutMs);
+    function cleanup(): void {
+      clearTimeout(timer);
+      browser.tabs.onUpdated.removeListener(listener);
+    }
+    browser.tabs.onUpdated.addListener(listener, { properties: ["status"] });
+  });
+}
+
 async function clipTab(tabId?: number): Promise<ClipCurrentResponse> {
   const tab = await resolveTargetTab(tabId);
   if (!tab?.id) return { ok: false, error: "Tab not found." };
   if (!tab.url?.startsWith("http://") && !tab.url?.startsWith("https://")) {
     return { ok: false, error: "Only http and https pages can be clipped." };
+  }
+
+  try {
+    await ensureTabReady(tab.id, 15000);
+  } catch (err) {
+    return { ok: false, error: errorMessage(err) };
   }
 
   const requestId = crypto.randomUUID();
