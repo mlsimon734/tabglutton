@@ -4,6 +4,7 @@ import { vaultWarningFor } from "../src/vault-warning.js";
 const stripFragment = document.getElementById("stripFragment") as HTMLInputElement;
 const extraStripParams = document.getElementById("extraStripParams") as HTMLInputElement;
 const obsidianVault = document.getElementById("obsidianVault") as HTMLInputElement;
+const clippingsBaseFolder = document.getElementById("clippingsBaseFolder") as HTMLInputElement;
 const vaultWarning = document.getElementById("vaultWarning") as HTMLParagraphElement;
 const scopeRadios = document.querySelectorAll<HTMLInputElement>('input[name="scope"]');
 const clipModeRadios = document.querySelectorAll<HTMLInputElement>('input[name="clipMode"]');
@@ -11,12 +12,18 @@ const statusEl = document.getElementById("status") as HTMLParagraphElement;
 
 const DEFAULTS: Pick<
   Settings,
-  "stripFragment" | "extraStripParams" | "scope" | "obsidianVault" | "clipMode"
+  | "stripFragment"
+  | "extraStripParams"
+  | "scope"
+  | "obsidianVault"
+  | "clippingsBaseFolder"
+  | "clipMode"
 > = {
   stripFragment: true,
   extraStripParams: [],
   scope: "hidden-false",
   obsidianVault: "",
+  clippingsBaseFolder: "",
   clipMode: "clipboard",
 };
 
@@ -33,6 +40,7 @@ async function load(): Promise<void> {
   stripFragment.checked = settings.stripFragment;
   extraStripParams.value = (settings.extraStripParams ?? []).join(", ");
   obsidianVault.value = settings.obsidianVault;
+  clippingsBaseFolder.value = settings.clippingsBaseFolder;
   updateVaultWarning();
   for (const radio of scopeRadios) {
     radio.checked = radio.value === settings.scope;
@@ -61,6 +69,7 @@ async function save(): Promise<void> {
     extraStripParams: parseParams(extraStripParams.value),
     scope,
     obsidianVault: obsidianVault.value.trim(),
+    clippingsBaseFolder: clippingsBaseFolder.value.trim(),
     clipMode,
   });
   flashStatus("Saved");
@@ -75,6 +84,10 @@ extraStripParams.addEventListener("input", () => {
 });
 obsidianVault.addEventListener("input", () => {
   updateVaultWarning();
+  if (saveTimer) clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => void save(), 400);
+});
+clippingsBaseFolder.addEventListener("input", () => {
   if (saveTimer) clearTimeout(saveTimer);
   saveTimer = setTimeout(() => void save(), 400);
 });

@@ -9,6 +9,7 @@ export interface Settings {
   scope: ScopeMode;
   heuristicWarning: boolean;
   obsidianVault: string;
+  clippingsBaseFolder: string;
   clipMode: ClipMode;
   onboardingComplete: boolean;
 }
@@ -19,6 +20,7 @@ const DEFAULTS: Readonly<Settings> = Object.freeze({
   scope: "hidden-false",
   heuristicWarning: false,
   obsidianVault: "",
+  clippingsBaseFolder: "Clippings",
   clipMode: "clipboard",
   onboardingComplete: false,
 });

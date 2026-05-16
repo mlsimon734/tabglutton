@@ -87,12 +87,25 @@
             <strong>Obsidian vault</strong>
             <small>
               Vault name used by Devour, as it appears in Obsidian's vault switcher (not a path).
-              Notes are created under <code>Clippings/</code> with the clipped page title.
             </small>
           </div>
           <div class="setting-control">
             <input type="text" id="obsidianVault" placeholder="My Vault" />
             <p id="vaultWarning" class="vault-warning" role="status" hidden></p>
+          </div>
+        </div>
+
+        <div class="setting block">
+          <div class="setting-text">
+            <strong>Clippings folder</strong>
+            <small>
+              Folder in your vault where Devour saves clipped pages. Per-site subfolders are added
+              automatically (e.g. <code>&lt;folder&gt;/GitHub</code>,
+              <code>&lt;folder&gt;/Social</code>). Leave blank to use <code>Clippings</code>.
+            </small>
+          </div>
+          <div class="setting-control">
+            <input type="text" id="clippingsBaseFolder" placeholder="Clippings" />
           </div>
         </div>
 

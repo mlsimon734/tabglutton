@@ -11,6 +11,7 @@ describe("defaults()", () => {
       scope: "hidden-false",
       heuristicWarning: false,
       obsidianVault: "",
+      clippingsBaseFolder: "Clippings",
       clipMode: "clipboard",
       onboardingComplete: false,
     });
@@ -42,6 +43,7 @@ describe("normalizeOptsFrom()", () => {
       scope: "current-window",
       heuristicWarning: true,
       obsidianVault: "v",
+      clippingsBaseFolder: "Inbox",
       clipMode: "clipboard",
       onboardingComplete: true,
     };

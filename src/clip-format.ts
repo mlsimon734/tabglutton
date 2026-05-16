@@ -12,10 +12,18 @@ export interface ClipPayload {
   markdown: string;
 }
 
-const CLIPPER_PATH = "Clippings";
+const DEFAULT_CLIPPER_PATH = "Clippings";
 
-function folderForRule(rule: SiteRule | null): string {
-  return rule ? `${CLIPPER_PATH}/${rule.subfolder}` : CLIPPER_PATH;
+export function normalizeBaseFolder(input: string): string {
+  const cleaned = input
+    .trim()
+    .replace(/^\/+|\/+$/g, "")
+    .replace(/\/+/g, "/");
+  return cleaned === "" ? DEFAULT_CLIPPER_PATH : cleaned;
+}
+
+function folderForRule(rule: SiteRule | null, baseFolder: string): string {
+  return rule ? `${baseFolder}/${rule.subfolder}` : baseFolder;
 }
 
 interface ClipperProperty {
@@ -138,8 +146,10 @@ export function obsidianClipRequest(
   content: string,
   rule: SiteRule | null,
   mode: ClipMode,
+  baseFolder: string = DEFAULT_CLIPPER_PATH,
 ): ObsidianClipRequest {
-  const file = `${folderForRule(rule)}/${sanitizeFileName(payload.title || payload.url)}`;
+  const base = normalizeBaseFolder(baseFolder);
+  const file = `${folderForRule(rule, base)}/${sanitizeFileName(payload.title || payload.url)}`;
   let url = `obsidian://new?file=${encodeURIComponent(file)}`;
   if (vault) url += `&vault=${encodeURIComponent(vault)}`;
   if (mode === "clipboard") {

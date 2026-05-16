@@ -2,6 +2,7 @@ import { describe, test, expect } from "bun:test";
 import {
   CLIPBOARD_FALLBACK_CONTENT,
   markdownForClip,
+  normalizeBaseFolder,
   obsidianClipRequest,
   type ClipPayload,
 } from "../src/clip-format.js";
@@ -269,6 +270,120 @@ describe("obsidianClipRequest - site rule subfolder routing", () => {
       "clipboard",
     );
     expect(url).toContain("file=Clippings%2FGitHub%2FRepo%20Readme");
+  });
+});
+
+describe("normalizeBaseFolder", () => {
+  test("returns 'Clippings' for empty / whitespace-only input", () => {
+    expect(normalizeBaseFolder("")).toBe("Clippings");
+    expect(normalizeBaseFolder("   ")).toBe("Clippings");
+    expect(normalizeBaseFolder("\t \n")).toBe("Clippings");
+  });
+
+  test("strips leading and trailing slashes", () => {
+    expect(normalizeBaseFolder("/Inbox/")).toBe("Inbox");
+    expect(normalizeBaseFolder("///Inbox///")).toBe("Inbox");
+  });
+
+  test("collapses runs of internal slashes", () => {
+    expect(normalizeBaseFolder("Inbox//Web")).toBe("Inbox/Web");
+    expect(normalizeBaseFolder("a///b////c")).toBe("a/b/c");
+  });
+
+  test("trims outer whitespace before normalizing", () => {
+    expect(normalizeBaseFolder("  /Inbox/Web/  ")).toBe("Inbox/Web");
+  });
+
+  test("leaves multi-segment paths intact", () => {
+    expect(normalizeBaseFolder("Notes/Web/Clippings")).toBe("Notes/Web/Clippings");
+  });
+
+  test("an input of just slashes collapses to the default", () => {
+    expect(normalizeBaseFolder("///")).toBe("Clippings");
+  });
+});
+
+describe("obsidianClipRequest - custom base folder", () => {
+  test("custom base folder rebases the file path (no rule)", () => {
+    const { url } = obsidianClipRequest(
+      makePayload({ title: "Note" }),
+      "",
+      "body",
+      null,
+      "legacy-uri",
+      "Inbox",
+    );
+    expect(url).toContain("file=Inbox%2FNote");
+    expect(url).not.toContain("Clippings");
+  });
+
+  test("custom base folder composes with site rules", () => {
+    const { url } = obsidianClipRequest(
+      makePayload({ title: "Repo Readme" }),
+      "",
+      "body",
+      githubRule,
+      "legacy-uri",
+      "Inbox",
+    );
+    expect(url).toContain("file=Inbox%2FGitHub%2FRepo%20Readme");
+  });
+
+  test("multi-segment base folder is preserved", () => {
+    const { url } = obsidianClipRequest(
+      makePayload({ title: "Note" }),
+      "",
+      "body",
+      socialRule,
+      "legacy-uri",
+      "Notes/Web",
+    );
+    expect(url).toContain("file=Notes%2FWeb%2FSocial%2FNote");
+  });
+
+  test("whitespace and stray slashes are normalized", () => {
+    const { url } = obsidianClipRequest(
+      makePayload({ title: "Note" }),
+      "",
+      "body",
+      null,
+      "legacy-uri",
+      "  /Inbox//Web/  ",
+    );
+    expect(url).toContain("file=Inbox%2FWeb%2FNote");
+  });
+
+  test("blank/whitespace base folder falls back to 'Clippings'", () => {
+    const { url: u1 } = obsidianClipRequest(
+      makePayload({ title: "Note" }),
+      "",
+      "body",
+      null,
+      "legacy-uri",
+      "",
+    );
+    const { url: u2 } = obsidianClipRequest(
+      makePayload({ title: "Note" }),
+      "",
+      "body",
+      null,
+      "legacy-uri",
+      "   ",
+    );
+    expect(u1).toContain("file=Clippings%2FNote");
+    expect(u2).toContain("file=Clippings%2FNote");
+  });
+
+  test("custom base folder also applies in clipboard mode", () => {
+    const { url } = obsidianClipRequest(
+      makePayload({ title: "Repo Readme" }),
+      "",
+      "body",
+      githubRule,
+      "clipboard",
+      "Inbox",
+    );
+    expect(url).toContain("file=Inbox%2FGitHub%2FRepo%20Readme");
   });
 });
 

@@ -397,7 +397,14 @@ async function clipSelectedTabs(tabIds: number[]): Promise<ClipSelectedTabsRespo
     try {
       const rule = pickRule(res.payload.url);
       const content = markdownForClip(res.payload);
-      req = obsidianClipRequest(res.payload, vault, content, rule, settings.clipMode);
+      req = obsidianClipRequest(
+        res.payload,
+        vault,
+        content,
+        rule,
+        settings.clipMode,
+        settings.clippingsBaseFolder,
+      );
       if (req.clipboard !== null) {
         const copied = await copyToClipboardViaTab(tabId, req.clipboard);
         if (!copied) {
@@ -406,7 +413,14 @@ async function clipSelectedTabs(tabIds: number[]): Promise<ClipSelectedTabsRespo
             tabId,
             "— falling back to legacy URI",
           );
-          req = obsidianClipRequest(res.payload, vault, content, rule, "legacy-uri");
+          req = obsidianClipRequest(
+            res.payload,
+            vault,
+            content,
+            rule,
+            "legacy-uri",
+            settings.clippingsBaseFolder,
+          );
         }
       }
     } catch (err) {
