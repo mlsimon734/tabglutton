@@ -8,6 +8,8 @@
     "src/**/*.ts",
     "tests/**/*.ts",
     "popup/popup.ts",
+    "popup/devour.ts",
+    "popup/lib.ts",
     "options/options.ts",
     "onboarding/onboarding.ts"
   ]

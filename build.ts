@@ -41,6 +41,10 @@ cpSync("icons", `${DIST}/icons`, { recursive: true });
 mkdirSync(`${DIST}/popup`, { recursive: true });
 cpSync("popup/popup.html", `${DIST}/popup/popup.html`);
 cpSync("popup/popup.css", `${DIST}/popup/popup.css`);
+cpSync("popup/devour.html", `${DIST}/popup/devour.html`);
+cpSync("popup/devour.css", `${DIST}/popup/devour.css`);
+cpSync("popup/tokens.css", `${DIST}/popup/tokens.css`);
+cpSync("popup/fonts", `${DIST}/popup/fonts`, { recursive: true });
 
 mkdirSync(`${DIST}/options`, { recursive: true });
 cpSync("options/options.html", `${DIST}/options/options.html`);

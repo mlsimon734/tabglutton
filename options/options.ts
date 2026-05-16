@@ -81,4 +81,22 @@ rerunLink?.addEventListener("click", async (e) => {
   await browser.tabs.create({ url: browser.runtime.getURL("onboarding/onboarding.html") });
 });
 
+const logoMark = document.getElementById("logo-mark");
+if (logoMark) {
+  void (async () => {
+    try {
+      const res = await fetch(browser.runtime.getURL("icons/logo-mark.svg"));
+      if (!res.ok) return;
+      const text = await res.text();
+      const doc = new DOMParser().parseFromString(text, "image/svg+xml");
+      const svg = doc.documentElement;
+      if (svg && svg.nodeName.toLowerCase() === "svg") {
+        logoMark.replaceChildren(document.importNode(svg, true));
+      }
+    } catch (err) {
+      console.warn("[tabglutton] logo load failed", err);
+    }
+  })();
+}
+
 void load();

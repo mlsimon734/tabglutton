@@ -21,6 +21,7 @@ export type ReopenTabsMessage = {
   type: "reopen-tabs";
   records: ClosedTabRecord[];
 };
+export type OpenCockpitMessage = { type: "open-cockpit" };
 export type IncomingMessage =
   | GetScopedTabsMessage
   | ClipSelectedTabsMessage
@@ -28,7 +29,8 @@ export type IncomingMessage =
   | CloseDuplicatesMessage
   | CloseTabsMessage
   | FocusTabMessage
-  | ReopenTabsMessage;
+  | ReopenTabsMessage
+  | OpenCockpitMessage;
 
 export type ClipFailureReason = "extract-failed" | "trigger-failed";
 
@@ -476,8 +478,35 @@ browser.runtime.onMessage.addListener(async (rawMsg: unknown): Promise<unknown> 
       await refreshBadge();
       return { restored };
     }
+    case "open-cockpit": {
+      await openCockpit();
+      return { ok: true };
+    }
   }
   return undefined;
+});
+
+const COCKPIT_URL = browser.runtime.getURL("popup/devour.html");
+
+async function openCockpit(): Promise<void> {
+  try {
+    const existing = await browser.tabs.query({ url: COCKPIT_URL });
+    const reusable = existing.find((t) => t.id !== undefined);
+    if (reusable?.id !== undefined) {
+      await browser.tabs.update(reusable.id, { active: true });
+      if (reusable.windowId !== undefined) {
+        await browser.windows.update(reusable.windowId, { focused: true });
+      }
+      return;
+    }
+    await browser.tabs.create({ url: COCKPIT_URL, active: true });
+  } catch (err) {
+    console.warn("[tabglutton] failed to open cockpit", err);
+  }
+}
+
+browser.commands.onCommand.addListener((name) => {
+  if (name === "open-cockpit") void openCockpit();
 });
 
 browser.runtime.onInstalled.addListener(async (details) => {

@@ -1,0 +1,164 @@
+/* Tabglutton design tokens. Shared by popup, devour cockpit, options. */
+
+@font-face {
+  font-family: "Fraunces";
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url("./fonts/Fraunces.woff2") format("woff2");
+  font-variation-settings: "opsz" 14;
+}
+
+@font-face {
+  font-family: "Geist";
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url("./fonts/Geist.woff2") format("woff2");
+}
+
+:root {
+  color-scheme: light dark;
+
+  /* Warm paper palette — light */
+  --bone: #f4efe6;
+  --paper: #fbf8f3;
+  --paper-raised: #ffffff;
+  --ink: #1b1614;
+  --ink-soft: #3a322d;
+  --muted: #6f6155;
+  --muted-soft: #8f8478;
+  --hairline: rgba(27, 22, 20, 0.1);
+  --hairline-strong: rgba(27, 22, 20, 0.18);
+  --hover: rgba(27, 22, 20, 0.04);
+  --hover-strong: rgba(27, 22, 20, 0.07);
+
+  --accent: #7a4a2c;
+  --accent-ink: #fbf8f3;
+  --accent-soft: rgba(122, 74, 44, 0.12);
+  --accent-ring: rgba(122, 74, 44, 0.32);
+
+  --danger: #9b3a2b;
+  --danger-soft: rgba(155, 58, 43, 0.1);
+  --danger-ring: rgba(155, 58, 43, 0.28);
+
+  --success: #4f6a3a;
+  --success-soft: rgba(79, 106, 58, 0.12);
+
+  /* Type system */
+  --font-display: "Fraunces", "Iowan Old Style", "Hoefler Text", Georgia, serif;
+  --font-ui:
+    "Geist", -apple-system, "SF Pro Text", system-ui, "Segoe UI Variable", "Segoe UI", sans-serif;
+  --font-mono:
+    ui-monospace, "JetBrains Mono", "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace;
+
+  /* Type scale */
+  --fs-micro: 10px;
+  --fs-tiny: 11px;
+  --fs-small: 12px;
+  --fs-body: 13px;
+  --fs-lead: 15px;
+  --fs-display: 20px;
+  --fs-hero: 28px;
+
+  /* Spacing */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-7: 32px;
+
+  --pad: 14px;
+  --gap: 10px;
+
+  /* Radii */
+  --radius-1: 3px;
+  --radius-2: 6px;
+  --radius-3: 9px;
+  --radius-pill: 999px;
+
+  /* Motion */
+  --easing: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --easing-soft: cubic-bezier(0.4, 0.1, 0.2, 1);
+  --duration-fast: 120ms;
+  --duration: 180ms;
+  --duration-slow: 320ms;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bone: #16110e;
+    --paper: #1d1814;
+    --paper-raised: #241e19;
+    --ink: #f0e6d6;
+    --ink-soft: #d6c9b6;
+    --muted: #9a8a7a;
+    --muted-soft: #756859;
+    --hairline: rgba(240, 230, 214, 0.1);
+    --hairline-strong: rgba(240, 230, 214, 0.2);
+    --hover: rgba(240, 230, 214, 0.05);
+    --hover-strong: rgba(240, 230, 214, 0.09);
+
+    --accent: #d89456;
+    --accent-ink: #16110e;
+    --accent-soft: rgba(216, 148, 86, 0.18);
+    --accent-ring: rgba(216, 148, 86, 0.4);
+
+    --danger: #d67560;
+    --danger-soft: rgba(214, 117, 96, 0.16);
+    --danger-ring: rgba(214, 117, 96, 0.34);
+
+    --success: #a3b389;
+    --success-soft: rgba(163, 179, 137, 0.16);
+  }
+}
+
+/* Reset + global type defaults. Importing tokens.css gets you these. */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: var(--font-ui);
+  font-size: var(--fs-body);
+  line-height: 1.45;
+  color: var(--ink);
+  background: var(--bone);
+  font-feature-settings:
+    "ss01" on,
+    "ss03" on,
+    "cv11" on,
+    "tnum" on;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+::selection {
+  background: var(--accent-soft);
+  color: var(--ink);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-delay: 0ms !important;
+    transition-duration: 0.001ms !important;
+  }
+}

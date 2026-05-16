@@ -7,20 +7,21 @@ import type {
   GetScopedTabsResponse,
   PopupTab,
 } from "../src/background.js";
+import { pickRule, type SiteRule } from "../src/site-rules.js";
 import type { Settings } from "../src/storage.js";
 import {
   computeDedupCount,
   type DomainGroup,
   hostInitial,
+  hostOf,
   markdownForTabs,
-  prettifyShortcut,
   selectedTabsInUiOrder,
   sendMessage,
   visibleGroups,
   visibleTabIds,
 } from "./lib.js";
 
-interface PopupState {
+interface CockpitState {
   scopedTabs: PopupTab[];
   settings: Settings | null;
   filter: string;
@@ -29,6 +30,7 @@ interface PopupState {
   toast: ToastState | null;
   clipping: boolean;
   devourFailures: ClipFailure[];
+  focusedTabId: number | null;
 }
 
 interface ToastState {
@@ -39,6 +41,7 @@ interface ToastState {
 }
 
 const TOAST_DURATION_SEC = 6;
+const CLIPPER_PATH = "Clippings";
 
 const groupsEl = document.getElementById("groups") as HTMLUListElement;
 const emptyEl = document.getElementById("empty") as HTMLDivElement;
@@ -51,22 +54,22 @@ const selectionSummaryEl = document.getElementById("selection-summary") as HTMLS
 const dedupBtn = document.getElementById("dedup") as HTMLButtonElement;
 const dedupCountEl = document.getElementById("dedup-count") as HTMLSpanElement;
 const optionsBtn = document.getElementById("open-options") as HTMLButtonElement;
-const cockpitBtn = document.getElementById("open-cockpit") as HTMLButtonElement;
 const clipCurrentBtn = document.getElementById("clip-current") as HTMLButtonElement;
+const clipCountEl = document.getElementById("clip-count") as HTMLSpanElement;
 const copyUrlsBtn = document.getElementById("copy-urls") as HTMLButtonElement;
 const closeSelectedBtn = document.getElementById("close-selected") as HTMLButtonElement;
 const toastEl = document.getElementById("toast") as HTMLDivElement;
 const toastTextEl = document.getElementById("toast-text") as HTMLSpanElement;
 const toastUndoBtn = document.getElementById("toast-undo") as HTMLButtonElement;
-const shortcutHintEl = document.getElementById("shortcut-hint") as HTMLElement | null;
 const logoMarkEl = document.getElementById("logo-mark") as HTMLElement | null;
+const inspectorEl = document.getElementById("inspector-content") as HTMLElement;
 const devourFailuresEl = document.getElementById("devour-failures") as HTMLElement;
 const devourFailuresCountEl = document.getElementById("devour-failures-count") as HTMLSpanElement;
 const devourFailuresListEl = document.getElementById("devour-failures-list") as HTMLUListElement;
 const devourRetryAllBtn = document.getElementById("devour-retry-all") as HTMLButtonElement;
 const devourDismissBtn = document.getElementById("devour-dismiss") as HTMLButtonElement;
 
-const state: PopupState = {
+const state: CockpitState = {
   scopedTabs: [],
   settings: null,
   filter: "",
@@ -75,6 +78,7 @@ const state: PopupState = {
   toast: null,
   clipping: false,
   devourFailures: [],
+  focusedTabId: null,
 };
 
 function renderWarning(): void {
@@ -123,29 +127,17 @@ function setGroupSelection(group: DomainGroup, select: boolean): void {
   }
 }
 
-const SVG_NS = "http://www.w3.org/2000/svg";
+function setFocusedTab(tabId: number | null): void {
+  state.focusedTabId = tabId;
+  renderInspector();
+  updateFocusedRowVisuals();
+}
 
-function makePinIcon(): SVGSVGElement {
-  const svg = document.createElementNS(SVG_NS, "svg");
-  svg.setAttribute("viewBox", "0 0 24 24");
-  svg.setAttribute("fill", "none");
-  svg.setAttribute("stroke", "currentColor");
-  svg.setAttribute("stroke-width", "1.8");
-  svg.setAttribute("stroke-linecap", "round");
-  svg.setAttribute("stroke-linejoin", "round");
-  svg.setAttribute("aria-hidden", "true");
-  const line = document.createElementNS(SVG_NS, "line");
-  line.setAttribute("x1", "12");
-  line.setAttribute("y1", "17");
-  line.setAttribute("x2", "12");
-  line.setAttribute("y2", "22");
-  const path = document.createElementNS(SVG_NS, "path");
-  path.setAttribute(
-    "d",
-    "M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z",
-  );
-  svg.append(line, path);
-  return svg;
+function updateFocusedRowVisuals(): void {
+  for (const row of groupsEl.querySelectorAll<HTMLDivElement>(".tab")) {
+    const id = Number(row.dataset.tabId);
+    row.classList.toggle("focused", id === state.focusedTabId);
+  }
 }
 
 function renderGroup(group: DomainGroup): HTMLLIElement {
@@ -168,8 +160,6 @@ function renderGroup(group: DomainGroup): HTMLLIElement {
   selectBtn.className = `select-toggle quiet ${sel}`;
   selectBtn.type = "button";
   selectBtn.textContent = sel === "all" ? "Deselect" : sel === "partial" ? "Select rest" : "Select";
-  selectBtn.title =
-    sel === "all" ? "Deselect all tabs in this group" : "Select all tabs in this group";
   selectBtn.addEventListener("click", () => {
     setGroupSelection(group, sel !== "all");
     render();
@@ -191,11 +181,11 @@ function renderTab(tab: PopupTab, group: DomainGroup): HTMLDivElement {
   const row = document.createElement("div");
   row.className = "tab";
   row.dataset.tabId = String(tab.id);
+  if (tab.id === state.focusedTabId) row.classList.add("focused");
 
   const checkbox = document.createElement("input");
   checkbox.type = "checkbox";
   checkbox.checked = state.selected.has(tab.id);
-  checkbox.title = "Select this tab";
   checkbox.addEventListener("change", () => {
     if (checkbox.checked) state.selected.add(tab.id);
     else state.selected.delete(tab.id);
@@ -220,10 +210,8 @@ function renderTab(tab: PopupTab, group: DomainGroup): HTMLDivElement {
   meta.className = "tab-meta";
   meta.textContent = tab.url ?? "";
   body.append(title, meta);
-  body.title = "Click to focus this tab";
-  body.addEventListener("click", () => {
-    void focusTab(tab.id);
-  });
+  body.title = "Click to inspect this tab";
+  body.addEventListener("click", () => setFocusedTab(tab.id));
 
   row.append(checkbox, fav, body);
 
@@ -238,6 +226,16 @@ function renderTab(tab: PopupTab, group: DomainGroup): HTMLDivElement {
 
   const actions = document.createElement("div");
   actions.className = "tab-actions";
+
+  const openBtn = document.createElement("button");
+  openBtn.className = "icon";
+  openBtn.title = "Focus this tab in its window";
+  openBtn.append(makeOpenIcon());
+  openBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    void sendMessage({ type: "focus-tab", tabId: tab.id });
+  });
+
   const closeBtn = document.createElement("button");
   closeBtn.className = "icon danger";
   closeBtn.textContent = "✕";
@@ -246,7 +244,7 @@ function renderTab(tab: PopupTab, group: DomainGroup): HTMLDivElement {
     e.stopPropagation();
     void closeTabs([tab.id]);
   });
-  actions.append(closeBtn);
+  actions.append(openBtn, closeBtn);
   row.append(actions);
 
   return row;
@@ -267,11 +265,18 @@ function renderSelectionSummary(visibleIds: number[]): void {
   copyUrlsBtn.disabled = !hasSelection;
   clipCurrentBtn.disabled = !hasSelection || state.clipping;
   closeSelectedBtn.disabled = !hasSelection;
+
+  if (selected > 0) {
+    clipCountEl.hidden = false;
+    clipCountEl.textContent = String(selected);
+  } else {
+    clipCountEl.hidden = true;
+  }
 }
 
 function renderDedupBadge(): void {
   state.dedupCount = computeDedupCount(state.scopedTabs, state.settings);
-  dedupBtn.disabled = state.dedupCount === 0;
+  dedupBtn.disabled = state.dedupCount === 0 || state.clipping;
   if (state.dedupCount > 0) {
     dedupCountEl.hidden = false;
     dedupCountEl.textContent = String(state.dedupCount);
@@ -298,10 +303,6 @@ function reasonLabel(reason: ClipFailureReason): string {
   }
 }
 
-function reasonTooltip(f: ClipFailure): string {
-  return f.detail?.trim() ?? "";
-}
-
 function renderFailureRow(f: ClipFailure): HTMLLIElement {
   const li = document.createElement("li");
   li.className = "devour-failures-row";
@@ -314,8 +315,7 @@ function renderFailureRow(f: ClipFailure): HTMLLIElement {
   const pill = document.createElement("span");
   pill.className = "reason-pill";
   pill.textContent = reasonLabel(f.reason);
-  const tooltip = reasonTooltip(f);
-  if (tooltip) pill.title = tooltip;
+  if (f.detail?.trim()) pill.title = f.detail;
 
   const retry = document.createElement("button");
   retry.type = "button";
@@ -342,6 +342,254 @@ function renderDevourFailures(): void {
   devourFailuresListEl.replaceChildren(...failures.map(renderFailureRow));
 }
 
+/* ---------- inspector ---------- */
+
+function sanitizeFileName(name: string): string {
+  let s = Array.from(name)
+    .filter((c) => c.charCodeAt(0) >= 32)
+    .join("")
+    .replace(/[#[\]|^]/g, "")
+    .replace(/[/:]/g, "")
+    .replace(/^\.+/, "")
+    .trim()
+    .slice(0, 245);
+  if (!s) s = "Untitled";
+  return s;
+}
+
+function targetFolder(rule: SiteRule | null): string {
+  return rule ? `${CLIPPER_PATH}/${rule.subfolder}` : CLIPPER_PATH;
+}
+
+function focusedTab(): PopupTab | null {
+  if (state.focusedTabId === null) return null;
+  return state.scopedTabs.find((t) => t.id === state.focusedTabId) ?? null;
+}
+
+function renderInspector(): void {
+  inspectorEl.replaceChildren();
+  const tab = focusedTab();
+  const vault = state.settings?.obsidianVault.trim() ?? "";
+
+  if (!vault) {
+    inspectorEl.append(renderInspectorSetup());
+    return;
+  }
+  if (!tab) {
+    inspectorEl.append(renderInspectorEmpty());
+    return;
+  }
+  inspectorEl.append(renderInspectorPreview(tab, vault));
+}
+
+const SVG_NS = "http://www.w3.org/2000/svg";
+
+function makeOpenIcon(): SVGSVGElement {
+  const svg = document.createElementNS(SVG_NS, "svg");
+  svg.setAttribute("viewBox", "0 0 16 16");
+  svg.setAttribute("width", "13");
+  svg.setAttribute("height", "13");
+  svg.setAttribute("aria-hidden", "true");
+  const path = document.createElementNS(SVG_NS, "path");
+  path.setAttribute("fill", "none");
+  path.setAttribute("stroke", "currentColor");
+  path.setAttribute("stroke-width", "1.4");
+  path.setAttribute("stroke-linecap", "round");
+  path.setAttribute("stroke-linejoin", "round");
+  path.setAttribute("d", "M6 3H3v3M3 13l10-10M10 3h3v3");
+  svg.append(path);
+  return svg;
+}
+
+function makePinIcon(): SVGSVGElement {
+  const svg = document.createElementNS(SVG_NS, "svg");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("fill", "none");
+  svg.setAttribute("stroke", "currentColor");
+  svg.setAttribute("stroke-width", "1.8");
+  svg.setAttribute("stroke-linecap", "round");
+  svg.setAttribute("stroke-linejoin", "round");
+  svg.setAttribute("aria-hidden", "true");
+  const line = document.createElementNS(SVG_NS, "line");
+  line.setAttribute("x1", "12");
+  line.setAttribute("y1", "17");
+  line.setAttribute("x2", "12");
+  line.setAttribute("y2", "22");
+  const path = document.createElementNS(SVG_NS, "path");
+  path.setAttribute(
+    "d",
+    "M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z",
+  );
+  svg.append(line, path);
+  return svg;
+}
+
+function hintKey(text: string): HTMLElement {
+  const span = document.createElement("span");
+  span.className = "hint-key";
+  span.textContent = text;
+  return span;
+}
+
+function renderInspectorEmpty(): HTMLElement {
+  const div = document.createElement("div");
+  div.className = "inspector-empty";
+
+  const p1 = document.createElement("p");
+  p1.textContent = "Click a tab in the queue to preview where it will be filed.";
+
+  const p2 = document.createElement("p");
+  p2.style.marginTop = "12px";
+  p2.append(
+    "Navigate with ",
+    hintKey("j"),
+    hintKey("k"),
+    ", toggle with ",
+    hintKey("space"),
+    ", devour with ",
+    hintKey("d"),
+    ".",
+  );
+
+  div.append(p1, p2);
+  return div;
+}
+
+function renderInspectorSetup(): HTMLElement {
+  const div = document.createElement("div");
+  div.className = "inspector-setup";
+  const h = document.createElement("h3");
+  h.textContent = "Set an Obsidian vault first";
+
+  const code = document.createElement("code");
+  code.textContent = "Clippings/";
+  const p = document.createElement("p");
+  p.append(
+    "Tabglutton routes devoured pages into your Obsidian vault under ",
+    code,
+    ". Open settings to point it at the vault name as it appears in Obsidian's switcher.",
+  );
+
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "primary";
+  btn.textContent = "Open settings";
+  btn.addEventListener("click", () => void browser.runtime.openOptionsPage());
+  div.append(h, p, btn);
+  return div;
+}
+
+function renderInspectorPreview(tab: PopupTab, vault: string): HTMLElement {
+  const wrap = document.createElement("div");
+
+  const head = document.createElement("section");
+  head.className = "inspector-section inspector-head";
+  const fav = document.createElement("span");
+  fav.className = "favicon";
+  if (tab.favIconUrl) {
+    fav.style.backgroundImage = `url("${tab.favIconUrl}")`;
+  } else {
+    fav.classList.add("fallback");
+    fav.textContent = hostInitial(hostOf(tab.url));
+  }
+  const headText = document.createElement("div");
+  headText.style.minWidth = "0";
+  const t = document.createElement("div");
+  t.className = "inspector-title";
+  t.textContent = tab.title || tab.url || "(untitled)";
+  const u = document.createElement("div");
+  u.className = "inspector-url";
+  u.textContent = tab.url ?? "";
+  headText.append(t, u);
+  head.append(fav, headText);
+  wrap.append(head);
+
+  const rule = tab.url ? pickRule(tab.url) : null;
+  const folder = targetFolder(rule);
+  const fileName = sanitizeFileName(tab.title || tab.url || "Untitled");
+
+  const pathSection = document.createElement("section");
+  pathSection.className = "inspector-section";
+  const pathLabel = document.createElement("span");
+  pathLabel.className = "inspector-section-label";
+  pathLabel.textContent = "Will save to";
+  const path = document.createElement("div");
+  path.className = "inspector-path";
+  const vaultEl = document.createElement("strong");
+  vaultEl.textContent = vault;
+  path.append(vaultEl, ` / ${folder} / ${fileName}.md`);
+  pathSection.append(pathLabel, path);
+  wrap.append(pathSection);
+
+  const fmSection = document.createElement("section");
+  fmSection.className = "inspector-section";
+  const fmLabel = document.createElement("span");
+  fmLabel.className = "inspector-section-label";
+  fmLabel.textContent = "Frontmatter preview";
+  const fm = document.createElement("pre");
+  fm.className = "inspector-frontmatter";
+  fm.append(buildFrontmatterPreview(tab));
+  fmSection.append(fmLabel, fm);
+  wrap.append(fmSection);
+
+  const metaSection = document.createElement("section");
+  metaSection.className = "inspector-section";
+  const metaLabel = document.createElement("span");
+  metaLabel.className = "inspector-section-label";
+  metaLabel.textContent = "Routing";
+  const dl = document.createElement("dl");
+  dl.className = "inspector-meta";
+  addDef(dl, "Host", hostOf(tab.url));
+  addDef(dl, "Rule", rule ? rule.id : "default");
+  addDef(dl, "Folder", folder);
+  metaSection.append(metaLabel, dl);
+  wrap.append(metaSection);
+
+  return wrap;
+}
+
+function buildFrontmatterPreview(tab: PopupTab): DocumentFragment {
+  const frag = document.createDocumentFragment();
+  const created = new Date().toISOString().replace(/\.\d+Z$/, "+00:00");
+  const lines: Array<[label: string, value: string, deferred: boolean]> = [
+    ["title", `"${(tab.title ?? "").replace(/"/g, '\\"')}"`, false],
+    ["source", `"${tab.url ?? ""}"`, false],
+    ["author", "(filled on devour)", true],
+    ["published", "(filled on devour)", true],
+    ["created", created, false],
+    ["description", "(filled on devour)", true],
+    ["tags", '\n  - "clippings"', false],
+  ];
+  frag.append(document.createTextNode("---\n"));
+  for (const [k, v, deferred] of lines) {
+    const key = document.createElement("span");
+    key.className = "fm-key";
+    key.textContent = `${k}:`;
+    frag.append(key);
+    if (deferred) {
+      const span = document.createElement("span");
+      span.className = "fm-deferred";
+      span.textContent = ` ${v}`;
+      frag.append(span);
+    } else {
+      frag.append(document.createTextNode(v.startsWith("\n") ? v : ` ${v}`));
+    }
+    frag.append(document.createTextNode("\n"));
+  }
+  frag.append(document.createTextNode("---"));
+  return frag;
+}
+
+function addDef(dl: HTMLElement, term: string, definition: string): void {
+  const dt = document.createElement("dt");
+  dt.textContent = term;
+  const dd = document.createElement("dd");
+  dd.textContent = definition;
+  dl.append(dt, dd);
+}
+
+/* ---------- render ---------- */
+
 function render(): void {
   renderWarning();
   const groups = visibleGroups(state.scopedTabs, state.filter);
@@ -349,13 +597,14 @@ function render(): void {
   groupsEl.replaceChildren();
   groups.forEach((g, idx) => {
     const li = renderGroup(g);
-    li.style.setProperty("--i", String(Math.min(idx, 10)));
+    li.style.setProperty("--i", String(Math.min(idx, 12)));
     groupsEl.append(li);
   });
   renderSelectionSummary(visibleTabIds(groups));
   renderDedupBadge();
   renderToast();
   renderDevourFailures();
+  renderInspector();
 }
 
 async function refresh(): Promise<void> {
@@ -367,18 +616,19 @@ async function refresh(): Promise<void> {
   for (const id of state.selected) {
     if (!live.has(id)) state.selected.delete(id);
   }
+  if (state.focusedTabId !== null && !live.has(state.focusedTabId)) {
+    state.focusedTabId = null;
+  }
   render();
-}
-
-async function focusTab(tabId: number): Promise<void> {
-  await sendMessage({ type: "focus-tab", tabId });
-  window.close();
 }
 
 async function closeTabs(tabIds: number[]): Promise<void> {
   if (!tabIds.length) return;
   await sendMessage({ type: "close-tabs", tabIds });
   for (const id of tabIds) state.selected.delete(id);
+  if (state.focusedTabId !== null && tabIds.includes(state.focusedTabId)) {
+    state.focusedTabId = null;
+  }
   await refresh();
 }
 
@@ -419,30 +669,27 @@ function mergeClipFailures(retriedTabIds: number[], newFailures: ClipFailure[]):
 async function clipSelected(): Promise<void> {
   const queue = selectedForOps();
   if (!queue.length) return;
-  const original = clipCurrentBtn.textContent;
-  const originalTitle = clipCurrentBtn.title;
+  const label = clipCurrentBtn.querySelector(".primary-label") as HTMLElement | null;
   const restore = (text: string, ms: number) => {
-    clipCurrentBtn.textContent = text;
+    if (label) label.textContent = text;
     setTimeout(() => {
-      clipCurrentBtn.textContent = original;
-      clipCurrentBtn.title = originalTitle;
+      if (label) label.textContent = "Devour";
       state.clipping = false;
       render();
     }, ms);
   };
 
   if (!state.settings?.obsidianVault.trim()) {
-    clipCurrentBtn.title = "Set Obsidian vault in Options first.";
+    if (label) label.textContent = "Set vault first";
     state.clipping = true;
     clipCurrentBtn.disabled = true;
-    restore("Set vault", 2200);
+    restore("Devour", 2200);
     return;
   }
 
   state.clipping = true;
   clipCurrentBtn.disabled = true;
-  clipCurrentBtn.title = "";
-  clipCurrentBtn.textContent = `Clipping ${queue.length}…`;
+  if (label) label.textContent = `Devouring ${queue.length}…`;
 
   const tabIds = queue.map((t) => t.id);
   const res = await sendMessage<ClipSelectedTabsResponse>({
@@ -451,20 +698,20 @@ async function clipSelected(): Promise<void> {
   });
 
   if (!res) {
-    restore("Clip failed", 1800);
+    restore("Devour failed", 1800);
     return;
   }
   if (res.vaultMissing) {
-    restore("Set vault", 2200);
+    restore("Set vault first", 2200);
     return;
   }
   mergeClipFailures(tabIds, res.failures);
   await refresh();
   const summary =
     res.failed === 0
-      ? `Clipped ${res.succeeded}`
-      : `Clipped ${res.succeeded}, ${res.failed} failed`;
-  restore(summary, res.failed === 0 ? 1400 : 2200);
+      ? `Devoured ${res.succeeded}`
+      : `Devoured ${res.succeeded}, ${res.failed} failed`;
+  restore(summary, res.failed === 0 ? 1400 : 2400);
 }
 
 async function retryFailures(tabIds: number[]): Promise<void> {
@@ -524,9 +771,8 @@ function showUndoToast(closed: number, restorable: ClosedTabRecord[]): void {
 
 async function runDedup(): Promise<void> {
   dedupBtn.disabled = true;
-  const original = dedupBtn.querySelector(".primary-label")?.textContent ?? "Dedup";
-  const labelEl = dedupBtn.querySelector(".primary-label") as HTMLElement | null;
-  if (labelEl) labelEl.textContent = "Closing…";
+  const original = dedupBtn.textContent ?? "Dedup";
+  dedupBtn.textContent = "Closing…";
   try {
     const res = await sendMessage<CloseDuplicatesResponse>({ type: "close-duplicates" });
     await refresh();
@@ -534,7 +780,7 @@ async function runDedup(): Promise<void> {
       showUndoToast(res.closed, res.restorable);
     }
   } finally {
-    if (labelEl) labelEl.textContent = original;
+    dedupBtn.textContent = original;
     renderDedupBadge();
   }
 }
@@ -547,17 +793,91 @@ async function undoDedup(): Promise<void> {
   await refresh();
 }
 
-async function openCockpit(): Promise<void> {
-  await sendMessage({ type: "open-cockpit" });
-  window.close();
+/* ---------- keyboard ---------- */
+
+function focusableTabIds(): number[] {
+  const groups = visibleGroups(state.scopedTabs, state.filter);
+  return visibleTabIds(groups);
 }
 
-dedupBtn.addEventListener("click", () => void runDedup());
-optionsBtn.addEventListener("click", () => {
-  void browser.runtime.openOptionsPage();
-  window.close();
+function moveFocus(delta: number): void {
+  const ids = focusableTabIds();
+  if (!ids.length) return;
+  if (state.focusedTabId === null) {
+    setFocusedTab(ids[delta >= 0 ? 0 : ids.length - 1]!);
+    return;
+  }
+  const idx = ids.indexOf(state.focusedTabId);
+  if (idx === -1) {
+    setFocusedTab(ids[0]!);
+    return;
+  }
+  const next = (idx + delta + ids.length) % ids.length;
+  setFocusedTab(ids[next]!);
+  const row = groupsEl.querySelector<HTMLDivElement>(`.tab[data-tab-id="${ids[next]}"]`);
+  row?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+}
+
+function toggleFocusedSelection(): void {
+  if (state.focusedTabId === null) return;
+  if (state.selected.has(state.focusedTabId)) {
+    state.selected.delete(state.focusedTabId);
+  } else {
+    state.selected.add(state.focusedTabId);
+  }
+  render();
+}
+
+document.addEventListener("keydown", (e) => {
+  const target = e.target as HTMLElement | null;
+  const tag = target?.tagName;
+  const inField = tag === "INPUT" || tag === "TEXTAREA" || target?.isContentEditable;
+
+  if (e.key === "/" && !e.metaKey && !e.ctrlKey && !e.altKey) {
+    if (inField) return;
+    e.preventDefault();
+    filterInput.focus();
+    filterInput.select();
+    return;
+  }
+  if (e.key === "Escape" && inField) {
+    filterInput.blur();
+    return;
+  }
+  if (inField) return;
+  if (e.metaKey || e.ctrlKey || e.altKey) return;
+
+  switch (e.key) {
+    case "j":
+    case "ArrowDown":
+      e.preventDefault();
+      moveFocus(1);
+      break;
+    case "k":
+    case "ArrowUp":
+      e.preventDefault();
+      moveFocus(-1);
+      break;
+    case " ":
+    case "Enter":
+      e.preventDefault();
+      toggleFocusedSelection();
+      break;
+    case "d":
+    case "D":
+      e.preventDefault();
+      if (!clipCurrentBtn.disabled) void clipSelected();
+      break;
+    case "x":
+    case "X":
+      e.preventDefault();
+      if (!closeSelectedBtn.disabled) void closeSelected();
+      break;
+  }
 });
-cockpitBtn.addEventListener("click", () => void openCockpit());
+
+dedupBtn.addEventListener("click", () => void runDedup());
+optionsBtn.addEventListener("click", () => void browser.runtime.openOptionsPage());
 filterInput.addEventListener("input", () => {
   state.filter = filterInput.value;
   render();
@@ -583,31 +903,6 @@ devourRetryAllBtn.addEventListener("click", () => {
 });
 devourDismissBtn.addEventListener("click", () => dismissDevourFailures());
 
-document.addEventListener("keydown", (e) => {
-  if (e.key !== "/" || e.metaKey || e.ctrlKey || e.altKey) return;
-  const target = e.target as HTMLElement | null;
-  const tag = target?.tagName;
-  if (tag === "INPUT" || tag === "TEXTAREA" || target?.isContentEditable) {
-    return;
-  }
-  e.preventDefault();
-  filterInput.focus();
-  filterInput.select();
-});
-
-async function renderShortcutHint(): Promise<void> {
-  if (!shortcutHintEl) return;
-  const fallback = prettifyShortcut("Alt+Shift+G");
-  try {
-    const commands = await browser.commands.getAll();
-    const action = commands.find((c) => c.name === "_execute_action");
-    const shortcut = action?.shortcut;
-    shortcutHintEl.textContent = shortcut ? prettifyShortcut(shortcut) : fallback;
-  } catch {
-    shortcutHintEl.textContent = fallback;
-  }
-}
-
 async function loadLogoMark(): Promise<void> {
   if (!logoMarkEl) return;
   try {
@@ -624,7 +919,14 @@ async function loadLogoMark(): Promise<void> {
   }
 }
 
-void renderShortcutHint();
+browser.runtime.onMessage.addListener(async (raw: unknown) => {
+  if (!raw || typeof raw !== "object") return;
+  const msg = raw as { type?: string };
+  if (msg.type === "refresh-cockpit") {
+    await refresh();
+  }
+});
+
 void loadLogoMark();
 document.body.classList.add("initial-load");
 void refresh().then(() => {
@@ -633,4 +935,8 @@ void refresh().then(() => {
       document.body.classList.remove("initial-load");
     });
   });
+});
+
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) void refresh();
 });

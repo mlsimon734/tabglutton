@@ -40,6 +40,12 @@
         "default": "Alt+Shift+G"
       },
       "description": "Open Tabglutton"
+    },
+    "open-cockpit": {
+      "suggested_key": {
+        "default": "Alt+Shift+D"
+      },
+      "description": "Open Tabglutton Devour cockpit"
     }
   }
 }

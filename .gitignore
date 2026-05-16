@@ -5,3 +5,4 @@ dist/
 *.log
 .dev-profile/
 .dev-profile-firefox/
+.claude/settings.local.json
