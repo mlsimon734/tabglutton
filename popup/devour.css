@@ -1,7 +1,8 @@
 @import url("./tokens.css");
 
 body.cockpit {
-  min-height: 100vh;
+  height: 100vh;
+  overflow: hidden;
   display: grid;
   grid-template-rows: auto auto 1fr auto auto;
   background: var(--bone);
@@ -320,10 +321,7 @@ button:not(.primary) > .count-badge {
 }
 
 .inspector {
-  position: sticky;
-  top: 0;
-  align-self: start;
-  max-height: calc(100vh - 220px);
+  height: 100%;
   overflow: auto;
   background: var(--paper);
   border: 1px solid var(--hairline);
@@ -524,6 +522,14 @@ body.initial-load .group {
   overflow: hidden;
   text-overflow: ellipsis;
   color: var(--ink);
+}
+
+.tab:hover .tab-title,
+.tab.focused .tab-title {
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+  overflow-wrap: anywhere;
 }
 
 .tab-meta {
@@ -906,13 +912,20 @@ body.initial-load .group {
 /* narrow viewport — let inspector wrap below */
 
 @media (max-width: 980px) {
+  body.cockpit {
+    height: auto;
+    overflow: visible;
+  }
+
   .cockpit-main {
     grid-template-columns: 1fr;
+    overflow: visible;
   }
 
   .inspector {
-    position: static;
+    height: auto;
     max-height: none;
+    overflow: visible;
   }
 
   .kbd-legend {
