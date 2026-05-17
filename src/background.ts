@@ -410,24 +410,44 @@ async function clipSelectedTabs(tabIds: number[]): Promise<ClipSelectedTabsRespo
   const metaById = new Map(metaEntries);
   const metaOf = (tabId: number) => metaById.get(tabId) ?? { title: "", url: "" };
 
+  // Phase 1: wake + extract every tab in parallel. clipTab is concurrency-safe
+  // (per-tab onUpdated listener, unique requestId in pendingClips). The slow
+  // step for discarded tabs is ensureTabReady's reload-and-wait, which is
+  // overlapping I/O — running them in parallel turns N × 15s into ~max 15s.
+  type ExtractOutcome = { kind: "ok"; res: ClipCurrentResponse } | { kind: "threw"; err: unknown };
+  const extractResults = await Promise.all(
+    tabIds.map(async (tabId): Promise<[number, ExtractOutcome]> => {
+      try {
+        return [tabId, { kind: "ok", res: await clipTab(tabId) }];
+      } catch (err) {
+        return [tabId, { kind: "threw", err }];
+      }
+    }),
+  );
+  const extractByTabId = new Map(extractResults);
+
+  // Phase 2: dispatch to Obsidian serially in selection order. clipMode
+  // defaults to "clipboard" (storage.ts), and the OS clipboard is global —
+  // parallel dispatches would clobber each other. The 200ms inter-dispatch
+  // delay also helps Obsidian's URI handler stay reliable.
   let succeeded = 0;
   const failures: ClipFailure[] = [];
   for (const tabId of tabIds) {
-    let res: ClipCurrentResponse;
-    try {
-      res = await clipTab(tabId);
-    } catch (err) {
+    const outcome = extractByTabId.get(tabId);
+    if (!outcome) continue;
+    if (outcome.kind === "threw") {
       const m = metaOf(tabId);
       failures.push({
         tabId,
         title: m.title,
         url: m.url,
         reason: "extract-failed",
-        detail: errorMessage(err),
+        detail: errorMessage(outcome.err),
       });
-      console.warn("[tabglutton] clip threw for tab", tabId, err);
+      console.warn("[tabglutton] clip threw for tab", tabId, outcome.err);
       continue;
     }
+    const res = outcome.res;
     if (!res.ok || !res.payload) {
       const m = metaOf(tabId);
       failures.push({
