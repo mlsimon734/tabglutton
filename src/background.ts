@@ -192,12 +192,23 @@ browser.storage.onChanged.addListener(async (_changes, area) => {
   await refreshBadge();
 });
 
+const SAFE_FAVICON_SCHEMES = new Set(["http:", "https:", "data:", "moz-extension:"]);
+
+function safeFavIconUrl(raw: string | undefined): string | undefined {
+  if (!raw) return undefined;
+  try {
+    return SAFE_FAVICON_SCHEMES.has(new URL(raw).protocol) ? raw : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function tabToPopupTab(t: Tab): PopupTab {
   return {
     id: t.id ?? -1,
     title: t.title,
     url: t.url,
-    favIconUrl: t.favIconUrl,
+    favIconUrl: safeFavIconUrl(t.favIconUrl),
     lastAccessed: t.lastAccessed ?? 0,
     active: t.active,
     pinned: t.pinned,
