@@ -29,6 +29,7 @@ interface PopupState {
   toast: ToastState | null;
   clipping: boolean;
   devourFailures: ClipFailure[];
+  stickyHostOrder: string[] | null;
 }
 
 interface ToastState {
@@ -75,6 +76,7 @@ const state: PopupState = {
   toast: null,
   clipping: false,
   devourFailures: [],
+  stickyHostOrder: null,
 };
 
 function renderWarning(): void {
@@ -344,7 +346,10 @@ function renderDevourFailures(): void {
 
 function render(): void {
   renderWarning();
-  const groups = visibleGroups(state.scopedTabs, state.filter);
+  const groups = visibleGroups(state.scopedTabs, state.filter, state.stickyHostOrder);
+  if (state.stickyHostOrder === null) {
+    state.stickyHostOrder = groups.map((g) => g.host);
+  }
   renderEmpty(groups);
   groupsEl.replaceChildren();
   groups.forEach((g, idx) => {
@@ -383,7 +388,7 @@ async function closeTabs(tabIds: number[]): Promise<void> {
 }
 
 function selectedForOps(): PopupTab[] {
-  const groups = visibleGroups(state.scopedTabs, state.filter);
+  const groups = visibleGroups(state.scopedTabs, state.filter, state.stickyHostOrder);
   return selectedTabsInUiOrder(groups, state.selected);
 }
 
@@ -416,6 +421,16 @@ function mergeClipFailures(retriedTabIds: number[], newFailures: ClipFailure[]):
   state.devourFailures.push(...newFailures);
 }
 
+function setDevourProgress(completed: number, total: number): void {
+  const pct = total > 0 ? Math.min(100, Math.round((completed / total) * 100)) : 0;
+  clipCurrentBtn.style.setProperty("--devour-progress", `${pct}%`);
+  clipCurrentBtn.textContent = total > 1 ? `Clipping ${completed}/${total}…` : "Clipping…";
+}
+
+function clearDevourProgress(): void {
+  clipCurrentBtn.style.removeProperty("--devour-progress");
+}
+
 async function clipSelected(): Promise<void> {
   const queue = selectedForOps();
   if (!queue.length) return;
@@ -426,6 +441,7 @@ async function clipSelected(): Promise<void> {
     setTimeout(() => {
       clipCurrentBtn.textContent = original;
       clipCurrentBtn.title = originalTitle;
+      clearDevourProgress();
       state.clipping = false;
       render();
     }, ms);
@@ -442,7 +458,7 @@ async function clipSelected(): Promise<void> {
   state.clipping = true;
   clipCurrentBtn.disabled = true;
   clipCurrentBtn.title = "";
-  clipCurrentBtn.textContent = `Clipping ${queue.length}…`;
+  setDevourProgress(0, queue.length);
 
   const tabIds = queue.map((t) => t.id);
   const res = await sendMessage<ClipSelectedTabsResponse>({
@@ -479,6 +495,7 @@ async function retryFailures(tabIds: number[]): Promise<void> {
   if (res && !res.vaultMissing) {
     mergeClipFailures(tabIds, res.failures);
   }
+  clearDevourProgress();
   state.clipping = false;
   await refresh();
 }
@@ -560,10 +577,11 @@ optionsBtn.addEventListener("click", () => {
 cockpitBtn.addEventListener("click", () => void openCockpit());
 filterInput.addEventListener("input", () => {
   state.filter = filterInput.value;
+  state.stickyHostOrder = null;
   render();
 });
 selectAllBtn.addEventListener("click", () => {
-  const groups = visibleGroups(state.scopedTabs, state.filter);
+  const groups = visibleGroups(state.scopedTabs, state.filter, state.stickyHostOrder);
   const ids = visibleTabIds(groups);
   const allSelected = ids.length > 0 && ids.every((id) => state.selected.has(id));
   if (allSelected) {
@@ -582,6 +600,18 @@ devourRetryAllBtn.addEventListener("click", () => {
   void retryFailures(ids);
 });
 devourDismissBtn.addEventListener("click", () => dismissDevourFailures());
+
+browser.runtime.onMessage.addListener((raw: unknown) => {
+  if (!raw || typeof raw !== "object") return;
+  const msg = raw as { type?: string; completed?: number; total?: number };
+  if (
+    msg.type === "clip-progress" &&
+    typeof msg.completed === "number" &&
+    typeof msg.total === "number"
+  ) {
+    setDevourProgress(msg.completed, msg.total);
+  }
+});
 
 document.addEventListener("keydown", (e) => {
   if (e.key !== "/" || e.metaKey || e.ctrlKey || e.altKey) return;

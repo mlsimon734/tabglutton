@@ -40,7 +40,11 @@ export function tabMatches(tab: PopupTab, ts: string[]): boolean {
   return matchTokens(`${tab.url ?? ""}\n${tab.title ?? ""}`, ts);
 }
 
-export function visibleGroups(scopedTabs: PopupTab[], filter: string): DomainGroup[] {
+export function visibleGroups(
+  scopedTabs: PopupTab[],
+  filter: string,
+  stickyHostOrder?: readonly string[] | null,
+): DomainGroup[] {
   const ts = tokens(filter);
   const byHost = new Map<string, PopupTab[]>();
   for (const tab of scopedTabs) {
@@ -58,7 +62,19 @@ export function visibleGroups(scopedTabs: PopupTab[], filter: string): DomainGro
     tabs.sort((a, b) => (a.windowId ?? 0) - (b.windowId ?? 0) || a.index - b.index);
     groups.push({ host, tabs });
   }
-  groups.sort((a, b) => b.tabs.length - a.tabs.length || a.host.localeCompare(b.host));
+  if (stickyHostOrder && stickyHostOrder.length) {
+    const rank = new Map(stickyHostOrder.map((h, i) => [h, i] as const));
+    groups.sort((a, b) => {
+      const ra = rank.get(a.host);
+      const rb = rank.get(b.host);
+      if (ra !== undefined && rb !== undefined) return ra - rb;
+      if (ra !== undefined) return -1;
+      if (rb !== undefined) return 1;
+      return b.tabs.length - a.tabs.length || a.host.localeCompare(b.host);
+    });
+  } else {
+    groups.sort((a, b) => b.tabs.length - a.tabs.length || a.host.localeCompare(b.host));
+  }
   return groups;
 }
 

@@ -54,6 +54,12 @@ export interface ClipSelectedTabsResponse {
   failures: ClipFailure[];
 }
 
+export interface ClipProgressMessage {
+  type: "clip-progress";
+  completed: number;
+  total: number;
+}
+
 export interface PopupTab {
   id: number;
   title: string | undefined;
@@ -430,101 +436,111 @@ async function clipSelectedTabs(tabIds: number[]): Promise<ClipSelectedTabsRespo
   // defaults to "clipboard" (storage.ts), and the OS clipboard is global —
   // parallel dispatches would clobber each other. The 200ms inter-dispatch
   // delay also helps Obsidian's URI handler stay reliable.
+  const total = tabIds.length;
+  const broadcastProgress = (completed: number): void => {
+    const msg: ClipProgressMessage = { type: "clip-progress", completed, total };
+    browser.runtime.sendMessage(msg).catch(() => {});
+  };
+  broadcastProgress(0);
   let succeeded = 0;
   const failures: ClipFailure[] = [];
-  for (const tabId of tabIds) {
-    const outcome = extractByTabId.get(tabId);
-    if (!outcome) continue;
-    if (outcome.kind === "threw") {
-      const m = metaOf(tabId);
-      failures.push({
-        tabId,
-        title: m.title,
-        url: m.url,
-        reason: "extract-failed",
-        detail: errorMessage(outcome.err),
-      });
-      console.warn("[tabglutton] clip threw for tab", tabId, outcome.err);
-      continue;
-    }
-    const res = outcome.res;
-    if (!res.ok || !res.payload) {
-      const m = metaOf(tabId);
-      failures.push({
-        tabId,
-        title: m.title,
-        url: m.url,
-        reason: "extract-failed",
-        detail: res.error,
-      });
-      console.warn("[tabglutton] clip failed for tab", tabId, res.error);
-      continue;
-    }
-
-    let req: ObsidianClipRequest;
+  for (const [i, tabId] of tabIds.entries()) {
     try {
-      const rule = pickRule(res.payload.url);
-      const content = markdownForClip(res.payload);
-      req = obsidianClipRequest(
-        res.payload,
-        vault,
-        content,
-        rule,
-        settings.clipMode,
-        settings.clippingsBaseFolder,
-      );
-      if (req.clipboard !== null) {
-        const copied = await copyToClipboardViaTab(tabId, req.clipboard);
-        if (!copied) {
-          console.warn(
-            "[tabglutton] clipboard write failed for tab",
-            tabId,
-            "— falling back to legacy URI",
-          );
-          req = obsidianClipRequest(
-            res.payload,
-            vault,
-            content,
-            rule,
-            "legacy-uri",
-            settings.clippingsBaseFolder,
-          );
-        }
+      const outcome = extractByTabId.get(tabId);
+      if (!outcome) continue;
+      if (outcome.kind === "threw") {
+        const m = metaOf(tabId);
+        failures.push({
+          tabId,
+          title: m.title,
+          url: m.url,
+          reason: "extract-failed",
+          detail: errorMessage(outcome.err),
+        });
+        console.warn("[tabglutton] clip threw for tab", tabId, outcome.err);
+        continue;
       }
-    } catch (err) {
-      const m = metaOf(tabId);
-      failures.push({
-        tabId,
-        title: res.payload.title || m.title,
-        url: res.payload.url || m.url,
-        reason: "extract-failed",
-        detail: errorMessage(err),
-      });
-      console.warn("[tabglutton] format failed for tab", tabId, err);
-      continue;
-    }
+      const res = outcome.res;
+      if (!res.ok || !res.payload) {
+        const m = metaOf(tabId);
+        failures.push({
+          tabId,
+          title: m.title,
+          url: m.url,
+          reason: "extract-failed",
+          detail: res.error,
+        });
+        console.warn("[tabglutton] clip failed for tab", tabId, res.error);
+        continue;
+      }
 
-    try {
-      await openObsidianUrl(req.url);
-    } catch (err) {
-      failures.push({
-        tabId,
-        title: res.payload.title,
-        url: res.payload.url,
-        reason: "trigger-failed",
-        detail: errorMessage(err),
-      });
-      console.warn("[tabglutton] trigger failed for tab", tabId, err);
-      continue;
-    }
+      let req: ObsidianClipRequest;
+      try {
+        const rule = pickRule(res.payload.url);
+        const content = markdownForClip(res.payload);
+        req = obsidianClipRequest(
+          res.payload,
+          vault,
+          content,
+          rule,
+          settings.clipMode,
+          settings.clippingsBaseFolder,
+        );
+        if (req.clipboard !== null) {
+          const copied = await copyToClipboardViaTab(tabId, req.clipboard);
+          if (!copied) {
+            console.warn(
+              "[tabglutton] clipboard write failed for tab",
+              tabId,
+              "— falling back to legacy URI",
+            );
+            req = obsidianClipRequest(
+              res.payload,
+              vault,
+              content,
+              rule,
+              "legacy-uri",
+              settings.clippingsBaseFolder,
+            );
+          }
+        }
+      } catch (err) {
+        const m = metaOf(tabId);
+        failures.push({
+          tabId,
+          title: res.payload.title || m.title,
+          url: res.payload.url || m.url,
+          reason: "extract-failed",
+          detail: errorMessage(err),
+        });
+        console.warn("[tabglutton] format failed for tab", tabId, err);
+        continue;
+      }
 
-    await delay(200);
-    try {
-      await browser.tabs.remove(tabId);
-    } catch (err) {
-      console.warn("[tabglutton] close failed for tab", tabId, err);
+      try {
+        await openObsidianUrl(req.url);
+      } catch (err) {
+        failures.push({
+          tabId,
+          title: res.payload.title,
+          url: res.payload.url,
+          reason: "trigger-failed",
+          detail: errorMessage(err),
+        });
+        console.warn("[tabglutton] trigger failed for tab", tabId, err);
+        continue;
+      }
+
+      await delay(200);
+      try {
+        await browser.tabs.remove(tabId);
+      } catch (err) {
+        console.warn("[tabglutton] close failed for tab", tabId, err);
+      }
+      succeeded += 1;
+    } finally {
+      broadcastProgress(i + 1);
     }
-    succeeded += 1;
   }
   return { succeeded, failed: failures.length, failures };
 }

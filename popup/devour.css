@@ -220,6 +220,25 @@ button.primary:disabled {
   border-color: var(--hairline);
 }
 
+#clip-current {
+  position: relative;
+  overflow: hidden;
+}
+
+#clip-current::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: var(--devour-progress, 0%);
+  background: color-mix(in srgb, var(--accent-ink) 22%, transparent);
+  transition: width 140ms linear;
+  pointer-events: none;
+}
+
+#clip-current > * {
+  position: relative;
+}
+
 button.icon {
   width: 32px;
   height: 32px;

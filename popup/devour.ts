@@ -31,6 +31,7 @@ interface CockpitState {
   clipping: boolean;
   devourFailures: ClipFailure[];
   focusedTabId: number | null;
+  stickyHostOrder: string[] | null;
 }
 
 interface ToastState {
@@ -79,6 +80,7 @@ const state: CockpitState = {
   clipping: false,
   devourFailures: [],
   focusedTabId: null,
+  stickyHostOrder: null,
 };
 
 function renderWarning(): void {
@@ -592,7 +594,10 @@ function addDef(dl: HTMLElement, term: string, definition: string): void {
 
 function render(): void {
   renderWarning();
-  const groups = visibleGroups(state.scopedTabs, state.filter);
+  const groups = visibleGroups(state.scopedTabs, state.filter, state.stickyHostOrder);
+  if (state.stickyHostOrder === null) {
+    state.stickyHostOrder = groups.map((g) => g.host);
+  }
   renderEmpty(groups);
   groupsEl.replaceChildren();
   groups.forEach((g, idx) => {
@@ -633,7 +638,7 @@ async function closeTabs(tabIds: number[]): Promise<void> {
 }
 
 function selectedForOps(): PopupTab[] {
-  const groups = visibleGroups(state.scopedTabs, state.filter);
+  const groups = visibleGroups(state.scopedTabs, state.filter, state.stickyHostOrder);
   return selectedTabsInUiOrder(groups, state.selected);
 }
 
@@ -666,6 +671,19 @@ function mergeClipFailures(retriedTabIds: number[], newFailures: ClipFailure[]):
   state.devourFailures.push(...newFailures);
 }
 
+function setDevourProgress(completed: number, total: number): void {
+  const label = clipCurrentBtn.querySelector(".primary-label") as HTMLElement | null;
+  const pct = total > 0 ? Math.min(100, Math.round((completed / total) * 100)) : 0;
+  clipCurrentBtn.style.setProperty("--devour-progress", `${pct}%`);
+  if (label) {
+    label.textContent = total > 1 ? `Devouring ${completed}/${total}…` : "Devouring…";
+  }
+}
+
+function clearDevourProgress(): void {
+  clipCurrentBtn.style.removeProperty("--devour-progress");
+}
+
 async function clipSelected(): Promise<void> {
   const queue = selectedForOps();
   if (!queue.length) return;
@@ -674,6 +692,7 @@ async function clipSelected(): Promise<void> {
     if (label) label.textContent = text;
     setTimeout(() => {
       if (label) label.textContent = "Devour";
+      clearDevourProgress();
       state.clipping = false;
       render();
     }, ms);
@@ -689,7 +708,7 @@ async function clipSelected(): Promise<void> {
 
   state.clipping = true;
   clipCurrentBtn.disabled = true;
-  if (label) label.textContent = `Devouring ${queue.length}…`;
+  setDevourProgress(0, queue.length);
 
   const tabIds = queue.map((t) => t.id);
   const res = await sendMessage<ClipSelectedTabsResponse>({
@@ -726,6 +745,7 @@ async function retryFailures(tabIds: number[]): Promise<void> {
   if (res && !res.vaultMissing) {
     mergeClipFailures(tabIds, res.failures);
   }
+  clearDevourProgress();
   state.clipping = false;
   await refresh();
 }
@@ -796,7 +816,7 @@ async function undoDedup(): Promise<void> {
 /* ---------- keyboard ---------- */
 
 function focusableTabIds(): number[] {
-  const groups = visibleGroups(state.scopedTabs, state.filter);
+  const groups = visibleGroups(state.scopedTabs, state.filter, state.stickyHostOrder);
   return visibleTabIds(groups);
 }
 
@@ -880,10 +900,11 @@ dedupBtn.addEventListener("click", () => void runDedup());
 optionsBtn.addEventListener("click", () => void browser.runtime.openOptionsPage());
 filterInput.addEventListener("input", () => {
   state.filter = filterInput.value;
+  state.stickyHostOrder = null;
   render();
 });
 selectAllBtn.addEventListener("click", () => {
-  const groups = visibleGroups(state.scopedTabs, state.filter);
+  const groups = visibleGroups(state.scopedTabs, state.filter, state.stickyHostOrder);
   const ids = visibleTabIds(groups);
   const allSelected = ids.length > 0 && ids.every((id) => state.selected.has(id));
   if (allSelected) {
@@ -921,9 +942,15 @@ async function loadLogoMark(): Promise<void> {
 
 browser.runtime.onMessage.addListener(async (raw: unknown) => {
   if (!raw || typeof raw !== "object") return;
-  const msg = raw as { type?: string };
+  const msg = raw as { type?: string; completed?: number; total?: number };
   if (msg.type === "refresh-cockpit") {
     await refresh();
+  } else if (
+    msg.type === "clip-progress" &&
+    typeof msg.completed === "number" &&
+    typeof msg.total === "number"
+  ) {
+    setDevourProgress(msg.completed, msg.total);
   }
 });
 
