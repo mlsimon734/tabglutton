@@ -21,7 +21,8 @@
     "start:fresh:console": "bun run build && bunx web-ext run --source-dir=dist --firefox=/Applications/Zen.app/Contents/MacOS/zen --browser-console --pref=network.protocol-handler.warn-external.obsidian=false --pref=network.protocol-handler.external.obsidian=true",
     "start:firefox": "bun run build && bunx web-ext run --source-dir=dist --firefox-profile=./.dev-profile-firefox --profile-create-if-missing --keep-profile-changes --pref=network.protocol-handler.warn-external.obsidian=false --pref=network.protocol-handler.external.obsidian=true",
     "package": "bun run build && bunx web-ext build --source-dir=dist --overwrite-dest && bun package-source.ts",
-    "sign": "bun run build && bunx web-ext sign --source-dir=dist --artifacts-dir=web-ext-artifacts --channel=unlisted"
+    "sign": "bun run build && bunx web-ext sign --source-dir=dist --artifacts-dir=web-ext-artifacts --channel=unlisted",
+    "sign:dev": "bun scripts/sign-dev.ts"
   },
   "dependencies": {
     "defuddle": "^0.18.1"
