@@ -56,8 +56,9 @@ async function buildOne(target: Target): Promise<void> {
     process.exit(1);
   }
 
+  const onboardingEntry = target === "chrome" ? chromeBundleEntry(DIST, "onboarding") : undefined;
   const onboardingBuild = await Bun.build({
-    entrypoints: ["onboarding/onboarding.ts"],
+    entrypoints: [onboardingEntry ?? "onboarding/onboarding.ts"],
     outdir: `${DIST}/onboarding`,
     target: "browser",
     format: "esm",
@@ -72,8 +73,9 @@ async function buildOne(target: Target): Promise<void> {
   // Chrome: bundle the service worker into a single ESM file so the polyfill
   // resolves via node_modules and we sidestep MV3 SW module-resolution quirks.
   if (target === "chrome") {
+    const backgroundEntry = chromeBundleEntry(DIST, "background");
     const swBuild = await Bun.build({
-      entrypoints: ["src/background.ts"],
+      entrypoints: [backgroundEntry],
       outdir: `${DIST}/src`,
       target: "browser",
       format: "esm",
@@ -84,6 +86,7 @@ async function buildOne(target: Target): Promise<void> {
       for (const log of swBuild.logs) console.error(log);
       process.exit(1);
     }
+    rmSync(`${DIST}/.chrome-build`, { recursive: true, force: true });
   }
 
   writeManifest(target, DIST);
@@ -122,6 +125,15 @@ async function buildOne(target: Target): Promise<void> {
     injectPolyfillScript(`${DIST}/popup/devour.html`);
     injectPolyfillScript(`${DIST}/options/options.html`, "..");
   }
+}
+
+function chromeBundleEntry(dist: string, name: "background" | "onboarding"): string {
+  const dir = `${dist}/.chrome-build`;
+  mkdirSync(dir, { recursive: true });
+  const importPath = name === "background" ? "../src/background.js" : "../onboarding/onboarding.js";
+  const entryPath = `${dir}/${name}.js`;
+  writeFileSync(entryPath, `import "${importPath}";\n`);
+  return entryPath;
 }
 
 function writeManifest(target: Target, dist: string): void {
