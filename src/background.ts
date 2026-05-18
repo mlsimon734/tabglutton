@@ -1,3 +1,4 @@
+import "webextension-polyfill";
 import {
   markdownForClip,
   obsidianClipRequest,
@@ -13,6 +14,7 @@ import {
   saveSettings,
   type Settings,
 } from "./storage.js";
+import { IS_CHROME } from "./target.js";
 
 export type GetScopedTabsMessage = { type: "get-scoped-tabs" };
 export type ClipSelectedTabsMessage = {
@@ -119,7 +121,8 @@ function tabInScope(tab: Tab): boolean {
 }
 
 async function queryScopedTabs(): Promise<Tab[]> {
-  if (settings.scope === "current-window") {
+  // Chrome has no `hidden` filter, so always treat scope as current-window there.
+  if (IS_CHROME || settings.scope === "current-window") {
     return browser.tabs.query({ currentWindow: true });
   }
   return browser.tabs.query({ hidden: false });
@@ -143,6 +146,8 @@ async function refreshBadge(tabsHint?: Tab[]): Promise<void> {
 }
 
 async function probeHeuristic(): Promise<void> {
+  // Zen-specific heuristic; Chrome has no workspaces and no getBrowserInfo.
+  if (IS_CHROME) return;
   try {
     const info = await browser.runtime.getBrowserInfo?.();
     const isZen = info?.name?.toLowerCase().includes("zen") ?? false;
@@ -198,7 +203,13 @@ browser.storage.onChanged.addListener(async (_changes, area) => {
   await refreshBadge();
 });
 
-const SAFE_FAVICON_SCHEMES = new Set(["http:", "https:", "data:", "moz-extension:"]);
+const SAFE_FAVICON_SCHEMES = new Set([
+  "http:",
+  "https:",
+  "data:",
+  "moz-extension:",
+  "chrome-extension:",
+]);
 
 function safeFavIconUrl(raw: string | undefined): string | undefined {
   if (!raw) return undefined;

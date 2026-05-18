@@ -1,59 +1,166 @@
 #!/usr/bin/env bun
-import { rmSync, mkdirSync, cpSync, existsSync } from "node:fs";
+import { rmSync, mkdirSync, cpSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { $ } from "bun";
 
-const DIST = "dist";
+type Target = "firefox" | "chrome";
 
-if (existsSync(DIST)) rmSync(DIST, { recursive: true, force: true });
-mkdirSync(DIST, { recursive: true });
+const VALID_TARGETS: ReadonlyArray<Target> = ["firefox", "chrome"];
 
-await $`bunx tsc`;
-
-const clipBuild = await Bun.build({
-  entrypoints: ["src/clip-current.ts"],
-  outdir: `${DIST}/src`,
-  target: "browser",
-  format: "iife",
-  minify: true,
-  sourcemap: "external",
-});
-if (!clipBuild.success) {
-  for (const log of clipBuild.logs) console.error(log);
-  process.exit(1);
+function parseTargets(argv: ReadonlyArray<string>): Target[] {
+  const flag = argv.find((a) => a.startsWith("--target="));
+  const value = flag?.split("=")[1] ?? "firefox";
+  if (value === "all") return [...VALID_TARGETS];
+  if (!VALID_TARGETS.includes(value as Target)) {
+    console.error(`[build] unknown --target=${value}; expected one of: firefox, chrome, all`);
+    process.exit(1);
+  }
+  return [value as Target];
 }
 
-const onboardingBuild = await Bun.build({
-  entrypoints: ["onboarding/onboarding.ts"],
-  outdir: `${DIST}/onboarding`,
-  target: "browser",
-  format: "esm",
-  minify: true,
-  sourcemap: "external",
-});
-if (!onboardingBuild.success) {
-  for (const log of onboardingBuild.logs) console.error(log);
-  process.exit(1);
+const targets = parseTargets(Bun.argv);
+
+for (const target of targets) {
+  await buildOne(target);
 }
 
-cpSync("manifest.json", `${DIST}/manifest.json`);
-cpSync("icons", `${DIST}/icons`, { recursive: true });
+console.log(`[build] done (${targets.join(", ")})`);
 
-mkdirSync(`${DIST}/popup`, { recursive: true });
-cpSync("popup/popup.html", `${DIST}/popup/popup.html`);
-cpSync("popup/popup.css", `${DIST}/popup/popup.css`);
-cpSync("popup/devour.html", `${DIST}/popup/devour.html`);
-cpSync("popup/devour.css", `${DIST}/popup/devour.css`);
-cpSync("popup/tokens.css", `${DIST}/popup/tokens.css`);
-cpSync("popup/fonts", `${DIST}/popup/fonts`, { recursive: true });
+async function buildOne(target: Target): Promise<void> {
+  const DIST = `dist-${target}`;
+  console.log(`[build] ${target} → ${DIST}/`);
 
-mkdirSync(`${DIST}/options`, { recursive: true });
-cpSync("options/options.html", `${DIST}/options/options.html`);
-cpSync("options/options.css", `${DIST}/options/options.css`);
+  if (existsSync(DIST)) rmSync(DIST, { recursive: true, force: true });
+  mkdirSync(DIST, { recursive: true });
 
-cpSync("onboarding/onboarding.html", `${DIST}/onboarding/onboarding.html`);
-cpSync("onboarding/onboarding.css", `${DIST}/onboarding/onboarding.css`);
+  await $`bunx tsc --outDir ${DIST}`;
 
-mkdirSync(`${DIST}/THIRD_PARTY_LICENSES`, { recursive: true });
-cpSync("node_modules/defuddle/LICENSE", `${DIST}/THIRD_PARTY_LICENSES/defuddle-LICENSE.txt`);
+  // Chrome: overwrite the compiled target.js so IS_CHROME is true at runtime
+  // without ever mutating the checked-in source.
+  if (target === "chrome") {
+    writeFileSync(
+      `${DIST}/src/target.js`,
+      `export const TARGET = "chrome";\nexport const IS_CHROME = true;\nexport const IS_FIREFOX = false;\n`,
+    );
+  }
 
-console.log("[build] dist/ ready");
+  const clipBuild = await Bun.build({
+    entrypoints: ["src/clip-current.ts"],
+    outdir: `${DIST}/src`,
+    target: "browser",
+    format: "iife",
+    minify: true,
+    sourcemap: "external",
+  });
+  if (!clipBuild.success) {
+    for (const log of clipBuild.logs) console.error(log);
+    process.exit(1);
+  }
+
+  const onboardingBuild = await Bun.build({
+    entrypoints: ["onboarding/onboarding.ts"],
+    outdir: `${DIST}/onboarding`,
+    target: "browser",
+    format: "esm",
+    minify: true,
+    sourcemap: "external",
+  });
+  if (!onboardingBuild.success) {
+    for (const log of onboardingBuild.logs) console.error(log);
+    process.exit(1);
+  }
+
+  // Chrome: bundle the service worker into a single ESM file so the polyfill
+  // resolves via node_modules and we sidestep MV3 SW module-resolution quirks.
+  if (target === "chrome") {
+    const swBuild = await Bun.build({
+      entrypoints: ["src/background.ts"],
+      outdir: `${DIST}/src`,
+      target: "browser",
+      format: "esm",
+      minify: true,
+      sourcemap: "external",
+    });
+    if (!swBuild.success) {
+      for (const log of swBuild.logs) console.error(log);
+      process.exit(1);
+    }
+  }
+
+  writeManifest(target, DIST);
+
+  cpSync("icons", `${DIST}/icons`, { recursive: true });
+
+  mkdirSync(`${DIST}/popup`, { recursive: true });
+  cpSync("popup/popup.html", `${DIST}/popup/popup.html`);
+  cpSync("popup/popup.css", `${DIST}/popup/popup.css`);
+  cpSync("popup/devour.html", `${DIST}/popup/devour.html`);
+  cpSync("popup/devour.css", `${DIST}/popup/devour.css`);
+  cpSync("popup/tokens.css", `${DIST}/popup/tokens.css`);
+  cpSync("popup/fonts", `${DIST}/popup/fonts`, { recursive: true });
+
+  mkdirSync(`${DIST}/options`, { recursive: true });
+  cpSync("options/options.html", `${DIST}/options/options.html`);
+  cpSync("options/options.css", `${DIST}/options/options.css`);
+
+  cpSync("onboarding/onboarding.html", `${DIST}/onboarding/onboarding.html`);
+  cpSync("onboarding/onboarding.css", `${DIST}/onboarding/onboarding.css`);
+
+  mkdirSync(`${DIST}/THIRD_PARTY_LICENSES`, { recursive: true });
+  cpSync("node_modules/defuddle/LICENSE", `${DIST}/THIRD_PARTY_LICENSES/defuddle-LICENSE.txt`);
+
+  if (target === "chrome") {
+    mkdirSync(`${DIST}/vendor`, { recursive: true });
+    cpSync(
+      "node_modules/webextension-polyfill/dist/browser-polyfill.min.js",
+      `${DIST}/vendor/browser-polyfill.js`,
+    );
+    cpSync(
+      "node_modules/webextension-polyfill/LICENSE",
+      `${DIST}/THIRD_PARTY_LICENSES/webextension-polyfill-LICENSE.txt`,
+    );
+    injectPolyfillScript(`${DIST}/popup/popup.html`);
+    injectPolyfillScript(`${DIST}/popup/devour.html`);
+    injectPolyfillScript(`${DIST}/options/options.html`, "..");
+  }
+}
+
+function writeManifest(target: Target, dist: string): void {
+  const raw = JSON.parse(readFileSync("manifest.json", "utf8")) as Record<string, unknown>;
+  if (target === "chrome") {
+    delete raw.browser_specific_settings;
+    raw.background = { service_worker: "src/background.js", type: "module" };
+    const action = raw.action as Record<string, unknown> | undefined;
+    if (action) {
+      action.default_icon = {
+        "16": "icons/icon-chomp-16.png",
+        "32": "icons/icon-chomp-32.png",
+      };
+    }
+    raw.icons = {
+      "16": "icons/icon-chomp-16.png",
+      "32": "icons/icon-chomp-32.png",
+      "48": "icons/icon-chomp-48.png",
+      "128": "icons/icon-chomp-128.png",
+    };
+    raw.minimum_chrome_version = "116";
+  }
+  writeFileSync(`${dist}/manifest.json`, `${JSON.stringify(raw, null, 2)}\n`);
+}
+
+// Inject `<script src="${prefix}/vendor/browser-polyfill.js"></script>` immediately
+// before the existing `<script type="module" ...>` tag. The plain script runs
+// synchronously before the deferred module, so `browser.*` is defined by the
+// time the page's module entry executes.
+function injectPolyfillScript(htmlPath: string, prefix = ".."): void {
+  const html = readFileSync(htmlPath, "utf8");
+  const polyfillTag = `<script src="${prefix}/vendor/browser-polyfill.js"></script>`;
+  if (html.includes(polyfillTag)) return;
+  const moduleScriptRegex = /(\s*)(<script type="module"[^>]*><\/script>)/;
+  const updated = html.replace(moduleScriptRegex, (_match, indent, tag) => {
+    return `${indent}${polyfillTag}${indent}${tag}`;
+  });
+  if (updated === html) {
+    console.warn(`[build] could not find module script tag to inject before in ${htmlPath}`);
+  }
+  writeFileSync(htmlPath, updated);
+}

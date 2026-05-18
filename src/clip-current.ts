@@ -1,3 +1,4 @@
+import "webextension-polyfill";
 import Defuddle from "defuddle/full";
 import type { DefuddleResponse } from "defuddle/full";
 

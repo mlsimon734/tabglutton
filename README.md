@@ -1,6 +1,6 @@
 # Tabglutton
 
-A Firefox / Zen Browser extension that devours your sprawling tab list — closing duplicates in a workspace, or saving pages into your Obsidian vault and closing them.
+A Firefox / Zen Browser / Chrome extension that devours your sprawling tab list — closing duplicates in a workspace, or saving pages into your Obsidian vault and closing them.
 
 ## Why
 
@@ -31,6 +31,7 @@ Requires the **Obsidian vault** option to be set. Only `http(s)` pages are clipp
 
 - **Zen Browser**: tries to scope to the _active workspace_ by filtering on `tab.hidden === false`. Zen's workspace API is not exposed to extensions — this is a heuristic. If the heuristic looks broken (every tab in the window is "visible"), the popup shows a warning and you can fall back to "current window only" in options.
 - **Regular Firefox**: scope falls through to "current window only" since Firefox has no workspaces.
+- **Chrome**: scope is fixed to "current window only" (Chrome has no `tab.hidden` and no workspace API). The scope option is hidden in the settings page.
 
 ## Settings
 
@@ -58,17 +59,24 @@ Used to canonicalize URLs before grouping (see `src/normalize.ts`):
 
 ```bash
 bun install
-bun start              # build (TypeScript → dist/) + launch Zen with the extension loaded
+bun start              # build (TypeScript → dist-firefox/) + launch Zen with the extension loaded
 bun run start:console  # same, with Zen's Browser Console open for chrome logs
 bun run start:firefox  # same, against regular Firefox
-bun run lint           # type-check + manifest/WebExtension lint
-bun run build          # one-shot TS compile + asset copy into dist/
+bun run start:chrome   # build dist-chrome/ and launch it in Chromium via web-ext
+bun run lint           # type-check + manifest/WebExtension lint (Firefox)
+bun run build          # build both dist-firefox/ and dist-chrome/
+bun run build:firefox  # build dist-firefox/ only
+bun run build:chrome   # build dist-chrome/ only
 bun run watch          # tsc --watch for fast iteration (run alongside bun start)
 bun run typecheck      # tsc --noEmit
-bun run package        # produce an unsigned .zip (for CI artifact / web-ext lint)
+bun run package        # produce unsigned .zip artifacts for both targets
 ```
 
-The toolchain: TypeScript compiles `src/`, `popup/`, `options/` into `dist/` mirroring the structure; static assets (HTML, CSS, manifest, icons) are copied alongside. `web-ext` runs against `dist/` only — never against source. The `dist/` directory is gitignored.
+The toolchain: TypeScript compiles `src/`, `popup/`, `options/` into `dist-${target}/` mirroring the structure; static assets (HTML, CSS, manifest, icons) are copied alongside. The Chrome build additionally bundles the service worker (with `webextension-polyfill` inlined) and injects the polyfill script into the popup/options HTML. `dist-firefox/` and `dist-chrome/` are gitignored.
+
+### Loading the Chrome build manually
+
+`bun run start:chrome` uses `web-ext` to launch Chromium with the extension loaded. To load it into your installed Chrome instead: open `chrome://extensions`, enable Developer mode, click **Load unpacked**, and select `dist-chrome/`. Chrome does not auto-apply the manifest's `suggested_key` shortcuts — bind `Alt+Shift+G` (open popup) and `Alt+Shift+D` (open Devour cockpit) yourself at `chrome://extensions/shortcuts`.
 
 ## Install (dogfood / signed)
 
@@ -97,7 +105,7 @@ To run Tabglutton on your real Zen profile (not a `.dev-profile`) so it survives
 bun run sign
 ```
 
-`bun run sign` loads `.env`, builds `dist/`, and uploads it to AMO. AMO lints and typically auto-signs in minutes for the unlisted channel. The signed `.xpi` lands in `web-ext-artifacts/tabglutton-<version>.xpi`.
+`bun run sign` loads `.env`, builds `dist-firefox/`, and uploads it to AMO. AMO lints and typically auto-signs in minutes for the unlisted channel. The signed `.xpi` lands in `web-ext-artifacts/tabglutton-<version>.xpi`.
 
 Open Zen → `about:addons` → drag the `.xpi` onto the page (or use the gear menu → "Install Add-on from File") → accept the install prompt.
 

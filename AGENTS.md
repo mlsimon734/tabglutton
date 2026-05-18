@@ -2,20 +2,30 @@
 
 ## Project Structure & Module Organization
 
-This is a Bun-powered TypeScript WebExtension for Zen Browser and Firefox; the product is "Tabglutton". Core logic lives in `src/`: `background.ts` wires browser events, `dedup.ts` plans duplicate tab closures (keeper-selection lives in `pickKeeper` here, not in a separate policy module), `normalize.ts` canonicalizes URLs, `storage.ts` handles settings, `clip-current.ts` is the Defuddle-based content extractor injected into pages by Devour, and `clip-format.ts` builds the Obsidian markdown + frontmatter and the `obsidian://new` URL. Popup UI files are in `popup/`, options UI files are in `options/`, and static assets are in `icons/`. `manifest.json` defines permissions and entry points. `build.ts` compiles TypeScript and copies assets into `dist/`; treat `dist/`, `.dev-profile*`, and `web-ext-artifacts/` as generated output.
+This is a Bun-powered TypeScript WebExtension for Zen Browser, Firefox, and Chrome; the product is "Tabglutton". Core logic lives in `src/`: `background.ts` wires browser events, `dedup.ts` plans duplicate tab closures (keeper-selection lives in `pickKeeper` here, not in a separate policy module), `normalize.ts` canonicalizes URLs, `storage.ts` handles settings, `clip-current.ts` is the Defuddle-based content extractor injected into pages by Devour, `clip-format.ts` builds the Obsidian markdown + frontmatter and the `obsidian://new` URL, and `target.ts` exposes `IS_CHROME` / `IS_FIREFOX` for the few places that need to branch by target. Popup UI files are in `popup/`, options UI files are in `options/`, and static assets are in `icons/`. `manifest.json` defines the Firefox shape and is patched in memory for Chrome. `build.ts` accepts `--target=firefox|chrome|all` and writes `dist-firefox/` or `dist-chrome/`; treat `dist-firefox/`, `dist-chrome/`, `.dev-profile*`, and `web-ext-artifacts/` as generated output.
+
+## Cross-browser build
+
+- Sources stay shared. `src/target.ts` is checked in with `TARGET = "firefox"`. For the Chrome build, `build.ts` overwrites the compiled `dist-chrome/src/target.js` to flip the constant — sources are never mutated.
+- Chrome uses `webextension-polyfill` so the `browser.*` call sites keep working. The Chrome service worker is bundled with `Bun.build` (polyfill inlined). Popup/options HTML pages get `<script src="../vendor/browser-polyfill.js"></script>` injected before the module script tag.
+- Chrome manifest differences (applied in memory in `build.ts`): drop `browser_specific_settings`, swap `background.scripts` → `background.service_worker`, swap SVG icons → PNG (`icons/icon-chomp-{16,32,48,128}.png`, rasterized via `rsvg-convert`), set `minimum_chrome_version: "116"`.
+- Chrome has no `tab.hidden` and no `getBrowserInfo`; `storage.ts` defaults `scope` to `"current-window"` on Chrome, `background.ts` short-circuits `probeHeuristic` and the `hidden: false` query branch, and the options page hides the scope radio group.
+- `web-ext lint` is Firefox-only tooling; the `lint:ext` script lints `dist-firefox/` only. The Chrome zip is validated by the Chrome Web Store upload flow.
 
 ## Build, Test, and Development Commands
 
 - `bun install`: install dependencies.
-- `bun run build`: type-compile sources and prepare `dist/`.
+- `bun run build`: build both `dist-firefox/` and `dist-chrome/`.
+- `bun run build:firefox` / `build:chrome`: single-target builds.
 - `bun run typecheck`: run `tsc --noEmit -p tsconfig.test.json` (covers `src/` + `tests/`).
 - `bun run test`: run the Bun test suite under `tests/`.
 - `bun run format` / `format:check`: run oxfmt over the tree (or check only).
-- `bun run lint`: runs `lint:js` (oxlint) then `lint:ext` (build + `web-ext lint`).
+- `bun run lint`: runs `lint:js` (oxlint) then `lint:ext` (Firefox `web-ext lint`).
 - `bun run check`: typecheck + format:check + lint + test. Run before committing.
-- `bun run start`: build and launch Zen Browser with the extension loaded from `dist/`.
-- `bun run start:firefox`: build and launch regular Firefox with a persistent dev profile.
-- `bun run package`: build a zip in `web-ext-artifacts/`.
+- `bun run start`: build firefox and launch Zen with the extension loaded from `dist-firefox/`.
+- `bun run start:firefox`: build firefox and launch regular Firefox with a persistent dev profile.
+- `bun run start:chrome`: build chrome and launch Chromium via `web-ext --target=chromium`.
+- `bun run package`: produce both `tabglutton-firefox-<version>.zip` and `tabglutton-chrome-<version>.zip` in `web-ext-artifacts/`.
 
 ## Coding Style & Naming Conventions
 
@@ -39,4 +49,4 @@ The current history uses a concise imperative subject with optional scope detail
 
 ## Security & Configuration Tips
 
-Keep browser permissions in `manifest.json` minimal and justify new permissions in the PR. Do not commit generated profiles, packaged zips, or local browser state. WebExtension tooling should always target `dist/`, not source directories directly.
+Keep browser permissions in `manifest.json` minimal and justify new permissions in the PR. Do not commit generated profiles, packaged zips, or local browser state. WebExtension tooling should always target `dist-firefox/` or `dist-chrome/`, not source directories directly.

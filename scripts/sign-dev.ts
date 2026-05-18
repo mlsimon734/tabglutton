@@ -43,7 +43,7 @@ manifest.version = dev;
 writeFileSync("package.json", `${JSON.stringify(pkg, null, 2)}\n`);
 writeFileSync("manifest.json", `${JSON.stringify(manifest, null, 2)}\n`);
 
-const built = spawnSync("bun", ["run", "build"], { stdio: "inherit", env: process.env });
+const built = spawnSync("bun", ["run", "build:firefox"], { stdio: "inherit", env: process.env });
 if (built.status !== 0) {
   console.error(`\nbuild failed (status ${built.status}).`);
   process.exit(built.status ?? 1);
@@ -54,7 +54,7 @@ const signed = spawnSync(
   [
     "web-ext",
     "sign",
-    "--source-dir=dist",
+    "--source-dir=dist-firefox",
     "--artifacts-dir=web-ext-artifacts",
     "--channel=unlisted",
   ],

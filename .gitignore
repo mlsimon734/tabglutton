@@ -1,10 +1,12 @@
 node_modules/
 web-ext-artifacts/
-dist/
+dist-firefox/
+dist-chrome/
 .DS_Store
 *.log
 .dev-profile/
 .dev-profile-firefox/
+.dev-profile-chrome/
 .claude/settings.local.json
 .env
 .env.signing

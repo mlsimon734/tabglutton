@@ -8,6 +8,7 @@ import type {
   PopupTab,
 } from "../src/background.js";
 import type { Settings } from "../src/storage.js";
+import { IS_CHROME } from "../src/target.js";
 import {
   computeDedupCount,
   type DomainGroup,
@@ -80,6 +81,11 @@ const state: PopupState = {
 };
 
 function renderWarning(): void {
+  // Chrome has no workspaces, so the heuristic warning never applies.
+  if (IS_CHROME) {
+    warningEl.hidden = true;
+    return;
+  }
   const s = state.settings;
   if (s?.heuristicWarning && s.scope === "hidden-false") {
     warningEl.hidden = false;

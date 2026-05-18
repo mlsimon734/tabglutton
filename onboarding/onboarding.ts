@@ -1,5 +1,7 @@
+import "webextension-polyfill";
 import { loadSettings, saveSettings } from "../src/storage.js";
 import { BUILT_IN_RULES } from "../src/site-rules.js";
+import { IS_CHROME } from "../src/target.js";
 import { vaultWarningFor } from "../src/vault-warning.js";
 
 const TOTAL_STEPS = 4;
@@ -133,7 +135,18 @@ doneBtn.addEventListener("click", async () => {
   window.close();
 });
 
+function applyTargetCopy(): void {
+  if (!IS_CHROME) return;
+  const ffStep3 = document.getElementById("step3-firefox");
+  const chromeStep3 = document.getElementById("step3-chrome");
+  const ffHelp = document.getElementById("firefoxStep3Help");
+  if (ffStep3) ffStep3.hidden = true;
+  if (ffHelp) ffHelp.hidden = true;
+  if (chromeStep3) chromeStep3.hidden = false;
+}
+
 async function init(): Promise<void> {
+  applyTargetCopy();
   const settings = await loadSettings();
   vaultInput.value = settings.obsidianVault;
   updateVaultWarning();
