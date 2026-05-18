@@ -1,33 +1,9 @@
 #!/usr/bin/env bun
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
+import { loadSigningEnv } from "./sign-env.js";
 
-const ENV_FILE = ".env.signing";
-
-if (!existsSync(ENV_FILE)) {
-  console.error(`Missing ${ENV_FILE}. Create it with:`);
-  console.error(`  WEB_EXT_API_KEY=user:...`);
-  console.error(`  WEB_EXT_API_SECRET=...`);
-  process.exit(1);
-}
-
-for (const line of readFileSync(ENV_FILE, "utf8").split("\n")) {
-  const m = line.match(/^\s*([A-Z_][A-Z0-9_]*)\s*=\s*(.*?)\s*$/);
-  if (!m) continue;
-  let value = m[2];
-  if (
-    (value.startsWith('"') && value.endsWith('"')) ||
-    (value.startsWith("'") && value.endsWith("'"))
-  ) {
-    value = value.slice(1, -1);
-  }
-  process.env[m[1]] = value;
-}
-
-if (!process.env.WEB_EXT_API_KEY || !process.env.WEB_EXT_API_SECRET) {
-  console.error(`${ENV_FILE} is missing WEB_EXT_API_KEY or WEB_EXT_API_SECRET.`);
-  process.exit(1);
-}
+loadSigningEnv();
 
 const origPkgText = readFileSync("package.json", "utf8");
 const origManifestText = readFileSync("manifest.json", "utf8");

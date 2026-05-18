@@ -78,21 +78,26 @@ To run Tabglutton on your real Zen profile (not a `.dev-profile`) so it survives
 
 1. Create a Mozilla AMO developer account at https://addons.mozilla.org/developers/.
 2. Generate JWT credentials at https://addons.mozilla.org/developers/addon/api/key/.
-3. Store them in `~/.config/tabglutton/amo-credentials` (chmod 600):
+3. Copy `.env.sample` to `.env` and fill in the credentials:
 
    ```bash
-   export WEB_EXT_API_KEY="user:XXXX:YYY"
-   export WEB_EXT_API_SECRET="<64 hex chars>"
+   cp .env.sample .env
    ```
+
+   ```env
+   WEB_EXT_API_KEY=user:XXXX:YYY
+   WEB_EXT_API_SECRET=<64 hex chars>
+   ```
+
+   `.env` is gitignored and should stay local.
 
 **Sign and install**:
 
 ```bash
-source ~/.config/tabglutton/amo-credentials
 bun run sign
 ```
 
-`web-ext` uploads `dist/` to AMO, which lints and typically auto-signs in minutes for the unlisted channel. The signed `.xpi` lands in `web-ext-artifacts/tabglutton-<version>.xpi`.
+`bun run sign` loads `.env`, builds `dist/`, and uploads it to AMO. AMO lints and typically auto-signs in minutes for the unlisted channel. The signed `.xpi` lands in `web-ext-artifacts/tabglutton-<version>.xpi`.
 
 Open Zen → `about:addons` → drag the `.xpi` onto the page (or use the gear menu → "Install Add-on from File") → accept the install prompt.
 

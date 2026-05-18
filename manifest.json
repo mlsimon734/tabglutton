@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Tabglutton",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Devour a sprawling tab list: close duplicates, or save pages into your Obsidian vault and close them.",
   "browser_specific_settings": {
     "gecko": {
