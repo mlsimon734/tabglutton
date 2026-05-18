@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <rect width="64" height="64" rx="12" fill="#7a4a2c"/>
+  <!-- fanned stack of three pages -->
+  <rect x="10" y="22" width="30" height="30" rx="3" fill="#f4efe6" opacity="0.55"/>
+  <rect x="15" y="17" width="30" height="30" rx="3" fill="#f4efe6" opacity="0.78"/>
+  <rect x="20" y="12" width="30" height="30" rx="3" fill="#f4efe6"/>
+  <!-- bite through the top-right corner: a single silhouette, not separate protruding scallops -->
+  <path fill="#7a4a2c" d="M64 0v23H50c-1.3-4.9-5.2-8.8-10-11H64Z"/>
+  <circle cx="42.5" cy="12.5" r="2.6" fill="#7a4a2c"/>
+  <circle cx="43.5" cy="16.3" r="3" fill="#7a4a2c"/>
+  <circle cx="46.2" cy="19.3" r="3" fill="#7a4a2c"/>
+  <circle cx="49.6" cy="21.2" r="2.5" fill="#7a4a2c"/>
+  <!-- crumb -->
+  <circle cx="46" cy="8" r="2" fill="#7a4a2c"/>
+</svg>

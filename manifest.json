@@ -24,11 +24,11 @@
   "action": {
     "default_popup": "popup/popup.html",
     "default_title": "Tabglutton",
-    "default_icon": "icons/icon.svg"
+    "default_icon": "icons/icon-chomp.svg"
   },
   "icons": {
-    "48": "icons/icon.svg",
-    "96": "icons/icon.svg"
+    "48": "icons/icon-chomp.svg",
+    "96": "icons/icon-chomp.svg"
   },
   "options_ui": {
     "page": "options/options.html",
