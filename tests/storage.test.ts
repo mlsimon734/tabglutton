@@ -2,13 +2,15 @@
 // loadSettings/saveSettings require browser.storage.local and are out of scope.
 import { describe, test, expect } from "bun:test";
 import { defaults, normalizeOptsFrom, type Settings } from "../src/storage.js";
+import { IS_CHROME } from "../src/target.js";
 
 describe("defaults()", () => {
   test("returns the documented default values", () => {
     expect(defaults()).toEqual({
       stripFragment: true,
       extraStripParams: [],
-      scope: "hidden-false",
+      // Chrome forces current-window; Firefox/Zen uses the workspace heuristic.
+      scope: IS_CHROME ? "current-window" : "hidden-false",
       heuristicWarning: false,
       obsidianVault: "",
       clippingsBaseFolder: "Clippings",

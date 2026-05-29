@@ -1,4 +1,5 @@
 import type { NormalizeOpts } from "./normalize.js";
+import { IS_CHROME } from "./target.js";
 
 export type ScopeMode = "hidden-false" | "current-window";
 export type ClipMode = "clipboard" | "legacy-uri";
@@ -17,7 +18,8 @@ export interface Settings {
 const DEFAULTS: Readonly<Settings> = Object.freeze({
   stripFragment: true,
   extraStripParams: [],
-  scope: "hidden-false",
+  // Chrome has no tab.hidden / workspaces — the "hidden-false" mode is meaningless there.
+  scope: IS_CHROME ? "current-window" : "hidden-false",
   heuristicWarning: false,
   obsidianVault: "",
   clippingsBaseFolder: "Clippings",

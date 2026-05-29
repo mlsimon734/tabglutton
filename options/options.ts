@@ -1,5 +1,8 @@
 import type { ClipMode, ScopeMode, Settings } from "../src/storage.js";
+import { IS_CHROME } from "../src/target.js";
 import { vaultWarningFor } from "../src/vault-warning.js";
+
+const FALLBACK_SCOPE: ScopeMode = IS_CHROME ? "current-window" : "hidden-false";
 
 const stripFragment = document.getElementById("stripFragment") as HTMLInputElement;
 const extraStripParams = document.getElementById("extraStripParams") as HTMLInputElement;
@@ -21,7 +24,7 @@ const DEFAULTS: Pick<
 > = {
   stripFragment: true,
   extraStripParams: [],
-  scope: "hidden-false",
+  scope: FALLBACK_SCOPE,
   obsidianVault: "",
   clippingsBaseFolder: "",
   clipMode: "clipboard",
@@ -48,6 +51,11 @@ async function load(): Promise<void> {
   for (const radio of clipModeRadios) {
     radio.checked = radio.value === settings.clipMode;
   }
+  if (IS_CHROME) {
+    // Chrome has no tab.hidden / workspaces, so the scope choice is fixed.
+    const scopeBlock = scopeRadios[0]?.closest(".setting.block") as HTMLElement | null;
+    if (scopeBlock) scopeBlock.hidden = true;
+  }
 }
 
 let saveTimer: ReturnType<typeof setTimeout> | undefined;
@@ -61,7 +69,7 @@ function flashStatus(msg: string): void {
 
 async function save(): Promise<void> {
   const checked = [...scopeRadios].find((r) => r.checked);
-  const scope: ScopeMode = (checked?.value as ScopeMode) ?? "hidden-false";
+  const scope: ScopeMode = (checked?.value as ScopeMode) ?? FALLBACK_SCOPE;
   const checkedClipMode = [...clipModeRadios].find((r) => r.checked);
   const clipMode: ClipMode = (checkedClipMode?.value as ClipMode) ?? "clipboard";
   await browser.storage.local.set({

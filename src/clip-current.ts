@@ -1,3 +1,6 @@
+// `browser` is global: native on Firefox; on Chrome the bundle entry loads the
+// webextension-polyfill global first (see writePolyfillGlobal in build.ts). A
+// bare "webextension-polyfill" import here would not set the global anyway.
 import Defuddle from "defuddle/full";
 import type { DefuddleResponse } from "defuddle/full";
 

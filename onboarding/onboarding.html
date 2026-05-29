@@ -58,31 +58,58 @@
 
       <section class="panel" data-step="3" hidden>
         <h2 class="section-title">Step 3 — Approve obsidian:// in your browser</h2>
-        <p>
-          Tabglutton hands clipped notes to Obsidian using the <code>obsidian://</code> URL scheme.
-          The first time your browser sees one, it asks permission to open the link with Obsidian.
-        </p>
-        <p>
-          <strong>You need to trigger that prompt now</strong> — otherwise it fires on every clip
-          and Devour batches will stall waiting for you to approve each one. Click the test link
-          below to send a harmless ping; it opens your vault in Obsidian and creates no note.
-        </p>
-        <p>
-          When the prompt appears,
-          <strong>tick "Always allow this extension to open obsidian links"</strong>
-          <em>before</em> clicking <strong>Open Link</strong>. Without that checkbox, the prompt
-          re-fires every clip.
-        </p>
-        <p>
-          If nothing visible happens but Obsidian focuses, you've already approved
-          <code>obsidian://</code> previously — you're set.
-        </p>
+        <div id="step3-firefox">
+          <p>
+            Tabglutton hands clipped notes to Obsidian using the <code>obsidian://</code> URL
+            scheme. The first time your browser sees one, it asks permission to open the link with
+            Obsidian.
+          </p>
+          <p>
+            <strong>You need to trigger that prompt now</strong> — otherwise it fires on every clip
+            and Devour batches will stall waiting for you to approve each one. Click the test link
+            below to send a harmless ping; it opens your vault in Obsidian and creates no note.
+          </p>
+          <p>
+            When the prompt appears,
+            <strong>tick "Always allow this extension to open obsidian links"</strong>
+            <em>before</em> clicking <strong>Open Link</strong>. Without that checkbox, the prompt
+            re-fires every clip.
+          </p>
+          <p>
+            If nothing visible happens but Obsidian focuses, you've already approved
+            <code>obsidian://</code> previously — you're set.
+          </p>
+        </div>
+        <div id="step3-chrome" hidden>
+          <p>
+            Tabglutton hands clipped notes to Obsidian using the <code>obsidian://</code> URL
+            scheme. The first time you save a clip, Chrome asks whether to open the link with
+            Obsidian.
+          </p>
+          <p>
+            <strong>You need to trigger that prompt now</strong> — otherwise it fires on every clip
+            and Devour batches will stall waiting for you to approve each one. Click the test link
+            below to send a harmless ping; it opens your vault in Obsidian and creates no note.
+          </p>
+          <p>
+            When the prompt appears,
+            <strong
+              >tick "Always allow {URL} to open links of this type in the associated app"</strong
+            >
+            <em>before</em> clicking <strong>Open Obsidian</strong>. Without that checkbox, Chrome
+            re-fires the prompt for every clip.
+          </p>
+          <p>
+            If nothing visible happens but Obsidian focuses, you've already approved
+            <code>obsidian://</code> previously — you're set.
+          </p>
+        </div>
         <p class="link-row">
           <a id="approveLink" class="primary-link" target="_blank" rel="noopener">
             Open my Obsidian vault now
           </a>
         </p>
-        <details class="muted-note">
+        <details id="firefoxStep3Help" class="muted-note">
           <summary>Didn't see anything happen?</summary>
           <p>
             Some browsers (newer Zen builds in particular) suppress the prompt without surfacing it.

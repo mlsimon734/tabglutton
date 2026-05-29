@@ -11,6 +11,7 @@
     "popup/devour.ts",
     "popup/lib.ts",
     "options/options.ts",
-    "onboarding/onboarding.ts"
+    "onboarding/onboarding.ts",
+    "redirect/obsidian-redirect.ts"
   ]
 }
