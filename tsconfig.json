@@ -31,5 +31,5 @@
     "onboarding/onboarding.ts",
     "redirect/obsidian-redirect.ts"
   ],
-  "exclude": ["node_modules", "dist", "build.ts"]
+  "exclude": ["node_modules", "dist", "dist-firefox", "dist-chrome", "build.ts"]
 }

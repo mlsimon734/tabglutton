@@ -6,7 +6,15 @@ type Target = "firefox" | "chrome";
 
 const VALID_TARGETS: ReadonlyArray<Target> = ["firefox", "chrome"];
 
+// Scratch dir (under each dist) for generated Chrome bundle entries; removed
+// after the Chrome bundles are built.
+const CHROME_BUILD_DIR = ".chrome-build";
+
 function parseTargets(argv: ReadonlyArray<string>): Target[] {
+  if (argv.includes("--target")) {
+    console.error("[build] use --target=<value> (with =), e.g. --target=chrome");
+    process.exit(1);
+  }
   const flag = argv.find((a) => a.startsWith("--target="));
   const value = flag?.split("=")[1] ?? "firefox";
   if (value === "all") return [...VALID_TARGETS];
@@ -43,8 +51,16 @@ async function buildOne(target: Target): Promise<void> {
     );
   }
 
+  // Chrome bundles get `browser` from a generated polyfill-global module
+  // (see writePolyfillGlobal); each entry below imports it ahead of app code.
+  if (target === "chrome") writePolyfillGlobal(DIST);
+
+  const clipEntry =
+    target === "chrome"
+      ? chromeBundleEntry(DIST, "clip-current", "../src/clip-current.js")
+      : "src/clip-current.ts";
   const clipBuild = await Bun.build({
-    entrypoints: ["src/clip-current.ts"],
+    entrypoints: [clipEntry],
     outdir: `${DIST}/src`,
     target: "browser",
     format: "iife",
@@ -63,7 +79,10 @@ async function buildOne(target: Target): Promise<void> {
   const clipJsPath = `${DIST}/src/clip-current.js`;
   writeFileSync(clipJsPath, escapeChromeUnsafeCodePoints(readFileSync(clipJsPath, "utf8")));
 
-  const onboardingEntry = target === "chrome" ? chromeBundleEntry(DIST, "onboarding") : undefined;
+  const onboardingEntry =
+    target === "chrome"
+      ? chromeBundleEntry(DIST, "onboarding", "../onboarding/onboarding.js")
+      : undefined;
   const onboardingBuild = await Bun.build({
     entrypoints: [onboardingEntry ?? "onboarding/onboarding.ts"],
     outdir: `${DIST}/onboarding`,
@@ -80,7 +99,7 @@ async function buildOne(target: Target): Promise<void> {
   // Chrome: bundle the service worker into a single ESM file so the polyfill
   // resolves via node_modules and we sidestep MV3 SW module-resolution quirks.
   if (target === "chrome") {
-    const backgroundEntry = chromeBundleEntry(DIST, "background");
+    const backgroundEntry = chromeBundleEntry(DIST, "background", "../src/background.js");
     const swBuild = await Bun.build({
       entrypoints: [backgroundEntry],
       outdir: `${DIST}/src`,
@@ -93,7 +112,7 @@ async function buildOne(target: Target): Promise<void> {
       for (const log of swBuild.logs) console.error(log);
       process.exit(1);
     }
-    rmSync(`${DIST}/.chrome-build`, { recursive: true, force: true });
+    rmSync(`${DIST}/${CHROME_BUILD_DIR}`, { recursive: true, force: true });
   }
 
   writeManifest(target, DIST);
@@ -135,7 +154,7 @@ async function buildOne(target: Target): Promise<void> {
     );
     injectPolyfillScript(`${DIST}/popup/popup.html`);
     injectPolyfillScript(`${DIST}/popup/devour.html`);
-    injectPolyfillScript(`${DIST}/options/options.html`, "..");
+    injectPolyfillScript(`${DIST}/options/options.html`);
   }
 }
 
@@ -171,12 +190,32 @@ function escapeChromeUnsafeCodePoints(src: string): string {
   return out;
 }
 
-function chromeBundleEntry(dist: string, name: "background" | "onboarding"): string {
-  const dir = `${dist}/.chrome-build`;
+// Write the generated module that publishes the polyfill as the global
+// `browser` for the Chrome bundles. We can't rely on a side-effect
+// `import "webextension-polyfill"`: the bundler routes the polyfill's UMD
+// through its CommonJS branch (Bun synthesizes `exports`/`module`), which sets
+// the module's exports but NEVER assigns the global `browser` that every
+// `browser.*` call site reads. So bind the default export and assign it here.
+// This lives in its own module, imported first by each entry, so the
+// assignment runs before any app code is evaluated. Firefox doesn't use this —
+// it has a native `browser` and ships these modules unbundled.
+function writePolyfillGlobal(dist: string): void {
+  const dir = `${dist}/${CHROME_BUILD_DIR}`;
   mkdirSync(dir, { recursive: true });
-  const importPath = name === "background" ? "../src/background.js" : "../onboarding/onboarding.js";
+  writeFileSync(
+    `${dir}/_polyfill-global.js`,
+    `import browser from "webextension-polyfill";\nglobalThis.browser = browser;\n`,
+  );
+}
+
+// Generate a Chrome bundle entry that loads the polyfill global first, then the
+// app module. `importPath` is relative to the .chrome-build dir. Requires
+// writePolyfillGlobal(dist) to have run first.
+function chromeBundleEntry(dist: string, name: string, importPath: string): string {
+  const dir = `${dist}/${CHROME_BUILD_DIR}`;
+  mkdirSync(dir, { recursive: true });
   const entryPath = `${dir}/${name}.js`;
-  writeFileSync(entryPath, `import "${importPath}";\n`);
+  writeFileSync(entryPath, `import "./_polyfill-global.js";\nimport "${importPath}";\n`);
   return entryPath;
 }
 
@@ -216,7 +255,11 @@ function injectPolyfillScript(htmlPath: string, prefix = ".."): void {
     return `${indent}${polyfillTag}${indent}${tag}`;
   });
   if (updated === html) {
-    console.warn(`[build] could not find module script tag to inject before in ${htmlPath}`);
+    console.error(
+      `[build] could not find a <script type="module"> tag to inject the polyfill before in ${htmlPath}; ` +
+        "the Chrome page would load with `browser` undefined. Failing the build.",
+    );
+    process.exit(1);
   }
   writeFileSync(htmlPath, updated);
 }

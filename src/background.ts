@@ -1,4 +1,9 @@
-import "webextension-polyfill";
+// The webextension-polyfill global (`browser`) is supplied by the runtime, not
+// imported here. Firefox provides `browser` natively; the Chrome build injects
+// the polyfill ahead of this module in its bundle entry (see chromeBundleEntry
+// in build.ts). Importing the bare "webextension-polyfill" specifier here would
+// break the Firefox background, which tsc emits unbundled — the bare specifier
+// is unresolvable in a Firefox module service worker and aborts registration.
 import {
   markdownForClip,
   obsidianClipRequest,
