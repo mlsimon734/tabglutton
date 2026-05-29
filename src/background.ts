@@ -180,14 +180,23 @@ async function probeHeuristic(): Promise<void> {
   }
 }
 
-browser.tabs.onUpdated.addListener(
-  (_tabId, changeInfo) => {
-    if (changeInfo.status === "complete") {
-      void refreshBadge();
-    }
-  },
-  { properties: ["status"] },
-);
+// Firefox supports tabs.onUpdated event filters; Chrome throws
+// "This event does not support filters" — and at top level that error aborts
+// service-worker registration entirely. Both listeners below already guard on
+// changeInfo.status, so on Chrome we register them unfiltered.
+function onTabUpdated(listener: Parameters<typeof browser.tabs.onUpdated.addListener>[0]): void {
+  if (IS_CHROME) {
+    browser.tabs.onUpdated.addListener(listener);
+  } else {
+    browser.tabs.onUpdated.addListener(listener, { properties: ["status"] });
+  }
+}
+
+onTabUpdated((_tabId, changeInfo) => {
+  if (changeInfo.status === "complete") {
+    void refreshBadge();
+  }
+});
 
 browser.tabs.onRemoved.addListener(() => {
   void refreshBadge();
@@ -316,7 +325,7 @@ async function ensureTabReady(tabId: number, timeoutMs: number): Promise<void> {
       clearTimeout(timer);
       browser.tabs.onUpdated.removeListener(listener);
     }
-    browser.tabs.onUpdated.addListener(listener, { properties: ["status"] });
+    onTabUpdated(listener);
   });
 }
 
@@ -394,7 +403,16 @@ async function copyToClipboardViaTab(tabId: number, text: string): Promise<boole
 }
 
 async function openObsidianUrl(url: string): Promise<void> {
-  const ephemeral = await browser.tabs.create({ url, active: false });
+  // Chrome can't remember an "always allow" for a browser-initiated obsidian://
+  // navigation (a tabs.create straight to the protocol URL), so it would prompt
+  // on every clip. Launch via an extension-origin redirect page instead: that
+  // shares the one-time chrome-extension://<id> approval the user grants (e.g.
+  // through the onboarding ping), so clips fire silently thereafter. Firefox
+  // launches the protocol directly (dev pref / the user's registered handler).
+  const launchUrl = IS_CHROME
+    ? `${browser.runtime.getURL("redirect/obsidian-redirect.html")}#${encodeURIComponent(url)}`
+    : url;
+  const ephemeral = await browser.tabs.create({ url: launchUrl, active: false });
   if (ephemeral.id !== undefined) {
     const ephemeralId = ephemeral.id;
     setTimeout(() => {

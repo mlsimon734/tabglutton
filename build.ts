@@ -56,6 +56,13 @@ async function buildOne(target: Target): Promise<void> {
     process.exit(1);
   }
 
+  // clip-current.js is injected as a content script via
+  // scripting.executeScript({files}); Chrome rejects unsafe code points in it
+  // (see escapeChromeUnsafeCodePoints). Firefox doesn't, but the escape is a
+  // no-op for valid content so we apply it to both builds.
+  const clipJsPath = `${DIST}/src/clip-current.js`;
+  writeFileSync(clipJsPath, escapeChromeUnsafeCodePoints(readFileSync(clipJsPath, "utf8")));
+
   const onboardingEntry = target === "chrome" ? chromeBundleEntry(DIST, "onboarding") : undefined;
   const onboardingBuild = await Bun.build({
     entrypoints: [onboardingEntry ?? "onboarding/onboarding.ts"],
@@ -108,6 +115,11 @@ async function buildOne(target: Target): Promise<void> {
   cpSync("onboarding/onboarding.html", `${DIST}/onboarding/onboarding.html`);
   cpSync("onboarding/onboarding.css", `${DIST}/onboarding/onboarding.css`);
 
+  // obsidian-redirect.{html,js} — the extension-origin launch page used by
+  // openObsidianUrl on Chrome. The .js is emitted by tsc; copy the HTML shell.
+  mkdirSync(`${DIST}/redirect`, { recursive: true });
+  cpSync("redirect/obsidian-redirect.html", `${DIST}/redirect/obsidian-redirect.html`);
+
   mkdirSync(`${DIST}/THIRD_PARTY_LICENSES`, { recursive: true });
   cpSync("node_modules/defuddle/LICENSE", `${DIST}/THIRD_PARTY_LICENSES/defuddle-LICENSE.txt`);
 
@@ -125,6 +137,38 @@ async function buildOne(target: Target): Promise<void> {
     injectPolyfillScript(`${DIST}/popup/devour.html`);
     injectPolyfillScript(`${DIST}/options/options.html`, "..");
   }
+}
+
+// Chrome validates injected content-script files with base::IsStringUTF8,
+// which — unlike plain UTF-8 validity — rejects Unicode noncharacters
+// (U+FDD0–FDEF, U+FFFE/U+FFFF and their per-plane twins) and unpaired
+// surrogates, reporting "It isn't UTF-8 encoded." The minifier can emit such a
+// char raw (e.g. a U+FFFF upper bound in a Defuddle regex range). Escape ONLY
+// those code points to \uXXXX — they only ever occur in string/regex literals,
+// never identifiers, so the escape is always legal. Ordinary non-ASCII
+// (accented letters, CJK, valid surrogate pairs used as object keys) is left
+// raw, since escaping a surrogate pair would be an illegal identifier escape.
+function escapeChromeUnsafeCodePoints(src: string): string {
+  const esc = (u: number): string => `\\u${u.toString(16).padStart(4, "0")}`;
+  let out = "";
+  for (let i = 0; i < src.length; i++) {
+    const c = src.charCodeAt(i);
+    const isHigh = c >= 0xd800 && c <= 0xdbff;
+    if (isHigh && i + 1 < src.length) {
+      const lo = src.charCodeAt(i + 1);
+      if (lo >= 0xdc00 && lo <= 0xdfff) {
+        const cp = (c - 0xd800) * 0x400 + (lo - 0xdc00) + 0x10000;
+        // Valid surrogate pair: leave raw unless it encodes an astral noncharacter.
+        out += (cp & 0xfffe) === 0xfffe ? esc(c) + esc(lo) : src.charAt(i) + src.charAt(i + 1);
+        i++;
+        continue;
+      }
+    }
+    const isSurrogate = c >= 0xd800 && c <= 0xdfff; // here: unpaired
+    const isNoncharacter = (c >= 0xfdd0 && c <= 0xfdef) || (c & 0xfffe) === 0xfffe;
+    out += isSurrogate || isNoncharacter ? esc(c) : src.charAt(i);
+  }
+  return out;
 }
 
 function chromeBundleEntry(dist: string, name: "background" | "onboarding"): string {
