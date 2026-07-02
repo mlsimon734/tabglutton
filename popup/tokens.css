@@ -27,11 +27,13 @@
   --ink: #1b1614;
   --ink-soft: #3a322d;
   --muted: #6f6155;
-  --muted-soft: #8f8478;
+  --muted-soft: #7c6f62;
   --hairline: rgba(27, 22, 20, 0.1);
   --hairline-strong: rgba(27, 22, 20, 0.18);
   --hover: rgba(27, 22, 20, 0.04);
   --hover-strong: rgba(27, 22, 20, 0.07);
+  /* subtle 1px ring for real images (favicons) — pure black per light theme */
+  --img-ring: rgba(0, 0, 0, 0.1);
 
   --accent: #7a4a2c;
   --accent-ink: #fbf8f3;
@@ -95,11 +97,13 @@
     --ink: #f0e6d6;
     --ink-soft: #d6c9b6;
     --muted: #9a8a7a;
-    --muted-soft: #756859;
+    --muted-soft: #8a7c6b;
     --hairline: rgba(240, 230, 214, 0.1);
     --hairline-strong: rgba(240, 230, 214, 0.2);
     --hover: rgba(240, 230, 214, 0.05);
     --hover-strong: rgba(240, 230, 214, 0.09);
+    /* pure white per dark theme */
+    --img-ring: rgba(255, 255, 255, 0.1);
 
     --accent: #d89456;
     --accent-ink: #16110e;

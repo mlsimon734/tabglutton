@@ -1,12 +1,15 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
   <title>Tabglutton</title>
-  <!-- placeholder mark: a stack of three tabs being devoured, top-down -->
-  <g fill="currentColor">
-    <path d="M14 14 h22 a4 4 0 0 1 4 4 v6 H10 v-6 a4 4 0 0 1 4 -4 z" opacity="0.95"/>
-    <path d="M22 28 h22 a4 4 0 0 1 4 4 v6 H18 v-6 a4 4 0 0 1 4 -4 z" opacity="0.7"/>
-    <path d="M30 42 h22 a4 4 0 0 1 4 4 v6 H26 v-6 a4 4 0 0 1 4 -4 z" opacity="0.4"/>
-  </g>
-  <!-- bite arc cutting through, suggests "devour" -->
-  <path d="M48 18 a14 14 0 0 1 0 28" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" fill="none" opacity="0.85"/>
-  <circle cx="52" cy="22" r="2" fill="currentColor"/>
+  <!-- Monochrome wordmark mark: a page with a two-tooth bite chomped out of the -->
+  <!-- right edge (two mask circles = a scalloped "munch" crescent), plus a faint -->
+  <!-- second page behind for the "tab stack" hint. Pairs with icons/icon-chomp.svg. -->
+  <defs>
+    <mask id="tg-bite">
+      <rect width="64" height="64" fill="#fff" />
+      <circle cx="51" cy="18" r="8.5" fill="#000" />
+      <circle cx="51" cy="31" r="8.5" fill="#000" />
+    </mask>
+  </defs>
+  <rect x="11" y="19" width="26" height="29" rx="5" fill="currentColor" opacity="0.35" />
+  <rect x="12" y="12" width="36" height="36" rx="7" fill="currentColor" mask="url(#tg-bite)" />
 </svg>

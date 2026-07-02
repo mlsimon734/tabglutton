@@ -9,5 +9,8 @@ dist-chrome/
 .dev-profile-firefox/
 .dev-profile-chrome/
 .claude/settings.local.json
+.claude/skills/
+.agents/
+skills-lock.json
 .env
 .env.signing

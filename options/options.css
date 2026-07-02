@@ -129,6 +129,7 @@ section:last-of-type {
   font-size: var(--fs-small);
   color: var(--muted);
   line-height: 1.5;
+  text-wrap: pretty;
 }
 
 /* ---------- setting rows ---------- */
@@ -170,6 +171,7 @@ section:last-of-type {
   font-size: var(--fs-small);
   color: var(--muted);
   line-height: 1.5;
+  text-wrap: pretty;
 }
 
 .setting-control {
@@ -335,11 +337,17 @@ code {
   font-size: var(--fs-small);
   color: var(--muted);
   line-height: 1.5;
+  text-wrap: pretty;
 }
 
 .radio-card:has(input:checked) {
   border-color: var(--accent-ring);
   background: var(--accent-soft);
+}
+
+/* on the tinted selected card, muted-gray reads as washed — darken toward ink */
+.radio-card:has(input:checked) .radio-card-body small {
+  color: var(--ink-soft);
 }
 
 /* ---------- re-run onboarding ---------- */
