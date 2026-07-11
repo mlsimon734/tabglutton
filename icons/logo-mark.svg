@@ -1,15 +1,36 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="100%" height="100%" fill="none">
   <title>Tabglutton</title>
-  <!-- Monochrome wordmark mark: a page with a two-tooth bite chomped out of the -->
-  <!-- right edge (two mask circles = a scalloped "munch" crescent), plus a faint -->
-  <!-- second page behind for the "tab stack" hint. Pairs with icons/icon-chomp.svg. -->
+  <!-- A single browser-tab silhouette (rounded-trapezoid handle) with a -->
+  <!-- cookie-style bite in the top-right corner. The chip inside the handle sits -->
+  <!-- where a favicon would. Monochrome (currentColor); the app tints it. -->
   <defs>
-    <mask id="tg-bite">
+    <mask id="cookie-bite" maskUnits="userSpaceOnUse" x="0" y="0" width="64" height="64">
       <rect width="64" height="64" fill="#fff" />
-      <circle cx="51" cy="18" r="8.5" fill="#000" />
-      <circle cx="51" cy="31" r="8.5" fill="#000" />
+      <circle cx="47.5" cy="17" r="6.5" fill="#000" />
+      <circle cx="44.5" cy="24" r="6.5" fill="#000" />
+      <circle cx="44" cy="31" r="6.5" fill="#000" />
+      <circle cx="49" cy="38" r="6.5" fill="#000" />
+      <circle cx="52" cy="21" r="4.2" fill="#000" />
+      <circle cx="52" cy="28" r="4.2" fill="#000" />
+      <circle cx="53" cy="35" r="4.2" fill="#000" />
     </mask>
   </defs>
-  <rect x="11" y="19" width="26" height="29" rx="5" fill="currentColor" opacity="0.35" />
-  <rect x="12" y="12" width="36" height="36" rx="7" fill="currentColor" mask="url(#tg-bite)" />
+  <path
+    d="M12 56C9.8 56 8 54.2 8 52V20C8 18.3 9.3 17 11 17H13C16.5 17 16 10 19.5 10H26.5C30 10 29.5 17 33 17H50C51.1 17 52 17.9 52 19V52C52 54.2 50.2 56 48 56H12Z"
+    fill="currentColor"
+    stroke="#fff"
+    stroke-opacity="0.18"
+    stroke-width="0.55"
+    stroke-linejoin="round"
+    vector-effect="non-scaling-stroke"
+    mask="url(#cookie-bite)"
+  />
+  <g fill="#3b2113" opacity="0.84">
+    <circle cx="23" cy="13.5" r="1.5" />
+    <circle cx="18" cy="26" r="1.7" />
+    <circle cx="31" cy="21" r="1.45" />
+    <circle cx="21" cy="40" r="1.8" />
+    <circle cx="35" cy="44" r="1.55" />
+    <circle cx="28" cy="31" r="1.2" />
+  </g>
 </svg>

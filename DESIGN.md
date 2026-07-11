@@ -94,6 +94,11 @@ muted). All have hover / active / disabled / focus-visible (3px accent ring) sta
 ## Iconography
 
 Inline SVG, 1.4px stroke, round caps/joins, `currentColor`, 16-unit viewBox for UI glyphs
-(settings, cockpit-expand, search). Brand mark is the "glutton/chomp" stack-with-a-bite
-(`icons/icon-chomp.svg` + `logo-mark.svg`); PNGs are rasterized from it for Chrome.
-Keep one icon family and one stroke weight across surfaces.
+(settings, cockpit-expand, search). Brand marks: the in-UI wordmark mark `logo-mark.svg` is a
+browser tab — a rounded trapezoid handle rising off the body, with a chocolate chip inside the
+handle where the favicon would sit — with a scalloped cookie bite munched out of the top-right
+corner and chocolate-chip flecks across the body (monochrome `currentColor` body with dark-brown
+chip accents, fetched into the popup/cockpit/settings headers). The toolbar icon
+`icon-chomp.svg` is still the terracotta page-stack + bite (PNGs rasterized from it for Chrome).
+NOTE: the two concepts now diverge (tab vs page-stack) — unify by redrawing `icon-chomp.svg`
+and regenerating its PNGs if full mark consistency is wanted. Keep one icon family per surface.
