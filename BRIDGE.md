@@ -203,11 +203,12 @@ Strategy, in order:
    in Zen and in Chrome, read a loaded tab, clip it to Obsidian, close it, undo the close.
    Protocol, auth, config, target selection, MCP framing, and a live-socket handshake and
    routing test are covered by `bun test`; the browser-API surface is verified by running
-   the definition-of-done end to end against a real browser. **Verified live against Zen**
-   (all five tools, plus a sidecar started mid-session being picked up by the idle
-   reconnect loop without a reload). The Chrome half builds and shares every module but has
-   not been driven end to end yet; `tab_read` against a genuinely discarded tab is also
-   still unexercised.
+   the definition-of-done end to end against a real browser. **Verified live against both
+   Zen and Chrome**, including the two cases the single-browser run could not reach: with
+   Zen and Chrome connected at once (10 tabs across both), a tab-scoped call that names no
+   `browser` is refused with `ambiguous-target` rather than guessing; and `tab_read` on a
+   genuinely discarded tab returns a clean `tab-discarded`. Also verified: a sidecar started
+   mid-session is picked up by the idle reconnect loop without a reload.
 2. **Curation workflow**: a `/triage-tabs` skill (lives with the agent, not this repo):
    metadata cut → read survivors → digest note in Obsidian ("12 high-signal, 40 clipped,
    180 proposed closures — approve?"). Closure stays behind human approval.

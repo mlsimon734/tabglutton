@@ -37,6 +37,16 @@ import {
   type UndoBatch,
 } from "./undo-log.js";
 
+/**
+ * Appended to every "no such tab id" error. A stale id reads as "the tab was
+ * closed", but Chrome hands a discarded tab a *brand new* id — so a listing
+ * taken before a memory-pressure unload points at ids that no longer resolve
+ * even though the tabs are all still sitting there. Triage runs list once and
+ * act later, which is exactly when this bites.
+ */
+const STALE_ID_HINT =
+  "It may have been closed, or unloaded and given a new id (Chrome does this when it discards a tab). Re-run tabs_list for current ids.";
+
 export interface BridgeExtractResult {
   ok: boolean;
   payload?: ClipPayload;
@@ -169,7 +179,7 @@ export class BridgeMethodRunner {
     try {
       tab = await browser.tabs.get(tabId);
     } catch {
-      fail("not-found", `No tab with id ${tabId}.`);
+      fail("not-found", `No tab with id ${tabId}. ${STALE_ID_HINT}`);
     }
     if (!tab.url?.startsWith("http://") && !tab.url?.startsWith("https://")) {
       fail("unsupported", "Only http and https pages can be read.");
@@ -278,7 +288,7 @@ export class BridgeMethodRunner {
       }),
     );
     const live = tabs.filter((t): t is browser.tabs.Tab => t !== null && t.id !== undefined);
-    if (live.length === 0) fail("not-found", "None of the given tab ids exist.");
+    if (live.length === 0) fail("not-found", `None of the given tab ids exist. ${STALE_ID_HINT}`);
 
     const entries = live.map(toClosedEntry).filter((e): e is ClosedTabEntry => e !== null);
     // Record before removing: a crash mid-remove must not lose the trail.
