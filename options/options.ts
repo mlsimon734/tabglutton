@@ -1,5 +1,6 @@
-import type { GetBridgeStatusResponse } from "../src/background.js";
-import { DEFAULT_BRIDGE_PORT, generateToken } from "../src/bridge-protocol.js";
+import type { BridgeStatusChangedMessage, GetBridgeStatusResponse } from "../src/background.js";
+import type { BridgeStatus } from "../src/bridge-client.js";
+import { DEFAULT_BRIDGE_PORT, generateToken, isBridgePort } from "../src/bridge-protocol.js";
 import type { ClipMode, ScopeMode, Settings } from "../src/storage.js";
 import { IS_CHROME } from "../src/target.js";
 import { vaultWarningFor } from "../src/vault-warning.js";
@@ -107,11 +108,9 @@ async function save(): Promise<void> {
 }
 
 function parsePort(raw: string): number {
+  // Fall back rather than persist a value the sidecar could never listen on.
   const port = Number.parseInt(raw, 10);
-  // Sub-1024 needs root to bind and 65535 is the ceiling; fall back rather than
-  // persist a value the sidecar could never listen on.
-  if (!Number.isInteger(port) || port < 1024 || port > 65535) return DEFAULT_BRIDGE_PORT;
-  return port;
+  return isBridgePort(port) ? port : DEFAULT_BRIDGE_PORT;
 }
 
 for (const el of [stripFragment, bridgeEnabled, ...scopeRadios, ...clipModeRadios]) {
@@ -190,34 +189,40 @@ function updateBridgeSnippet(): void {
   if (code) code.textContent = bridgeSnippetText();
 }
 
-const BRIDGE_STATUS_LABELS: Record<GetBridgeStatusResponse["status"], string> = {
+const BRIDGE_STATUS_LABELS: Record<BridgeStatus, string> = {
   disabled: "Off",
   idle: "Waiting for a sidecar",
   connecting: "Connecting…",
   connected: "Connected",
 };
 
+function renderBridgeStatus(status: BridgeStatus): void {
+  bridgeStatusEl.textContent = BRIDGE_STATUS_LABELS[status];
+  bridgeStatusEl.dataset.state = status;
+}
+
 async function refreshBridgeStatus(): Promise<void> {
-  let status: GetBridgeStatusResponse["status"] = "disabled";
+  let status: BridgeStatus = "disabled";
   try {
     const res = (await browser.runtime.sendMessage({ type: "get-bridge-status" })) as
       | GetBridgeStatusResponse
       | undefined;
     if (res) status = res.status;
   } catch {
-    // Background asleep or restarting; treat as not connected and retry on the
-    // next tick rather than showing an error the user cannot act on.
+    // Background asleep or restarting; treat as not connected rather than
+    // showing an error the user cannot act on.
     status = bridgeEnabled.checked ? "idle" : "disabled";
   }
-  bridgeStatusEl.textContent = BRIDGE_STATUS_LABELS[status];
-  bridgeStatusEl.dataset.state = status;
+  renderBridgeStatus(status);
 }
 
-// The socket lives in the background; there is no event to subscribe to from
-// here, so poll while the options page is actually visible.
-setInterval(() => {
-  if (document.visibilityState === "visible") void refreshBridgeStatus();
-}, 2000);
+// The background pushes every transition, so this page never polls — on Chrome
+// MV3 a poll would keep the service worker awake for as long as it is open.
+browser.runtime.onMessage.addListener((raw: unknown) => {
+  const msg = raw as Partial<BridgeStatusChangedMessage> | null;
+  if (msg?.type === "bridge-status-changed" && msg.status) renderBridgeStatus(msg.status);
+});
+// Resync on return to the tab, in case a push landed while it was hidden.
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible") void refreshBridgeStatus();
 });

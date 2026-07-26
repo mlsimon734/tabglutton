@@ -8,6 +8,16 @@
 
 export const BRIDGE_PROTO = 1;
 export const DEFAULT_BRIDGE_PORT = 4588; // GLUT on a phone keypad
+
+/**
+ * A port the sidecar could actually listen on: below 1024 needs root to bind
+ * and 65535 is the ceiling. Both ends validate the user's port — the options
+ * page falls back to the default, Gullet refuses to start — so the rule itself
+ * lives here rather than being spelled out twice.
+ */
+export function isBridgePort(value: number): boolean {
+  return Number.isInteger(value) && value >= 1024 && value <= 65535;
+}
 export const BRIDGE_HEARTBEAT_MS = 20_000;
 export const BRIDGE_REQUEST_TIMEOUT_MS = 45_000;
 export const BRIDGE_HANDSHAKE_TIMEOUT_MS = 5_000;
@@ -30,10 +40,6 @@ export type BridgeErrorCode =
 export interface BridgeError {
   code: BridgeErrorCode;
   message: string;
-}
-
-export function bridgeError(code: BridgeErrorCode, message: string): BridgeError {
-  return { code, message };
 }
 
 // --- Handshake -------------------------------------------------------------
@@ -121,9 +127,19 @@ export type BridgeMessage = ServerMessage | ClientMessage;
 export async function deriveProof(token: string, nonce: string): Promise<string> {
   const bytes = new TextEncoder().encode(`${token.length}:${token}:${nonce}`);
   const digest = await crypto.subtle.digest("SHA-256", bytes);
-  return Array.from(new Uint8Array(digest))
+  return toHex(new Uint8Array(digest));
+}
+
+function toHex(bytes: Uint8Array): string {
+  return Array.from(bytes)
     .map((b) => b.toString(16).padStart(2, "0"))
     .join("");
+}
+
+function randomHex(byteLength: number): string {
+  const bytes = new Uint8Array(byteLength);
+  crypto.getRandomValues(bytes);
+  return toHex(bytes);
 }
 
 /** Constant-time-ish string compare, so proof checks don't leak by timing. */
@@ -137,20 +153,12 @@ export function proofsMatch(a: string, b: string): boolean {
 }
 
 export function randomNonce(): string {
-  const bytes = new Uint8Array(16);
-  crypto.getRandomValues(bytes);
-  return Array.from(bytes)
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
+  return randomHex(16);
 }
 
 /** Tokens are shown to the user and pasted into a config file — keep them typable. */
 export function generateToken(): string {
-  const bytes = new Uint8Array(24);
-  crypto.getRandomValues(bytes);
-  return Array.from(bytes)
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
+  return randomHex(24);
 }
 
 // --- Methods ---------------------------------------------------------------
@@ -259,14 +267,6 @@ export interface UndoCloseResult {
   failed: number;
 }
 
-export interface BridgeMethodMap {
-  tabs_list: { params: TabsListParams; result: TabsListResult };
-  tab_read: { params: TabReadParams; result: TabReadResult };
-  tab_clip: { params: TabClipParams; result: TabClipResult };
-  tabs_close: { params: TabsCloseParams; result: TabsCloseResult };
-  undo_close: { params: UndoCloseParams; result: UndoCloseResult };
-}
-
 // --- Parsing ---------------------------------------------------------------
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -329,10 +329,7 @@ export function parseTabsListParams(raw: unknown): TabsListParams {
   if (includeHidden !== undefined && typeof includeHidden !== "boolean") {
     badRequest("includeHidden must be a boolean");
   }
-  return {
-    scope: (scope as TabsListParams["scope"]) ?? "all",
-    includeHidden: (includeHidden as boolean | undefined) ?? true,
-  };
+  return { scope: scope ?? "all", includeHidden: includeHidden ?? true };
 }
 
 function requireTabId(raw: unknown): number {
@@ -353,7 +350,7 @@ export function parseTabClipParams(raw: unknown): TabClipParams {
   if (obj.close !== undefined && typeof obj.close !== "boolean") {
     badRequest("close must be a boolean");
   }
-  return { tabId: requireTabId(raw), close: (obj.close as boolean | undefined) ?? false };
+  return { tabId: requireTabId(raw), close: obj.close ?? false };
 }
 
 export function parseTabsCloseParams(raw: unknown): TabsCloseParams {
@@ -372,5 +369,5 @@ export function parseUndoCloseParams(raw: unknown): UndoCloseParams {
   if (batchId !== undefined && typeof batchId !== "string") {
     badRequest("batchId must be a string");
   }
-  return batchId === undefined ? {} : { batchId: batchId as string };
+  return batchId === undefined ? {} : { batchId };
 }

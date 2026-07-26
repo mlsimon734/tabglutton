@@ -8,7 +8,8 @@ import { BridgeClient, type BridgeStatus } from "./bridge-client.js";
 import { BridgeMethodRunner } from "./bridge-methods.js";
 import {
   markdownForClip,
-  obsidianClipRequest,
+  OBSIDIAN_HANDOFF_GAP_MS,
+  resolveClipRequest,
   type ClipPayload,
   type ObsidianClipRequest,
 } from "./clip-format.js";
@@ -22,7 +23,6 @@ import {
   type Settings,
 } from "./storage.js";
 import { IS_CHROME } from "./target.js";
-import { UNDO_LOG_KEY } from "./undo-log.js";
 
 export type GetScopedTabsMessage = { type: "get-scoped-tabs" };
 export type ClipSelectedTabsMessage = {
@@ -50,6 +50,12 @@ export type IncomingMessage =
   | GetBridgeStatusMessage;
 
 export interface GetBridgeStatusResponse {
+  status: BridgeStatus;
+}
+
+/** Pushed to the options page on every transition, so it never has to poll. */
+export interface BridgeStatusChangedMessage {
+  type: "bridge-status-changed";
   status: BridgeStatus;
 }
 
@@ -120,7 +126,9 @@ interface ClipCurrentResultMessage extends ClipCurrentResponse {
 }
 
 let settings: Settings = defaults();
-let bridgeStatus: BridgeStatus = "disabled";
+// Only the connected/not-connected split reaches the badge, so that is all we
+// mirror; `bridge.status` stays the source of truth for anyone who asks.
+let bridgeConnected = false;
 const pendingClips = new Map<
   string,
   {
@@ -135,16 +143,24 @@ const pendingClips = new Map<
 const bridgeRunner = new BridgeMethodRunner({
   getSettings: () => settings,
   extract: (tabId) => clipTab(tabId, { wake: false }),
-  openObsidianUrl: (url) => openObsidianUrl(url),
-  copyToClipboardViaTab: (tabId, text) => copyToClipboardViaTab(tabId, text),
+  openObsidianUrl,
+  copyToClipboardViaTab,
 });
 
 const bridge = new BridgeClient({
   getSettings: () => settings,
   run: (method, params) => bridgeRunner.run(method, params),
   onStatusChange: (status) => {
-    if (status === bridgeStatus) return;
-    bridgeStatus = status;
+    // Nobody may be listening — an options page that is closed rejects, and
+    // that is the normal case, not an error.
+    const msg: BridgeStatusChangedMessage = { type: "bridge-status-changed", status };
+    void browser.runtime.sendMessage(msg).catch(() => {});
+    // A failed dial cycles idle → connecting → idle every 30s. Repainting on
+    // each would re-query and re-dedup every tab twice a minute to draw the
+    // same pixels, so only an actual connect/disconnect gets through.
+    const connected = status === "connected";
+    if (connected === bridgeConnected) return;
+    bridgeConnected = connected;
     void refreshBadge();
   },
 });
@@ -175,7 +191,7 @@ async function refreshBadge(tabsHint?: Tab[]): Promise<void> {
     if (dupCount > 0) {
       await browser.action.setBadgeText({ text: String(dupCount) });
       await browser.action.setBadgeBackgroundColor({ color: "#ef4444" });
-    } else if (bridgeStatus === "connected") {
+    } else if (bridgeConnected) {
       await browser.action.setBadgeText({ text: "•" });
       await browser.action.setBadgeBackgroundColor({ color: "#7a4a2c" });
     } else {
@@ -249,9 +265,11 @@ browser.tabs.onCreated.addListener(() => {
 
 browser.storage.onChanged.addListener(async (changes, area) => {
   if (area !== "local") return;
-  // The undo log lives in the same area but is not a setting; ignore its churn
-  // so a close batch does not trigger a settings reload and badge repaint.
-  if (Object.keys(changes).every((key) => key === UNDO_LOG_KEY)) return;
+  // storage.local has tenants that are not settings (the undo log today, more
+  // later). Match positively on what a setting *is*, so a new non-setting key
+  // cannot silently start triggering reloads and badge repaints.
+  const settingKeys = new Set(Object.keys(defaults()));
+  if (!Object.keys(changes).some((key) => settingKeys.has(key))) return;
   settings = await loadSettings();
   bridge.sync();
   await refreshBadge();
@@ -566,32 +584,25 @@ async function clipSelectedTabs(tabIds: number[]): Promise<ClipSelectedTabsRespo
       try {
         const rule = pickRule(res.payload.url);
         const content = markdownForClip(res.payload);
-        req = obsidianClipRequest(
+        req = await resolveClipRequest(
           res.payload,
           vault,
           content,
           rule,
           settings.clipMode,
           settings.clippingsBaseFolder,
+          async (text) => {
+            const copied = await copyToClipboardViaTab(tabId, text);
+            if (!copied) {
+              console.warn(
+                "[tabglutton] clipboard write failed for tab",
+                tabId,
+                "— falling back to legacy URI",
+              );
+            }
+            return copied;
+          },
         );
-        if (req.clipboard !== null) {
-          const copied = await copyToClipboardViaTab(tabId, req.clipboard);
-          if (!copied) {
-            console.warn(
-              "[tabglutton] clipboard write failed for tab",
-              tabId,
-              "— falling back to legacy URI",
-            );
-            req = obsidianClipRequest(
-              res.payload,
-              vault,
-              content,
-              rule,
-              "legacy-uri",
-              settings.clippingsBaseFolder,
-            );
-          }
-        }
       } catch (err) {
         const m = metaOf(tabId);
         failures.push({
@@ -619,7 +630,7 @@ async function clipSelectedTabs(tabIds: number[]): Promise<ClipSelectedTabsRespo
         continue;
       }
 
-      await delay(200);
+      await delay(OBSIDIAN_HANDOFF_GAP_MS);
       try {
         await browser.tabs.remove(tabId);
       } catch (err) {

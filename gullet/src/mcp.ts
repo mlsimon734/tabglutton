@@ -39,13 +39,6 @@ export interface McpServerOptions {
   call: (name: string, args: Record<string, unknown>) => Promise<McpToolResult>;
 }
 
-interface JsonRpcRequest {
-  jsonrpc: "2.0";
-  id?: string | number | null;
-  method: string;
-  params?: unknown;
-}
-
 interface JsonRpcResponse {
   jsonrpc: "2.0";
   id: string | number | null;
@@ -77,18 +70,19 @@ export function createRpcHandler(
   options: McpServerOptions,
 ): (msg: unknown) => Promise<JsonRpcResponse | null> {
   return async (msg: unknown): Promise<JsonRpcResponse | null> => {
-    const req = asRecord(msg) as unknown as JsonRpcRequest;
-    if (typeof req.method !== "string") {
+    const req = asRecord(msg);
+    const method = req.method;
+    if (typeof method !== "string") {
       return {
         jsonrpc: "2.0",
         id: null,
         error: { code: INVALID_REQUEST, message: "Missing method." },
       };
     }
-    const id = req.id ?? null;
+    const id = (req.id as JsonRpcResponse["id"]) ?? null;
     const isNotification = req.id === undefined;
 
-    switch (req.method) {
+    switch (method) {
       case "initialize":
         return reply(id, {
           protocolVersion: negotiateProtocol(asRecord(req.params).protocolVersion),
@@ -116,7 +110,7 @@ export function createRpcHandler(
       }
       default:
         if (isNotification) return null;
-        return errorReply(id, METHOD_NOT_FOUND, `Unknown method ${req.method}.`);
+        return errorReply(id, METHOD_NOT_FOUND, `Unknown method ${method}.`);
     }
   };
 }

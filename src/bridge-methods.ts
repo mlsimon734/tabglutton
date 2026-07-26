@@ -7,7 +7,12 @@
 // scripting beyond the existing Defuddle clipper, and every close is logged
 // before it happens.
 
-import { clipFilePath, markdownForClip, obsidianClipRequest } from "./clip-format.js";
+import {
+  clipFilePath,
+  markdownForClip,
+  OBSIDIAN_HANDOFF_GAP_MS,
+  resolveClipRequest,
+} from "./clip-format.js";
 import type { ClipPayload } from "./clip-format.js";
 import {
   BridgeRequestError,
@@ -16,6 +21,7 @@ import {
   parseTabsCloseParams,
   parseTabsListParams,
   parseUndoCloseParams,
+  type BridgeErrorCode,
   type BridgeMethod,
   type BridgeTab,
   type ClosedTabEntry,
@@ -47,6 +53,24 @@ import {
 const STALE_ID_HINT =
   "It may have been closed, or unloaded and given a new id (Chrome does this when it discards a tab). Re-run tabs_list for current ids.";
 
+/** The only way to raise "no such tab id", so the hint above cannot be forgotten. */
+function failMissingTab(message: string): never {
+  fail("not-found", `${message} ${STALE_ID_HINT}`);
+}
+
+/**
+ * Every lookup that should fail the whole call goes through here, so the hint
+ * cannot be attached to some of them and not others. `tab_clip`'s close step is
+ * deliberately not one of these — the note is already filed by then.
+ */
+async function getTabOrFail(tabId: number): Promise<browser.tabs.Tab> {
+  try {
+    return await browser.tabs.get(tabId);
+  } catch {
+    failMissingTab(`No tab with id ${tabId}.`);
+  }
+}
+
 export interface BridgeExtractResult {
   ok: boolean;
   payload?: ClipPayload;
@@ -65,14 +89,11 @@ export interface BridgeMethodDeps {
   copyToClipboardViaTab: (tabId: number, text: string) => Promise<boolean>;
 }
 
-/** Minimum gap between `obsidian://` launches, matching the Devour cockpit. */
-const OBSIDIAN_HANDOFF_GAP_MS = 200;
-
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function fail(code: ConstructorParameters<typeof BridgeRequestError>[0], message: string): never {
+function fail(code: BridgeErrorCode, message: string): never {
   throw new BridgeRequestError(code, message);
 }
 
@@ -104,6 +125,10 @@ function toClosedEntry(tab: browser.tabs.Tab): ClosedTabEntry | null {
     windowId: tab.windowId ?? -1,
     index: tab.index,
   };
+}
+
+function hasTabId(tab: browser.tabs.Tab): tab is browser.tabs.Tab & { id: number } {
+  return tab.id !== undefined;
 }
 
 // `browser.tabs.query({})` with no filter is broken on Zen
@@ -175,12 +200,7 @@ export class BridgeMethodRunner {
    * agent can say "needs manual load" instead of retrying.
    */
   private async readTab(tabId: number): Promise<{ tab: browser.tabs.Tab; payload: ClipPayload }> {
-    let tab: browser.tabs.Tab;
-    try {
-      tab = await browser.tabs.get(tabId);
-    } catch {
-      fail("not-found", `No tab with id ${tabId}. ${STALE_ID_HINT}`);
-    }
+    const tab = await getTabOrFail(tabId);
     if (!tab.url?.startsWith("http://") && !tab.url?.startsWith("https://")) {
       fail("unsupported", "Only http and https pages can be read.");
     }
@@ -227,34 +247,20 @@ export class BridgeMethodRunner {
     const file = clipFilePath(payload, rule, settings.clippingsBaseFolder);
 
     await this.handoff(async () => {
-      let request = obsidianClipRequest(
+      const request = await resolveClipRequest(
         payload,
         vault,
         content,
         rule,
         settings.clipMode,
         settings.clippingsBaseFolder,
+        (text) => this.deps.copyToClipboardViaTab(params.tabId, text),
       );
-      if (request.clipboard !== null) {
-        const copied = await this.deps.copyToClipboardViaTab(params.tabId, request.clipboard);
-        if (!copied) {
-          // Same fallback the cockpit uses: the URI carries the note itself.
-          request = obsidianClipRequest(
-            payload,
-            vault,
-            content,
-            rule,
-            "legacy-uri",
-            settings.clippingsBaseFolder,
-          );
-        }
-      }
       await this.deps.openObsidianUrl(request.url);
     });
 
-    if (!params.close) {
-      return { tabId: params.tabId, title: payload.title, url: payload.url, file, closed: false };
-    }
+    const filed = { tabId: params.tabId, title: payload.title, url: payload.url, file };
+    if (!params.close) return { ...filed, closed: false };
 
     let batchId: string | undefined;
     try {
@@ -263,37 +269,27 @@ export class BridgeMethodRunner {
       if (entry) batchId = await recordClosed([entry]);
       await browser.tabs.remove(params.tabId);
     } catch (err) {
+      // The note is already in Obsidian, so this is a partial success, not a
+      // failure: report the clip and let the tab stand.
       console.warn("[tabglutton] bridge close-after-clip failed", params.tabId, err);
-      return { tabId: params.tabId, title: payload.title, url: payload.url, file, closed: false };
+      return { ...filed, closed: false };
     }
-    return {
-      tabId: params.tabId,
-      title: payload.title,
-      url: payload.url,
-      file,
-      closed: true,
-      ...(batchId ? { batchId } : {}),
-    };
+    return { ...filed, closed: true, ...(batchId ? { batchId } : {}) };
   }
 
   private async tabsClose(raw: unknown): Promise<TabsCloseResult> {
     const { tabIds } = parseTabsCloseParams(raw);
-    const tabs = await Promise.all(
-      tabIds.map(async (id) => {
-        try {
-          return await browser.tabs.get(id);
-        } catch {
-          return null;
-        }
-      }),
-    );
-    const live = tabs.filter((t): t is browser.tabs.Tab => t !== null && t.id !== undefined);
-    if (live.length === 0) fail("not-found", `None of the given tab ids exist. ${STALE_ID_HINT}`);
+    // One listing rather than a `tabs.get` per id: a triage run closes tabs by
+    // the hundred (BRIDGE.md sizes one at ~180), and that many IPC round-trips
+    // just to build undo entries is the bulk of the call.
+    const byId = new Map((await queryAllTabs()).filter(hasTabId).map((t) => [t.id, t] as const));
+    const live = tabIds.map((id) => byId.get(id)).filter((t) => t !== undefined);
+    if (live.length === 0) failMissingTab("None of the given tab ids exist.");
 
     const entries = live.map(toClosedEntry).filter((e): e is ClosedTabEntry => e !== null);
     // Record before removing: a crash mid-remove must not lose the trail.
     const batchId = await recordClosed(entries);
-    await browser.tabs.remove(live.map((t) => t.id as number));
+    await browser.tabs.remove(live.map((t) => t.id));
     return { closed: live.length, batchId, entries };
   }
 

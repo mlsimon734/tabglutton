@@ -14,8 +14,8 @@ import {
   parseMessage,
   proofsMatch,
   randomNonce,
-  type BridgeBrowser,
   type BridgeMethod,
+  type HelloMessage,
   type ServerMessage,
 } from "../../src/bridge-protocol.js";
 import type { ConnectionSummary } from "./select.js";
@@ -53,7 +53,6 @@ export interface HubOptions {
 export class Hub {
   private readonly options: HubOptions;
   private readonly connections = new Map<string, Connection>();
-  private readonly pendingAuth = new Map<string, Bun.ServerWebSocket<SocketData>>();
   private server: Bun.Server<SocketData> | null = null;
   private heartbeat: ReturnType<typeof setInterval> | null = null;
   private nextId = 1;
@@ -96,10 +95,7 @@ export class Hub {
     if (this.heartbeat !== null) clearInterval(this.heartbeat);
     this.heartbeat = null;
     for (const conn of this.connections.values()) {
-      for (const pending of conn.pending.values()) {
-        clearTimeout(pending.timer);
-        pending.reject(new BridgeRequestError("no-connection", "Gullet is shutting down."));
-      }
+      this.rejectPending(conn, "Gullet is shutting down.");
       conn.socket.close();
     }
     this.connections.clear();
@@ -145,7 +141,8 @@ export class Hub {
   }
 
   private onOpen(ws: Bun.ServerWebSocket<SocketData>): void {
-    this.pendingAuth.set(ws.data.connectionId, ws);
+    // Unauthenticated sockets are not tracked: `connections` only gains an entry
+    // once the handshake passes, and Bun owns the socket until then.
     this.send(ws, {
       type: "challenge",
       proto: BRIDGE_PROTO,
@@ -194,7 +191,7 @@ export class Hub {
 
   private async completeHandshake(
     ws: Bun.ServerWebSocket<SocketData>,
-    msg: Extract<ReturnType<typeof parseMessage>, { type: "hello" }>,
+    msg: HelloMessage,
   ): Promise<void> {
     if (msg.proto !== BRIDGE_PROTO) {
       this.rejectHandshake(
@@ -220,14 +217,13 @@ export class Hub {
 
     const conn: Connection = {
       connectionId: ws.data.connectionId,
-      browser: (msg.browser === "chrome" ? "chrome" : "firefox") satisfies BridgeBrowser,
+      browser: msg.browser === "chrome" ? "chrome" : "firefox",
       label: typeof msg.label === "string" && msg.label ? msg.label : msg.browser,
       extVersion: typeof msg.extVersion === "string" ? msg.extVersion : "unknown",
       socket: ws,
       pending: new Map(),
       awaitingPong: false,
     };
-    this.pendingAuth.delete(ws.data.connectionId);
     this.connections.set(conn.connectionId, conn);
     this.send(ws, {
       type: "hello-ack",
@@ -251,16 +247,10 @@ export class Hub {
   }
 
   private onClose(ws: Bun.ServerWebSocket<SocketData>): void {
-    this.pendingAuth.delete(ws.data.connectionId);
     const conn = this.connections.get(ws.data.connectionId);
     if (!conn) return;
     this.connections.delete(conn.connectionId);
-    for (const pending of conn.pending.values()) {
-      clearTimeout(pending.timer);
-      pending.reject(
-        new BridgeRequestError("no-connection", `${conn.label} disconnected mid-request.`),
-      );
-    }
+    this.rejectPending(conn, `${conn.label} disconnected mid-request.`);
     console.error(`[gullet] ${conn.label} disconnected (${conn.connectionId})`);
     this.options.onConnectionsChanged?.(this.summaries());
   }
@@ -282,5 +272,14 @@ export class Hub {
 
   private send(ws: Bun.ServerWebSocket<SocketData>, msg: ServerMessage): void {
     ws.send(JSON.stringify(msg));
+  }
+
+  /** Nothing in flight may outlive its connection — every exit path funnels here. */
+  private rejectPending(conn: Connection, message: string): void {
+    for (const pending of conn.pending.values()) {
+      clearTimeout(pending.timer);
+      pending.reject(new BridgeRequestError("no-connection", message));
+    }
+    conn.pending.clear();
   }
 }

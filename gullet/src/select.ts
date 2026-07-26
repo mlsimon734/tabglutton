@@ -20,7 +20,7 @@ function matches(summary: ConnectionSummary, target: string): boolean {
   );
 }
 
-export function describe(summaries: readonly ConnectionSummary[]): string {
+function describe(summaries: readonly ConnectionSummary[]): string {
   return summaries.map((s) => `${s.connectionId} (${s.label})`).join(", ");
 }
 

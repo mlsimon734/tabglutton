@@ -1,6 +1,6 @@
 // CLI/env parsing for the sidecar. Pure so the precedence rules are testable.
 
-import { DEFAULT_BRIDGE_PORT } from "../../src/bridge-protocol.js";
+import { DEFAULT_BRIDGE_PORT, isBridgePort } from "../../src/bridge-protocol.js";
 
 export interface GulletConfig {
   port: number;
@@ -10,7 +10,7 @@ export interface GulletConfig {
 
 export class ConfigError extends Error {}
 
-const USAGE = `gullet — Tabglutton's agent bridge sidecar
+export const USAGE = `gullet — Tabglutton's agent bridge sidecar
 
   bun run gullet/gullet.ts [--port <1024-65535>] [--token <token>]
 
@@ -19,10 +19,6 @@ const USAGE = `gullet — Tabglutton's agent bridge sidecar
 
 The token is required before any browser may connect. Prefer the environment
 variable: process arguments are visible to other local users, environments are not.`;
-
-export function usage(): string {
-  return USAGE;
-}
 
 export function parseConfig(
   argv: readonly string[],
@@ -57,7 +53,7 @@ function splitFlag(arg: string): [string, string | undefined] {
 function parsePort(raw: string | undefined): number {
   if (raw === undefined || raw === "") return DEFAULT_BRIDGE_PORT;
   const port = Number.parseInt(raw, 10);
-  if (!Number.isInteger(port) || port < 1024 || port > 65535) {
+  if (!isBridgePort(port)) {
     throw new ConfigError(`Invalid port "${raw}" — expected an integer in 1024-65535.`);
   }
   return port;

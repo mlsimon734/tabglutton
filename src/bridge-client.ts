@@ -16,14 +16,13 @@ import {
   proofsMatch,
   randomNonce,
   BridgeRequestError,
-  type BridgeBrowser,
   type BridgeMethod,
   type ClientMessage,
   type HelloMessage,
   type ResponseMessage,
 } from "./bridge-protocol.js";
 import type { Settings } from "./storage.js";
-import { IS_CHROME } from "./target.js";
+import { IS_CHROME, TARGET } from "./target.js";
 
 export const BRIDGE_ALARM = "tabglutton-bridge-reconnect";
 
@@ -68,15 +67,30 @@ export class BridgeClient {
   /** Arm the reconnect alarm and make the first dial. Call once at startup. */
   async start(): Promise<void> {
     this.label = await resolveLabel();
-    browser.alarms.create(BRIDGE_ALARM, {
-      delayInMinutes: RECONNECT_PERIOD_MINUTES,
-      periodInMinutes: RECONNECT_PERIOD_MINUTES,
-    });
+    await this.syncAlarm();
     this.tick();
+  }
+
+  /**
+   * The reconnect alarm exists only while the bridge is switched on. It is a
+   * periodic wake, and on Chrome MV3 every wake cold-starts the service worker
+   * and re-runs init — a default-off install must not pay that twice a minute
+   * to rediscover that it has nothing to dial.
+   */
+  private async syncAlarm(): Promise<void> {
+    if (this.isConfigured(this.deps.getSettings())) {
+      browser.alarms.create(BRIDGE_ALARM, {
+        delayInMinutes: RECONNECT_PERIOD_MINUTES,
+        periodInMinutes: RECONNECT_PERIOD_MINUTES,
+      });
+    } else {
+      await browser.alarms.clear(BRIDGE_ALARM);
+    }
   }
 
   /** Re-evaluate after a settings change: connect, disconnect, or re-dial. */
   sync(): void {
+    void this.syncAlarm();
     const settings = this.deps.getSettings();
     if (!this.isConfigured(settings)) {
       this.teardown();
@@ -165,7 +179,7 @@ export class BridgeClient {
         const hello: HelloMessage = {
           type: "hello",
           proto: BRIDGE_PROTO,
-          browser: (IS_CHROME ? "chrome" : "firefox") satisfies BridgeBrowser,
+          browser: TARGET,
           extVersion: browser.runtime.getManifest().version,
           label: this.label,
           nonce: this.clientNonce,

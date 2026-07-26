@@ -2,7 +2,11 @@
 // bridge methods. Read + file + close, and nothing else: no navigation, no
 // clicking, no typing, no arbitrary script execution.
 
-import { BridgeRequestError, type BridgeMethod } from "../../src/bridge-protocol.js";
+import {
+  BridgeRequestError,
+  isBridgeMethod,
+  type BridgeMethod,
+} from "../../src/bridge-protocol.js";
 import type { McpTool, McpToolResult } from "./mcp.js";
 import { selectAll, selectOne, type ConnectionSummary } from "./select.js";
 
@@ -136,12 +140,6 @@ export const GULLET_TOOLS: readonly McpTool[] = [
   },
 ];
 
-/** Tabs carry their origin so ids from two browsers can never be confused. */
-interface TaggedTabsResult {
-  browsers: ConnectionSummary[];
-  tabs: Array<Record<string, unknown> & { browser: string; connectionId: string }>;
-}
-
 export function createToolCaller(
   ctx: ToolContext,
 ): (name: string, args: Record<string, unknown>) => Promise<McpToolResult> {
@@ -165,6 +163,12 @@ async function route(
   name: string,
   args: Record<string, unknown>,
 ): Promise<unknown> {
+  // Every MCP tool is named after the bridge method it calls, so the protocol's
+  // own method list is the routing table — a method added there routes here
+  // without a second list to keep in sync.
+  if (!isBridgeMethod(name)) {
+    throw new BridgeRequestError("bad-request", `Unknown tool ${name}.`);
+  }
   const target = typeof args.browser === "string" ? args.browser : undefined;
   const { browser: _browser, ...params } = args;
   const summaries = ctx.connections();
@@ -185,28 +189,14 @@ async function route(
         }));
       }),
     );
-    const tagged: TaggedTabsResult = { browsers: targets, tabs: perBrowser.flat() };
-    return tagged;
+    // Tabs carry their origin so ids from two browsers can never be confused.
+    return { browsers: targets, tabs: perBrowser.flat() };
   }
 
-  if (!isExposedMethod(name)) {
-    throw new BridgeRequestError("bad-request", `Unknown tool ${name}.`);
-  }
   // Everything else is tab-scoped: ids only mean something inside one browser.
   const conn = selectOne(summaries, target);
   const result = await ctx.request(conn.connectionId, name, params);
   return { browser: conn.label, connectionId: conn.connectionId, ...asObject(result) };
-}
-
-const EXPOSED_METHODS: readonly BridgeMethod[] = [
-  "tab_read",
-  "tab_clip",
-  "tabs_close",
-  "undo_close",
-];
-
-function isExposedMethod(name: string): name is BridgeMethod {
-  return (EXPOSED_METHODS as readonly string[]).includes(name);
 }
 
 function asObject(value: unknown): Record<string, unknown> {

@@ -1,7 +1,7 @@
 // Wires the two halves together: MCP on stdio facing the agent, WebSocket hub
 // on loopback facing the browsers.
 
-import { ConfigError, parseConfig, usage } from "./config.js";
+import { ConfigError, parseConfig, USAGE } from "./config.js";
 import { Hub } from "./hub.js";
 import { serveStdio } from "./mcp.js";
 import { createToolCaller, GULLET_INSTRUCTIONS, GULLET_TOOLS } from "./tools.js";
@@ -13,7 +13,7 @@ export async function main(
   env: Readonly<Record<string, string | undefined>>,
 ): Promise<number> {
   if (argv.includes("--help") || argv.includes("-h")) {
-    console.error(usage());
+    console.error(USAGE);
     return 0;
   }
 
