@@ -9,10 +9,6 @@ import type { ClosedTabEntry } from "./bridge-protocol.js";
 
 export const UNDO_LOG_KEY = "bridgeUndoLog";
 
-/** Retention: newest-first, bounded on both batch count and total entries. */
-const UNDO_LOG_MAX_BATCHES = 20;
-const UNDO_LOG_MAX_ENTRIES = 500;
-
 export interface UndoBatch {
   id: string;
   closedAt: number;
@@ -24,10 +20,8 @@ export interface UndoLogLimits {
   maxEntries: number;
 }
 
-const DEFAULT_LIMITS: UndoLogLimits = {
-  maxBatches: UNDO_LOG_MAX_BATCHES,
-  maxEntries: UNDO_LOG_MAX_ENTRIES,
-};
+/** Retention: newest-first, bounded on both batch count and total entries. */
+const DEFAULT_LIMITS: UndoLogLimits = { maxBatches: 20, maxEntries: 500 };
 
 /**
  * Prepend `batch` and drop the oldest batches until both limits hold. A single

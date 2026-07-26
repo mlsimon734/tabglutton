@@ -8,7 +8,7 @@
 // before it happens.
 
 import {
-  clipFilePath,
+  delay,
   markdownForClip,
   OBSIDIAN_HANDOFF_GAP_MS,
   resolveClipRequest,
@@ -87,10 +87,6 @@ export interface BridgeMethodDeps {
   extract: (tabId: number) => Promise<BridgeExtractResult>;
   openObsidianUrl: (url: string) => Promise<void>;
   copyToClipboardViaTab: (tabId: number, text: string) => Promise<boolean>;
-}
-
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function fail(code: BridgeErrorCode, message: string): never {
@@ -295,8 +291,11 @@ export class BridgeMethodRunner {
    * cannot host a content script and are reported with a distinct code so the
    * agent can say "needs manual load" instead of retrying.
    */
-  private async readTab(tabId: number): Promise<{ tab: browser.tabs.Tab; payload: ClipPayload }> {
+  private async readTab(tabId: number): Promise<ClipPayload> {
     const tab = await getTabOrFail(tabId);
+    // Deliberately the committed `tab.url`, not the `tabUrl` fallback: a tab
+    // still resolving its `pendingUrl` has no document to extract, and `wake` is
+    // false here, so there is nothing to wait for either.
     if (!tab.url?.startsWith("http://") && !tab.url?.startsWith("https://")) {
       fail("unsupported", "Only http and https pages can be read.");
     }
@@ -310,12 +309,12 @@ export class BridgeMethodRunner {
     if (!result.ok || !result.payload) {
       fail("extract-failed", result.error ?? "Extraction failed.");
     }
-    return { tab, payload: result.payload };
+    return result.payload;
   }
 
   private async tabRead(raw: unknown): Promise<TabReadResult> {
     const { tabId } = parseTabReadParams(raw);
-    const { payload } = await this.readTab(tabId);
+    const payload = await this.readTab(tabId);
     return {
       tabId,
       title: payload.title,
@@ -337,12 +336,13 @@ export class BridgeMethodRunner {
       fail("vault-missing", "No Obsidian vault is configured in Tabglutton's settings.");
     }
 
-    const { payload } = await this.readTab(params.tabId);
+    const payload = await this.readTab(params.tabId);
     const rule = pickRule(payload.url);
     const content = markdownForClip(payload);
-    const file = clipFilePath(payload, rule, settings.clippingsBaseFolder);
 
-    await this.handoff(async () => {
+    // Taken from the request rather than derived again, so the path reported to
+    // the agent is by construction the one the `obsidian://` URL was built from.
+    const file = await this.handoff(async () => {
       const request = await resolveClipRequest(
         payload,
         vault,
@@ -353,6 +353,7 @@ export class BridgeMethodRunner {
         (text) => this.deps.copyToClipboardViaTab(params.tabId, text),
       );
       await this.deps.openObsidianUrl(request.url);
+      return request.file;
     });
 
     const filed = { tabId: params.tabId, title: payload.title, url: payload.url, file };
@@ -425,14 +426,19 @@ export class BridgeMethodRunner {
     return { batchId: batch.id, restored: ordered.length - failed.length, failed: failed.length };
   }
 
-  private handoff(task: () => Promise<void>): Promise<void> {
+  private handoff<T>(task: () => Promise<T>): Promise<T> {
     const next = this.handoffQueue.then(async () => {
-      await task();
+      const result = await task();
       await delay(OBSIDIAN_HANDOFF_GAP_MS);
+      return result;
     });
     // Keep the chain alive even if a handoff rejects, so one bad clip does not
-    // wedge every later one.
-    this.handoffQueue = next.catch(() => {});
+    // wedge every later one. Discards the value as well as the error — the
+    // queue only tracks ordering.
+    this.handoffQueue = next.then(
+      () => {},
+      () => {},
+    );
     return next;
   }
 }

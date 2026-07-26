@@ -113,29 +113,27 @@ function parsePort(raw: string): number {
   return isBridgePort(port) ? port : DEFAULT_BRIDGE_PORT;
 }
 
+/** Text inputs save on a trailing edge, so a save is not issued per keystroke. */
+function queueSave(): void {
+  if (saveTimer) clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => void save(), 400);
+}
+
 for (const el of [stripFragment, bridgeEnabled, ...scopeRadios, ...clipModeRadios]) {
   el.addEventListener("change", () => void save());
 }
-extraStripParams.addEventListener("input", () => {
-  if (saveTimer) clearTimeout(saveTimer);
-  saveTimer = setTimeout(() => void save(), 400);
-});
+extraStripParams.addEventListener("input", queueSave);
 obsidianVault.addEventListener("input", () => {
   updateVaultWarning();
-  if (saveTimer) clearTimeout(saveTimer);
-  saveTimer = setTimeout(() => void save(), 400);
+  queueSave();
 });
-clippingsBaseFolder.addEventListener("input", () => {
-  if (saveTimer) clearTimeout(saveTimer);
-  saveTimer = setTimeout(() => void save(), 400);
-});
+clippingsBaseFolder.addEventListener("input", queueSave);
 
 // ---------- agent bridge ----------
 
 bridgePort.addEventListener("input", () => {
   updateBridgeSnippet();
-  if (saveTimer) clearTimeout(saveTimer);
-  saveTimer = setTimeout(() => void save(), 400);
+  queueSave();
 });
 
 bridgeTokenGenerate.addEventListener("click", () => {

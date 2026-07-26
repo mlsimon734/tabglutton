@@ -8,6 +8,8 @@
 // stdout is the transport. Every diagnostic in this package goes to stderr; a
 // stray console.log would corrupt the stream and break the session.
 
+import { asRecord as asRecordOrNull } from "../../src/bridge-protocol.js";
+
 export const MCP_LATEST_PROTOCOL = "2025-06-18";
 const MCP_SUPPORTED_PROTOCOLS = [MCP_LATEST_PROTOCOL, "2025-03-26", "2024-11-05"];
 
@@ -56,10 +58,9 @@ export function negotiateProtocol(requested: unknown): string {
     : MCP_LATEST_PROTOCOL;
 }
 
+/** A missing or non-object member is an empty bag here — every read is optional. */
 function asRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : {};
+  return asRecordOrNull(value) ?? {};
 }
 
 /**

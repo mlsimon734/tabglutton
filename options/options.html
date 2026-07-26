@@ -213,6 +213,8 @@
             </small>
           </div>
           <div class="setting-control">
+            <!-- Bounds mirror isBridgePort() in src/bridge-protocol.ts; HTML cannot
+                 import, and parsePort() re-checks on save, so this is a hint only. -->
             <input type="number" id="bridgePort" min="1024" max="65535" placeholder="4588" />
           </div>
         </div>

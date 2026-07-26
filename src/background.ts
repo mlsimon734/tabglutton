@@ -7,6 +7,7 @@
 import { BridgeClient, type BridgeStatus } from "./bridge-client.js";
 import { BridgeMethodRunner } from "./bridge-methods.js";
 import {
+  delay,
   markdownForClip,
   OBSIDIAN_HANDOFF_GAP_MS,
   resolveClipRequest,
@@ -249,19 +250,30 @@ function onTabUpdated(listener: Parameters<typeof browser.tabs.onUpdated.addList
   }
 }
 
+/**
+ * Trailing-edge coalesce for the tab-event listeners, which fire once *per tab*.
+ * A bridge triage run closes a batch of ~180 in one call and `undo_close`
+ * recreates them just as fast; without this each tab would kick off its own
+ * `tabs.query` + full duplicate grouping to land on a single badge number.
+ */
+let badgeTimer: ReturnType<typeof setTimeout> | undefined;
+function queueBadgeRefresh(): void {
+  if (badgeTimer) clearTimeout(badgeTimer);
+  badgeTimer = setTimeout(() => {
+    badgeTimer = undefined;
+    void refreshBadge();
+  }, 250);
+}
+
 onTabUpdated((_tabId, changeInfo) => {
   if (changeInfo.status === "complete") {
-    void refreshBadge();
+    queueBadgeRefresh();
   }
 });
 
-browser.tabs.onRemoved.addListener(() => {
-  void refreshBadge();
-});
+browser.tabs.onRemoved.addListener(queueBadgeRefresh);
 
-browser.tabs.onCreated.addListener(() => {
-  void refreshBadge();
-});
+browser.tabs.onCreated.addListener(queueBadgeRefresh);
 
 browser.storage.onChanged.addListener(async (changes, area) => {
   if (area !== "local") return;
@@ -440,10 +452,6 @@ async function clipTab(
     }
     return { ok: false, error: errorMessage(err) };
   }
-}
-
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 // Runs inside the source tab's content-script world. With `clipboardWrite`

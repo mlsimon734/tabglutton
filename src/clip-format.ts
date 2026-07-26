@@ -142,13 +142,20 @@ export const CLIPBOARD_FALLBACK_CONTENT =
  */
 export const OBSIDIAN_HANDOFF_GAP_MS = 200;
 
+/** Lives beside the gap it is used to wait out, so both pacers share one copy. */
+export function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 export interface ObsidianClipRequest {
   url: string;
   clipboard: string | null;
+  /** Vault-relative note path this request files under, without extension. */
+  file: string;
 }
 
 /** Vault-relative note path a clip will be filed under, without extension. */
-export function clipFilePath(
+function clipFilePath(
   payload: ClipPayload,
   rule: SiteRule | null,
   baseFolder: string = DEFAULT_CLIPPER_PATH,
@@ -192,8 +199,8 @@ export function obsidianClipRequest(
   if (vault) url += `&vault=${encodeURIComponent(vault)}`;
   if (mode === "clipboard") {
     url += `&clipboard&content=${encodeURIComponent(CLIPBOARD_FALLBACK_CONTENT)}`;
-    return { url, clipboard: content };
+    return { url, clipboard: content, file };
   }
   url += `&content=${encodeURIComponent(content)}`;
-  return { url, clipboard: null };
+  return { url, clipboard: null, file };
 }

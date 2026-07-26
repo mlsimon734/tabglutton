@@ -12,6 +12,7 @@ import {
   type BridgeMessage,
 } from "../../src/bridge-protocol.js";
 import { Hub, isExtensionOrigin } from "../src/hub.js";
+import { EXT_VERSION } from "./fixtures.js";
 
 const TOKEN = "test-token";
 const EXTENSION_ORIGIN = "moz-extension://11111111-2222-3333-4444-555555555555";
@@ -77,7 +78,7 @@ class FakeExtension {
       type: "hello",
       proto,
       browser: "firefox",
-      extVersion: "0.1.2.1",
+      extVersion: EXT_VERSION,
       label: "Zen",
       nonce,
       proof: await deriveProof(token, challenge.nonce),
@@ -131,7 +132,7 @@ describe("handshake", () => {
     const ext = new FakeExtension(started.port);
     const connectionId = await ext.handshake();
     expect(started.summaries()).toEqual([
-      { connectionId, browser: "firefox", label: "Zen", extVersion: "0.1.2.1" },
+      { connectionId, browser: "firefox", label: "Zen", extVersion: EXT_VERSION },
     ]);
   });
 
@@ -145,7 +146,7 @@ describe("handshake", () => {
       type: "hello",
       proto: BRIDGE_PROTO,
       browser: "firefox",
-      extVersion: "0.1.2.1",
+      extVersion: EXT_VERSION,
       label: "Zen",
       nonce,
       proof: await deriveProof(TOKEN, (challenge as { nonce: string }).nonce),
@@ -161,7 +162,7 @@ describe("handshake", () => {
       type: "hello",
       proto: BRIDGE_PROTO,
       browser: "firefox",
-      extVersion: "0.1.2.1",
+      extVersion: EXT_VERSION,
       label: "Zen",
       nonce: randomNonce(),
       proof: await deriveProof("wrong-token", (challenge as { nonce: string }).nonce),
@@ -179,7 +180,7 @@ describe("handshake", () => {
       type: "hello",
       proto: BRIDGE_PROTO,
       browser: "firefox",
-      extVersion: "0.1.2.1",
+      extVersion: EXT_VERSION,
       label: "Zen",
       nonce: randomNonce(),
       proof: await deriveProof("", (challenge as { nonce: string }).nonce),

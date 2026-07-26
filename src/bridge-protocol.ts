@@ -275,11 +275,24 @@ export interface UndoCloseResult {
 
 // --- Parsing ---------------------------------------------------------------
 
-function asRecord(value: unknown): Record<string, unknown> | null {
+/** Plain-object guard. Shared: both ends narrow untrusted JSON this way. */
+export function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : null;
 }
+
+/** Every `type` this protocol carries — kept beside the unions it mirrors. */
+const MESSAGE_TYPES: ReadonlySet<string> = new Set([
+  "challenge",
+  "hello",
+  "hello-ack",
+  "hello-error",
+  "request",
+  "response",
+  "ping",
+  "pong",
+]);
 
 /** Parse a frame into a typed message, or null if it is not one we understand. */
 export function parseMessage(raw: string): BridgeMessage | null {
@@ -291,19 +304,7 @@ export function parseMessage(raw: string): BridgeMessage | null {
   }
   const obj = asRecord(parsed);
   if (!obj || typeof obj.type !== "string") return null;
-  switch (obj.type) {
-    case "challenge":
-    case "hello":
-    case "hello-ack":
-    case "hello-error":
-    case "request":
-    case "response":
-    case "ping":
-    case "pong":
-      return obj as unknown as BridgeMessage;
-    default:
-      return null;
-  }
+  return MESSAGE_TYPES.has(obj.type) ? (obj as unknown as BridgeMessage) : null;
 }
 
 /** Narrow untrusted `params` for a method, throwing a BridgeError-shaped reason. */
@@ -319,6 +320,21 @@ export class BridgeRequestError extends Error {
   toBridgeError(): BridgeError {
     return { code: this.code, message: this.message };
   }
+}
+
+/** Message of an arbitrary throw. Both ends surface these to a model verbatim. */
+export function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+/**
+ * Any throw as a wire error. What an *unexpected* error becomes is part of the
+ * shared contract, so it is decided here rather than once per runtime.
+ */
+export function toBridgeError(err: unknown): BridgeError {
+  return err instanceof BridgeRequestError
+    ? err.toBridgeError()
+    : { code: "internal", message: errorMessage(err) };
 }
 
 function badRequest(message: string): never {

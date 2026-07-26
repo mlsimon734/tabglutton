@@ -3,8 +3,10 @@
 // clicking, no typing, no arbitrary script execution.
 
 import {
+  asRecord,
   BridgeRequestError,
   isBridgeMethod,
+  toBridgeError,
   type BridgeMethod,
 } from "../../src/bridge-protocol.js";
 import type { McpTool, McpToolResult } from "./mcp.js";
@@ -201,13 +203,12 @@ async function route(
   // Everything else is tab-scoped: ids only mean something inside one browser.
   const conn = selectOne(summaries, target);
   const result = await ctx.request(conn.connectionId, name, params);
-  return { browser: conn.label, connectionId: conn.connectionId, ...asObject(result) };
-}
-
-function asObject(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : { result: value };
+  // A non-object result would otherwise spread into nothing and vanish.
+  return {
+    browser: conn.label,
+    connectionId: conn.connectionId,
+    ...(asRecord(result) ?? { result }),
+  };
 }
 
 // Compact JSON, not pretty-printed: every one of these results goes into a
@@ -217,10 +218,7 @@ function ok(value: unknown): McpToolResult {
 }
 
 function toolError(err: unknown): McpToolResult {
-  const { code, message } =
-    err instanceof BridgeRequestError
-      ? err.toBridgeError()
-      : { code: "internal" as const, message: err instanceof Error ? err.message : String(err) };
+  const { code, message } = toBridgeError(err);
   return {
     content: [{ type: "text", text: JSON.stringify({ error: code, message }) }],
     isError: true,

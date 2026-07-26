@@ -1,19 +1,7 @@
 import { describe, test, expect } from "bun:test";
 import { BridgeRequestError } from "../../src/bridge-protocol.js";
 import { selectAll, selectOne, type ConnectionSummary } from "../src/select.js";
-
-const zen: ConnectionSummary = {
-  connectionId: "conn-1",
-  browser: "firefox",
-  label: "Zen",
-  extVersion: "0.1.2.1",
-};
-const chrome: ConnectionSummary = {
-  connectionId: "conn-2",
-  browser: "chrome",
-  label: "Chrome",
-  extVersion: "0.1.2.1",
-};
+import { chrome, zen } from "./fixtures.js";
 
 function codeOf(fn: () => unknown): string {
   try {

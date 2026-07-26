@@ -15,6 +15,7 @@ import {
   parseMessage,
   proofsMatch,
   randomNonce,
+  toBridgeError,
   BridgeRequestError,
   type BridgeMethod,
   type ClientMessage,
@@ -24,7 +25,7 @@ import {
 import type { Settings } from "./storage.js";
 import { IS_CHROME, TARGET } from "./target.js";
 
-export const BRIDGE_ALARM = "tabglutton-bridge-reconnect";
+const BRIDGE_ALARM = "tabglutton-bridge-reconnect";
 
 /**
  * How often we re-dial while idle. 30s is Chrome's documented alarm floor;
@@ -42,7 +43,9 @@ export interface BridgeClientDeps {
   onStatusChange: (status: BridgeStatus) => void;
 }
 
-type Phase = "closed" | "connecting" | "handshaking" | "open";
+// "connecting" covers the handshake too — no caller distinguishes the two, and
+// the handshake deadline is tracked by `handshakeTimer` rather than by a phase.
+type Phase = "closed" | "connecting" | "open";
 
 export class BridgeClient {
   private readonly deps: BridgeClientDeps;
@@ -151,7 +154,6 @@ export class BridgeClient {
 
     socket.addEventListener("open", () => {
       // The server speaks first (challenge); we just arm a deadline.
-      this.setPhase("handshaking");
       this.handshakeTimer = setTimeout(() => {
         console.warn("[tabglutton] bridge handshake timed out");
         this.teardown();
@@ -244,15 +246,12 @@ export class BridgeClient {
     try {
       return { type: "response", id, result: await this.deps.run(method, params) };
     } catch (err) {
-      if (err instanceof BridgeRequestError) {
-        return { type: "response", id, error: err.toBridgeError() };
+      // A BridgeRequestError is an answer, not an incident; anything else is a
+      // bug worth surfacing in the console as well as on the wire.
+      if (!(err instanceof BridgeRequestError)) {
+        console.warn("[tabglutton] bridge method threw", method, err);
       }
-      console.warn("[tabglutton] bridge method threw", method, err);
-      return {
-        type: "response",
-        id,
-        error: { code: "internal", message: err instanceof Error ? err.message : String(err) },
-      };
+      return { type: "response", id, error: toBridgeError(err) };
     }
   }
 

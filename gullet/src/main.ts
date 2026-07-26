@@ -6,6 +6,7 @@ import { Hub } from "./hub.js";
 import { serveStdio } from "./mcp.js";
 import { createToolCaller, GULLET_INSTRUCTIONS, GULLET_TOOLS } from "./tools.js";
 
+/** Reported to the MCP client on initialize. Keep in step with gullet/package.json. */
 export const GULLET_VERSION = "0.1.0";
 
 export async function main(
