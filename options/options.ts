@@ -167,13 +167,15 @@ async function copyText(text: string, okMessage: string): Promise<void> {
 function bridgeSnippetText(): string {
   const port = parsePort(bridgePort.value);
   const token = bridgeToken.value || "<generate a token above>";
+  // Named "tabglutton" rather than "gullet": this key becomes the tool
+  // namespace the agent sees, and users know the product by one name.
   return JSON.stringify(
     {
       mcpServers: {
-        gullet: {
+        tabglutton: {
           command: "bun",
           args: ["run", "/path/to/tabglutton/gullet/gullet.ts", "--port", String(port)],
-          env: { GULLET_TOKEN: token },
+          env: { TABGLUTTON_TOKEN: token },
         },
       },
     },

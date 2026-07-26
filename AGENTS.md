@@ -56,6 +56,12 @@ This repo uses [jj](https://github.com/martinvonz/jj) in colocated mode — `.gi
 
 Reach for `jj` only when its unique features are explicitly needed — e.g. `jj op log` / `jj undo` to recover from a mistake, `jj split` / `jj absorb` for hunk-level commit surgery, or `jj describe` to rewrite a description. Do not run `jj bookmark`, `jj rebase`, or other history-rewriting commands without checking with the user first; divergent change-ids and bookmark conflicts are easy to create and hard to clean up non-interactively.
 
+## Versioning
+
+Versions are `major.minor.patch.build`, and Firefox accepts **at most four parts**. The first three are the release version and are the only ones that belong in `package.json` / `manifest.json`; the fourth is a counter for signed test builds and is owned entirely by `bun run sign:dev`, which writes it into the artifact and a local git tag and then restores both files. Keeping `package.json` at three parts is also what lets `commit-and-tag-version` work at all — semver has no fourth position.
+
+Committing a four-part version breaks that invariant (it happened once, in `ebbb933 Release 0.1.2.1`). `sign-dev.ts` now slices to the release triple so it cannot emit a five-part version AMO would reject, and counts the build number from `max(highest local tag, any fourth part in package.json)` — AMO requires versions to be unique and strictly increasing, and the tags are local and unpushed, so they are not trustworthy on their own. Bump the release version normally; let the build counter take care of itself.
+
 ## Commit & Pull Request Guidelines
 
 The current history uses a concise imperative subject with optional scope detail, for example `Initial commit: tab dedup extension v1.1 (TypeScript)`. Keep subjects specific and near 72 characters when practical. Pull requests should describe the user-visible change, list verification commands, mention manifest or permission changes, and include screenshots when popup or options UI changes are visible.

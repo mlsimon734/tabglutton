@@ -14,6 +14,23 @@ describe("parseConfig()", () => {
     });
   });
 
+  test("accepts TABGLUTTON_* as the primary spelling", () => {
+    expect(parseConfig([], { TABGLUTTON_TOKEN: "abc", TABGLUTTON_PORT: "5000" })).toEqual({
+      port: 5000,
+      token: "abc",
+    });
+  });
+
+  test("prefers TABGLUTTON_* when both spellings are set", () => {
+    const config = parseConfig([], {
+      TABGLUTTON_TOKEN: "new",
+      GULLET_TOKEN: "old",
+      TABGLUTTON_PORT: "5002",
+      GULLET_PORT: "5000",
+    });
+    expect(config).toEqual({ port: 5002, token: "new" });
+  });
+
   test("flags override the environment", () => {
     const config = parseConfig(["--port", "5001", "--token", "flag"], {
       GULLET_PORT: "5000",

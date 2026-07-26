@@ -155,7 +155,7 @@ export function createToolCaller(
       if (!ctx.tokenConfigured) {
         throw new BridgeRequestError(
           "unauthorized",
-          "Gullet has no token. Open Tabglutton's settings, enable the agent bridge, generate a token, and set GULLET_TOKEN to it.",
+          "Tabglutton's bridge has no token. Open Tabglutton's settings, enable the agent bridge, generate a token, and set TABGLUTTON_TOKEN to it.",
         );
       }
       return ok(await route(ctx, name, args));

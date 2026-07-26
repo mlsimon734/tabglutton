@@ -205,7 +205,7 @@ export class Hub {
       this.rejectHandshake(
         ws,
         "unauthorized",
-        "Gullet has no token configured. Set GULLET_TOKEN to the value from Tabglutton's settings.",
+        "Tabglutton's bridge has no token configured. Set TABGLUTTON_TOKEN to the value from Tabglutton's settings.",
       );
       return;
     }

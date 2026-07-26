@@ -15,6 +15,11 @@ Claude Code ──MCP (stdio)──► Gullet ──WebSocket (127.0.0.1:4588)�
 Zero dependencies: it runs on Bun's built-ins alone, so there is nothing to install beyond
 having the repo checked out.
 
+**Two names, one product.** "Gullet" is the internal name for this sidecar; everything a
+user or an agent sees says **Tabglutton**. So the MCP server registers as `tabglutton`, the
+tools appear under that namespace, and the token is `TABGLUTTON_TOKEN`. `GULLET_TOKEN` and
+`GULLET_PORT` still work as aliases.
+
 ## Setup
 
 1. **Turn the bridge on in the browser.** Tabglutton → Settings → _Agent bridge_ → enable,
@@ -28,10 +33,10 @@ having the repo checked out.
    ```json
    {
      "mcpServers": {
-       "gullet": {
+       "tabglutton": {
          "command": "bun",
          "args": ["run", "/path/to/tabglutton/gullet/gullet.ts", "--port", "4588"],
-         "env": { "GULLET_TOKEN": "<token from the settings page>" }
+         "env": { "TABGLUTTON_TOKEN": "<token from the settings page>" }
        }
      }
    }
@@ -40,7 +45,7 @@ having the repo checked out.
    For Claude Code specifically:
 
    ```sh
-   claude mcp add gullet --env GULLET_TOKEN=<token> -- bun run /path/to/tabglutton/gullet/gullet.ts
+   claude mcp add tabglutton --env TABGLUTTON_TOKEN=<token> -- bun run /path/to/tabglutton/gullet/gullet.ts
    ```
 
 3. **Start a session.** The agent spawns Gullet, Gullet opens the port, and the extension's
@@ -54,10 +59,10 @@ once — a Zen window and a Chrome profile, say — and each tool call picks one
 
 ## Configuration
 
-| Flag      | Env            | Default | Notes                                                                              |
-| --------- | -------------- | ------- | ---------------------------------------------------------------------------------- |
-| `--port`  | `GULLET_PORT`  | `4588`  | Must match the port in Tabglutton's settings.                                      |
-| `--token` | `GULLET_TOKEN` | —       | Required. Prefer the env var: process arguments are readable by other local users. |
+| Flag      | Env                | Default | Notes                                                                              |
+| --------- | ------------------ | ------- | ---------------------------------------------------------------------------------- |
+| `--port`  | `TABGLUTTON_PORT`  | `4588`  | Must match the port in Tabglutton's settings.                                      |
+| `--token` | `TABGLUTTON_TOKEN` | —       | Required. Prefer the env var: process arguments are readable by other local users. |
 
 Diagnostics go to **stderr**; stdout is the MCP transport and carries nothing else.
 
@@ -99,7 +104,7 @@ upgrading `ws://` to `wss://` and Gullet is being handed a TLS ClientHello. `man
 must declare `content_security_policy.extension_pages` explicitly — Firefox's MV3 default
 includes `upgrade-insecure-requests`, which does this to loopback WebSockets as well.
 
-**"Token mismatch."** `GULLET_TOKEN` and the token in Tabglutton's settings differ.
+**"Token mismatch."** `TABGLUTTON_TOKEN` and the token in Tabglutton's settings differ.
 Regenerating the token in settings invalidates any sidecar still holding the old one.
 
 **"could not listen on 127.0.0.1:4588"** Another Gullet — usually from a second agent
@@ -110,7 +115,7 @@ cannot share a port; give the second one a different `--port` and match it in se
 by hand to watch it:
 
 ```sh
-GULLET_TOKEN=<token> bun run gullet/gullet.ts
+TABGLUTTON_TOKEN=<token> bun run gullet/gullet.ts
 ```
 
 Then poke the socket directly:

@@ -41,7 +41,7 @@ export async function main(
   if (!config.token) {
     // Not fatal: the MCP server still starts so tool calls can explain the fix,
     // which the agent can relay. A hard exit just reads as "server crashed".
-    console.error("[gullet] no token configured — set GULLET_TOKEN. Refusing all connections.");
+    console.error("[gullet] no token configured — set TABGLUTTON_TOKEN. Refusing all connections.");
   }
   console.error(`[gullet] listening on ws://127.0.0.1:${hub.port} (proto MCP over stdio)`);
 
@@ -53,7 +53,9 @@ export async function main(
   process.on("SIGTERM", shutdown);
 
   await serveStdio({
-    name: "gullet",
+    // What the agent sees, and what namespaces its tools. Users know this thing
+    // as Tabglutton; "gullet" is the internal name for the sidecar half only.
+    name: "tabglutton",
     version: GULLET_VERSION,
     instructions: GULLET_INSTRUCTIONS,
     tools: GULLET_TOOLS,

@@ -14,8 +14,11 @@ export const USAGE = `gullet — Tabglutton's agent bridge sidecar
 
   bun run gullet/gullet.ts [--port <1024-65535>] [--token <token>]
 
-  --port   loopback port to listen on (default ${DEFAULT_BRIDGE_PORT}, env GULLET_PORT)
-  --token  shared token from Tabglutton's options page (env GULLET_TOKEN)
+  --port   loopback port to listen on (default ${DEFAULT_BRIDGE_PORT}, env TABGLUTTON_PORT)
+  --token  shared token from Tabglutton's options page (env TABGLUTTON_TOKEN)
+
+GULLET_PORT / GULLET_TOKEN are accepted as aliases — users know this as
+Tabglutton, "gullet" is only the sidecar's internal name.
 
 The token is required before any browser may connect. Prefer the environment
 variable: process arguments are visible to other local users, environments are not.`;
@@ -24,8 +27,10 @@ export function parseConfig(
   argv: readonly string[],
   env: Readonly<Record<string, string | undefined>>,
 ): GulletConfig {
-  let port: string | undefined = env.GULLET_PORT;
-  let token: string | undefined = env.GULLET_TOKEN;
+  // Either spelling works, so a user who only ever sees "Tabglutton" in the
+  // options page never has to learn that the process is called gullet.
+  let port: string | undefined = env.TABGLUTTON_PORT ?? env.GULLET_PORT;
+  let token: string | undefined = env.TABGLUTTON_TOKEN ?? env.GULLET_TOKEN;
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i] as string;
