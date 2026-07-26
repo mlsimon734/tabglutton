@@ -102,7 +102,13 @@ function fail(code: BridgeErrorCode, message: string): never {
  * the Chrome-only `pendingUrl`. A tab caught mid-load would otherwise look like
  * it has no address at all — missing from a listing and, worse, unrecordable in
  * the undo log, so closing it would be the one thing `undo_close` cannot
- * reverse. Firefox fills `url` in immediately and never needs the fallback.
+ * reverse.
+ *
+ * Gecko has no equivalent field: it reports `about:blank` for the same window
+ * (verified on Zen 1.21.9b), so a tab closed mid-load is recorded as
+ * about:blank and reopens blank. Nothing in the API exposes the pending target
+ * there, so that stays a known limitation — narrow in practice, since triage
+ * acts on tabs that came back from a listing and have long since committed.
  */
 function tabUrl(tab: browser.tabs.Tab): string | undefined {
   return tab.url || (tab as { pendingUrl?: string }).pendingUrl || undefined;

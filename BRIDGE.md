@@ -223,15 +223,20 @@ Strategy, in order:
    with both connected at once (14 tabs across the two), a tab-scoped call naming no
    `browser` is refused with `ambiguous-target` rather than guessing; and a sidecar started
    mid-session is picked up by the idle reconnect loop without a reload.
-   - The close/undo and revocation semantics above are verified the same way, driven from a
-     script that runs the real hub against **Chrome 150** over CDP: duplicate ids collapse to
-     one close, a tab closed before its navigation commits is still recorded, out-of-order
-     ids restore to their recorded index order, a batch whose window vanished comes back in a
-     window of the same privacy context, a private batch reopens private (and is left failed,
-     never normalised, when private access is off), a partial undo keeps its failures for a
-     retry, and regenerating the token drops the live socket rather than letting the old one
-     keep serving. Run against pre-fix code the same script fails six of those; the Firefox
-     path is unproven, as with `tab-discarded` below.
+   - The close/undo and revocation semantics above are verified on **both** engines, driven
+     from a script that runs the real hub against the browser — **Chrome 150** over CDP
+     (17 checks) and **Zen 1.21.9b** over Marionette (15 checks): duplicate ids collapse to
+     one close, out-of-order ids restore to their recorded index order, a batch whose window
+     vanished comes back in a window of the same privacy context, a private batch reopens
+     private, a partial undo keeps its failures for a retry (Gecko's fixture is a real
+     `about:config` tab, which `tabs.create` refuses), and regenerating the token drops the
+     live socket rather than letting the old one keep serving. Against pre-fix code the same
+     scripts fail 6 checks on Chrome and 11 on Zen — including the private URLs landing in a
+     _normal_ window on Gecko, and a revoked token still being served.
+   - Two engine differences fell out of that run and are recorded in AGENTS.md: a tab whose
+     navigation has not committed has no recoverable URL on Gecko (it reads `about:blank`,
+     where Chrome offers `pendingUrl`), and Zen mirrors its essential tabs into every new
+     window, so "close this window's tabs" is a bigger batch there than it looks.
    - `tab_read` on a genuinely discarded tab returns a clean `tab-discarded` — exercised on
      **Chrome only**, where `chrome.tabs.discard()` can manufacture the fixture over CDP.
      The guard is one shared, target-agnostic line reading the standard `tab.discarded`, but
