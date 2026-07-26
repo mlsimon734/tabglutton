@@ -203,12 +203,16 @@ Strategy, in order:
    in Zen and in Chrome, read a loaded tab, clip it to Obsidian, close it, undo the close.
    Protocol, auth, config, target selection, MCP framing, and a live-socket handshake and
    routing test are covered by `bun test`; the browser-API surface is verified by running
-   the definition-of-done end to end against a real browser. **Verified live against both
-   Zen and Chrome**, including the two cases the single-browser run could not reach: with
-   Zen and Chrome connected at once (10 tabs across both), a tab-scoped call that names no
-   `browser` is refused with `ambiguous-target` rather than guessing; and `tab_read` on a
-   genuinely discarded tab returns a clean `tab-discarded`. Also verified: a sidecar started
+   the definition-of-done end to end against a real browser. **All five tools verified live
+   against Zen and against Chrome 150**, on TypeScript 7 and Defuddle 0.19. Also verified:
+   with both connected at once (14 tabs across the two), a tab-scoped call naming no
+   `browser` is refused with `ambiguous-target` rather than guessing; and a sidecar started
    mid-session is picked up by the idle reconnect loop without a reload.
+   - `tab_read` on a genuinely discarded tab returns a clean `tab-discarded` — exercised on
+     **Chrome only**, where `chrome.tabs.discard()` can manufacture the fixture over CDP.
+     The guard is one shared, target-agnostic line reading the standard `tab.discarded`, but
+     the Firefox path is unproven, and it is the one that matters most: Zen restores tabs
+     lazily, so a large session is full of discarded tabs from the moment it opens.
 2. **Curation workflow**: a `/triage-tabs` skill (lives with the agent, not this repo):
    metadata cut → read survivors → digest note in Obsidian ("12 high-signal, 40 clipped,
    180 proposed closures — approve?"). Closure stays behind human approval.
