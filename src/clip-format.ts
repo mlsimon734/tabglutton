@@ -140,6 +140,16 @@ export interface ObsidianClipRequest {
   clipboard: string | null;
 }
 
+/** Vault-relative note path a clip will be filed under, without extension. */
+export function clipFilePath(
+  payload: ClipPayload,
+  rule: SiteRule | null,
+  baseFolder: string = DEFAULT_CLIPPER_PATH,
+): string {
+  const base = normalizeBaseFolder(baseFolder);
+  return `${folderForRule(rule, base)}/${sanitizeFileName(payload.title || payload.url)}`;
+}
+
 export function obsidianClipRequest(
   payload: ClipPayload,
   vault: string,
@@ -148,8 +158,7 @@ export function obsidianClipRequest(
   mode: ClipMode,
   baseFolder: string = DEFAULT_CLIPPER_PATH,
 ): ObsidianClipRequest {
-  const base = normalizeBaseFolder(baseFolder);
-  const file = `${folderForRule(rule, base)}/${sanitizeFileName(payload.title || payload.url)}`;
+  const file = clipFilePath(payload, rule, baseFolder);
   let url = `obsidian://new?file=${encodeURIComponent(file)}`;
   if (vault) url += `&vault=${encodeURIComponent(vault)}`;
   if (mode === "clipboard") {

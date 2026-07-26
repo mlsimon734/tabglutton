@@ -1,0 +1,13 @@
+{
+  "name": "gullet",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Tabglutton's agent bridge: an MCP server over stdio, a WebSocket hub on loopback.",
+  "bin": {
+    "gullet": "./gullet.ts"
+  },
+  "type": "module",
+  "scripts": {
+    "typecheck": "bunx tsc --noEmit -p tsconfig.json"
+  }
+}

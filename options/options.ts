@@ -1,3 +1,5 @@
+import type { GetBridgeStatusResponse } from "../src/background.js";
+import { DEFAULT_BRIDGE_PORT, generateToken } from "../src/bridge-protocol.js";
 import type { ClipMode, ScopeMode, Settings } from "../src/storage.js";
 import { IS_CHROME } from "../src/target.js";
 import { vaultWarningFor } from "../src/vault-warning.js";
@@ -12,6 +14,14 @@ const vaultWarning = document.getElementById("vaultWarning") as HTMLParagraphEle
 const scopeRadios = document.querySelectorAll<HTMLInputElement>('input[name="scope"]');
 const clipModeRadios = document.querySelectorAll<HTMLInputElement>('input[name="clipMode"]');
 const statusEl = document.getElementById("status") as HTMLParagraphElement;
+const bridgeEnabled = document.getElementById("bridgeEnabled") as HTMLInputElement;
+const bridgePort = document.getElementById("bridgePort") as HTMLInputElement;
+const bridgeToken = document.getElementById("bridgeToken") as HTMLInputElement;
+const bridgeTokenCopy = document.getElementById("bridgeTokenCopy") as HTMLButtonElement;
+const bridgeTokenGenerate = document.getElementById("bridgeTokenGenerate") as HTMLButtonElement;
+const bridgeStatusEl = document.getElementById("bridgeStatus") as HTMLSpanElement;
+const bridgeSnippet = document.getElementById("bridgeSnippet") as HTMLPreElement;
+const bridgeSnippetCopy = document.getElementById("bridgeSnippetCopy") as HTMLButtonElement;
 
 const DEFAULTS: Pick<
   Settings,
@@ -21,6 +31,9 @@ const DEFAULTS: Pick<
   | "obsidianVault"
   | "clippingsBaseFolder"
   | "clipMode"
+  | "bridgeEnabled"
+  | "bridgePort"
+  | "bridgeToken"
 > = {
   stripFragment: true,
   extraStripParams: [],
@@ -28,6 +41,9 @@ const DEFAULTS: Pick<
   obsidianVault: "",
   clippingsBaseFolder: "",
   clipMode: "clipboard",
+  bridgeEnabled: false,
+  bridgePort: DEFAULT_BRIDGE_PORT,
+  bridgeToken: "",
 };
 
 function parseParams(text: string): string[] {
@@ -51,6 +67,10 @@ async function load(): Promise<void> {
   for (const radio of clipModeRadios) {
     radio.checked = radio.value === settings.clipMode;
   }
+  bridgeEnabled.checked = settings.bridgeEnabled;
+  bridgePort.value = String(settings.bridgePort);
+  bridgeToken.value = settings.bridgeToken;
+  updateBridgeSnippet();
   if (IS_CHROME) {
     // Chrome has no tab.hidden / workspaces, so the scope choice is fixed.
     const scopeBlock = scopeRadios[0]?.closest(".setting.block") as HTMLElement | null;
@@ -79,11 +99,22 @@ async function save(): Promise<void> {
     obsidianVault: obsidianVault.value.trim(),
     clippingsBaseFolder: clippingsBaseFolder.value.trim(),
     clipMode,
+    bridgeEnabled: bridgeEnabled.checked,
+    bridgePort: parsePort(bridgePort.value),
+    bridgeToken: bridgeToken.value,
   });
   flashStatus("Saved");
 }
 
-for (const el of [stripFragment, ...scopeRadios, ...clipModeRadios]) {
+function parsePort(raw: string): number {
+  const port = Number.parseInt(raw, 10);
+  // Sub-1024 needs root to bind and 65535 is the ceiling; fall back rather than
+  // persist a value the sidecar could never listen on.
+  if (!Number.isInteger(port) || port < 1024 || port > 65535) return DEFAULT_BRIDGE_PORT;
+  return port;
+}
+
+for (const el of [stripFragment, bridgeEnabled, ...scopeRadios, ...clipModeRadios]) {
   el.addEventListener("change", () => void save());
 }
 extraStripParams.addEventListener("input", () => {
@@ -98,6 +129,97 @@ obsidianVault.addEventListener("input", () => {
 clippingsBaseFolder.addEventListener("input", () => {
   if (saveTimer) clearTimeout(saveTimer);
   saveTimer = setTimeout(() => void save(), 400);
+});
+
+// ---------- agent bridge ----------
+
+bridgePort.addEventListener("input", () => {
+  updateBridgeSnippet();
+  if (saveTimer) clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => void save(), 400);
+});
+
+bridgeTokenGenerate.addEventListener("click", () => {
+  bridgeToken.value = generateToken();
+  updateBridgeSnippet();
+  void save();
+});
+
+bridgeTokenCopy.addEventListener("click", () => {
+  if (!bridgeToken.value) {
+    flashStatus("No token yet");
+    return;
+  }
+  void copyText(bridgeToken.value, "Token copied");
+});
+
+bridgeSnippetCopy.addEventListener("click", () => {
+  void copyText(bridgeSnippetText(), "Config copied");
+});
+
+async function copyText(text: string, okMessage: string): Promise<void> {
+  try {
+    await navigator.clipboard.writeText(text);
+    flashStatus(okMessage);
+  } catch (err) {
+    console.warn("[tabglutton] clipboard write failed", err);
+    flashStatus("Copy failed");
+  }
+}
+
+function bridgeSnippetText(): string {
+  const port = parsePort(bridgePort.value);
+  const token = bridgeToken.value || "<generate a token above>";
+  return JSON.stringify(
+    {
+      mcpServers: {
+        gullet: {
+          command: "bun",
+          args: ["run", "/path/to/tabglutton/gullet/gullet.ts", "--port", String(port)],
+          env: { GULLET_TOKEN: token },
+        },
+      },
+    },
+    null,
+    2,
+  );
+}
+
+function updateBridgeSnippet(): void {
+  const code = bridgeSnippet.querySelector("code");
+  if (code) code.textContent = bridgeSnippetText();
+}
+
+const BRIDGE_STATUS_LABELS: Record<GetBridgeStatusResponse["status"], string> = {
+  disabled: "Off",
+  idle: "Waiting for a sidecar",
+  connecting: "Connecting…",
+  connected: "Connected",
+};
+
+async function refreshBridgeStatus(): Promise<void> {
+  let status: GetBridgeStatusResponse["status"] = "disabled";
+  try {
+    const res = (await browser.runtime.sendMessage({ type: "get-bridge-status" })) as
+      | GetBridgeStatusResponse
+      | undefined;
+    if (res) status = res.status;
+  } catch {
+    // Background asleep or restarting; treat as not connected and retry on the
+    // next tick rather than showing an error the user cannot act on.
+    status = bridgeEnabled.checked ? "idle" : "disabled";
+  }
+  bridgeStatusEl.textContent = BRIDGE_STATUS_LABELS[status];
+  bridgeStatusEl.dataset.state = status;
+}
+
+// The socket lives in the background; there is no event to subscribe to from
+// here, so poll while the options page is actually visible.
+setInterval(() => {
+  if (document.visibilityState === "visible") void refreshBridgeStatus();
+}, 2000);
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") void refreshBridgeStatus();
 });
 
 function updateVaultWarning(): void {
@@ -132,3 +254,4 @@ if (logoMark) {
 }
 
 void load();
+void refreshBridgeStatus();

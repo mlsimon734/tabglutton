@@ -4,6 +4,8 @@
 // in build.ts). Importing the bare "webextension-polyfill" specifier here would
 // break the Firefox background, which tsc emits unbundled — the bare specifier
 // is unresolvable in a Firefox module service worker and aborts registration.
+import { BridgeClient, type BridgeStatus } from "./bridge-client.js";
+import { BridgeMethodRunner } from "./bridge-methods.js";
 import {
   markdownForClip,
   obsidianClipRequest,
@@ -20,6 +22,7 @@ import {
   type Settings,
 } from "./storage.js";
 import { IS_CHROME } from "./target.js";
+import { UNDO_LOG_KEY } from "./undo-log.js";
 
 export type GetScopedTabsMessage = { type: "get-scoped-tabs" };
 export type ClipSelectedTabsMessage = {
@@ -34,6 +37,7 @@ export type ReopenTabsMessage = {
   records: ClosedTabRecord[];
 };
 export type OpenCockpitMessage = { type: "open-cockpit" };
+export type GetBridgeStatusMessage = { type: "get-bridge-status" };
 export type IncomingMessage =
   | GetScopedTabsMessage
   | ClipSelectedTabsMessage
@@ -42,7 +46,12 @@ export type IncomingMessage =
   | CloseTabsMessage
   | FocusTabMessage
   | ReopenTabsMessage
-  | OpenCockpitMessage;
+  | OpenCockpitMessage
+  | GetBridgeStatusMessage;
+
+export interface GetBridgeStatusResponse {
+  status: BridgeStatus;
+}
 
 export type ClipFailureReason = "extract-failed" | "trigger-failed";
 
@@ -111,6 +120,7 @@ interface ClipCurrentResultMessage extends ClipCurrentResponse {
 }
 
 let settings: Settings = defaults();
+let bridgeStatus: BridgeStatus = "disabled";
 const pendingClips = new Map<
   string,
   {
@@ -118,6 +128,26 @@ const pendingClips = new Map<
     timeout: ReturnType<typeof setTimeout>;
   }
 >();
+
+// Agent bridge (BRIDGE.md). The runner owns the tab/undo surface; everything
+// that touches a page is handed down from here, so the bridge cannot reach any
+// capability the popup does not already have.
+const bridgeRunner = new BridgeMethodRunner({
+  getSettings: () => settings,
+  extract: (tabId) => clipTab(tabId, { wake: false }),
+  openObsidianUrl: (url) => openObsidianUrl(url),
+  copyToClipboardViaTab: (tabId, text) => copyToClipboardViaTab(tabId, text),
+});
+
+const bridge = new BridgeClient({
+  getSettings: () => settings,
+  run: (method, params) => bridgeRunner.run(method, params),
+  onStatusChange: (status) => {
+    if (status === bridgeStatus) return;
+    bridgeStatus = status;
+    void refreshBadge();
+  },
+});
 
 function tabInScope(tab: Tab): boolean {
   if (!tab || !tab.url) return false;
@@ -139,11 +169,17 @@ async function refreshBadge(tabsHint?: Tab[]): Promise<void> {
   const groups = groupDuplicates(tabs, opts);
   const dupCount = groups.reduce((n, g) => n + (g.tabs.length - 1), 0);
   try {
-    await browser.action.setBadgeText({
-      text: dupCount > 0 ? String(dupCount) : "",
-    });
+    // The duplicate count is the badge's primary job. A live agent connection
+    // only claims the badge when there is nothing to report, as a terracotta
+    // dot — accent means "state indicator" in DESIGN.md, never decoration.
     if (dupCount > 0) {
+      await browser.action.setBadgeText({ text: String(dupCount) });
       await browser.action.setBadgeBackgroundColor({ color: "#ef4444" });
+    } else if (bridgeStatus === "connected") {
+      await browser.action.setBadgeText({ text: "•" });
+      await browser.action.setBadgeBackgroundColor({ color: "#7a4a2c" });
+    } else {
+      await browser.action.setBadgeText({ text: "" });
     }
   } catch (err) {
     console.warn("[tabglutton] badge update failed", err);
@@ -211,9 +247,13 @@ browser.tabs.onCreated.addListener(() => {
   void refreshBadge();
 });
 
-browser.storage.onChanged.addListener(async (_changes, area) => {
+browser.storage.onChanged.addListener(async (changes, area) => {
   if (area !== "local") return;
+  // The undo log lives in the same area but is not a setting; ignore its churn
+  // so a close batch does not trigger a settings reload and badge repaint.
+  if (Object.keys(changes).every((key) => key === UNDO_LOG_KEY)) return;
   settings = await loadSettings();
+  bridge.sync();
   await refreshBadge();
 });
 
@@ -334,17 +374,31 @@ async function ensureTabReady(tabId: number, timeoutMs: number): Promise<void> {
   });
 }
 
-async function clipTab(tabId?: number): Promise<ClipCurrentResponse> {
+interface ClipTabOptions {
+  /**
+   * Reload a discarded tab before extracting. True for user-initiated clips;
+   * the agent bridge passes false, because navigating on the agent's behalf is
+   * outside its trust boundary (see BRIDGE.md — `tab_load` is v1.1, opt-in).
+   */
+  wake: boolean;
+}
+
+async function clipTab(
+  tabId?: number,
+  { wake }: ClipTabOptions = { wake: true },
+): Promise<ClipCurrentResponse> {
   const tab = await resolveTargetTab(tabId);
   if (!tab?.id) return { ok: false, error: "Tab not found." };
   if (!tab.url?.startsWith("http://") && !tab.url?.startsWith("https://")) {
     return { ok: false, error: "Only http and https pages can be clipped." };
   }
 
-  try {
-    await ensureTabReady(tab.id, 15000);
-  } catch (err) {
-    return { ok: false, error: errorMessage(err) };
+  if (wake) {
+    try {
+      await ensureTabReady(tab.id, 15000);
+    } catch (err) {
+      return { ok: false, error: errorMessage(err) };
+    }
   }
 
   const requestId = crypto.randomUUID();
@@ -663,6 +717,10 @@ browser.runtime.onMessage.addListener(async (rawMsg: unknown): Promise<unknown> 
       await openCockpit();
       return { ok: true };
     }
+    case "get-bridge-status": {
+      const response: GetBridgeStatusResponse = { status: bridge.status };
+      return response;
+    }
   }
   return undefined;
 });
@@ -708,5 +766,6 @@ void (async function init() {
   settings = await loadSettings();
   await probeHeuristic();
   await refreshBadge();
-  console.log("[tabglutton] ready", settings);
+  await bridge.start();
+  console.log("[tabglutton] ready", settings, "bridge:", bridge.status);
 })();
