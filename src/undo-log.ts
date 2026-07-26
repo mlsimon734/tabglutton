@@ -60,6 +60,21 @@ export function removeBatch(log: readonly UndoBatch[], batchId: string): UndoBat
   return log.filter((b) => b.id !== batchId);
 }
 
+/**
+ * Narrow a batch to the entries that are still closed, after a partial undo.
+ * Tabs that could not be reopened (a restricted URL, a transient failure) stay
+ * in the log so the same batch id can be retried; a batch with nothing left is
+ * dropped. Position is preserved, so a retry still finds it under its own id.
+ */
+export function retainEntries(
+  log: readonly UndoBatch[],
+  batchId: string,
+  entries: readonly ClosedTabEntry[],
+): UndoBatch[] {
+  if (entries.length === 0) return removeBatch(log, batchId);
+  return log.map((b) => (b.id === batchId ? { ...b, entries: [...entries] } : b));
+}
+
 /** Storage is user-editable and survives upgrades — validate what comes back. */
 export function parseUndoLog(raw: unknown): UndoBatch[] {
   if (!Array.isArray(raw)) return [];

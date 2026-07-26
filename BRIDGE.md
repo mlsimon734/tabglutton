@@ -31,7 +31,9 @@ The bridge deliberately exposes **read + file + close** and nothing else:
 
 - No navigation, no clicking, no form input, no arbitrary script execution in pages.
 - No access to page state beyond what the existing Defuddle clipper extracts.
-- Closing tabs is the only destructive action, and it leaves an undo trail.
+- Closing tabs is the only destructive action, and it leaves an undo trail. It reaches the
+  agent through two tools — `tabs_close` and `tab_clip { close: true }` — and both are
+  annotated `destructiveHint: true`, since MCP annotations are per tool, not per call.
 
 This keeps the permission story legible: the agent can read what the user already chose to
 open, file it, and clean up. It cannot _act as_ the user. If richer automation is ever
@@ -118,13 +120,13 @@ extension and Gullet so the contract is typechecked from one definition.
 
 ## Tool surface (v1)
 
-| MCP tool     | Backing APIs                                           | Notes                                                                                                                                                                  |
-| ------------ | ------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `tabs_list`  | `tabs.query`                                           | id, title, url, `lastAccessed`, `discarded`, `pinned`; on Firefox also `hidden` (≈ other Zen workspaces). Metadata only — cheap over hundreds of tabs.                 |
-| `tab_read`   | `scripting.executeScript` + existing `clip-current.ts` | Returns Defuddle markdown + metadata. Fails cleanly on discarded tabs (see below).                                                                                     |
-| `tab_clip`   | existing `clip-format.ts` + `obsidian://new` handoff   | Files into the vault exactly as manual Devour does, including the Chrome redirect-page dance.                                                                          |
-| `tabs_close` | `tabs.remove`                                          | Batched. Entries (title, url, pinned, window, index) are recorded in an undo log in `storage.local` _before_ the removal, and the batch id comes back with the result. |
-| `undo_close` | reopen from the log                                    | Safety valve for the one destructive tool. Omit the batch id to undo the most recent.                                                                                  |
+| MCP tool     | Backing APIs                                           | Notes                                                                                                                                                                                             |
+| ------------ | ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `tabs_list`  | `tabs.query`                                           | id, title, url, `lastAccessed`, `discarded`, `pinned`; on Firefox also `hidden` (≈ other Zen workspaces). Metadata only — cheap over hundreds of tabs.                                            |
+| `tab_read`   | `scripting.executeScript` + existing `clip-current.ts` | Returns Defuddle markdown + metadata. Fails cleanly on discarded tabs (see below).                                                                                                                |
+| `tab_clip`   | existing `clip-format.ts` + `obsidian://new` handoff   | Files into the vault exactly as manual Devour does, including the Chrome redirect-page dance.                                                                                                     |
+| `tabs_close` | `tabs.remove`                                          | Batched, ids deduplicated. Entries (title, url, pinned, window, index, private) are recorded in an undo log in `storage.local` _before_ the removal, and the batch id comes back with the result. |
+| `undo_close` | reopen from the log                                    | Safety valve for the one destructive act. Omit the batch id to undo the most recent.                                                                                                              |
 
 Deliberately absent: navigate, click, type, evaluate. A gated `tab_load` (reload a
 discarded tab so `tab_read` works on authed pages) is a candidate for v1.1, but it is the
@@ -134,6 +136,16 @@ first "action" tool, so it ships default-off behind an options toggle.
 tab with its origin, so discovering what is connected costs no extra round trip. The
 tab-scoped tools refuse to guess between two browsers, because ids only mean something
 within one.
+
+**Restoring is exact where it can be and safe where it cannot.** A batch is recreated in
+ascending index order within each window; inserting a low index after a high one would
+shift the tab already placed there. A recorded window id is trusted only when a live window
+with that id shares the tab's privacy context — ids start over after a browser restart
+while the log persists, and a private tab reopened in a normal window would put its URL
+into history and sync. When the original window is gone the tab goes to a window of the
+matching context, opening one if the last was closed. Anything that still cannot be
+reopened stays in the log under the same batch id so `undo_close` can be retried; only the
+tabs that actually came back are dropped from it.
 
 ## The discarded-tab problem
 
@@ -159,6 +171,9 @@ Strategy, in order:
   prove knowledge of it against the other's nonce (see Wire protocol). The extension
   refuses to talk to a server that cannot answer its challenge, and the sidecar refuses a
   browser that cannot answer its own.
+- **Revocation**: regenerating the token — or changing the port — drops any live socket.
+  The handshake pins the token it proved, so a sidecar that authenticated with the revoked
+  token cannot keep serving requests on a connection that is already open.
 - **Opt-in**: the bridge is off by default and no socket is opened until the user enables
   it and generates a token, so a user who never wants this never dials anything.
 - The sidecar holds no credentials and stores no content; tab text flows through it to the
@@ -208,6 +223,15 @@ Strategy, in order:
    with both connected at once (14 tabs across the two), a tab-scoped call naming no
    `browser` is refused with `ambiguous-target` rather than guessing; and a sidecar started
    mid-session is picked up by the idle reconnect loop without a reload.
+   - The close/undo and revocation semantics above are verified the same way, driven from a
+     script that runs the real hub against **Chrome 150** over CDP: duplicate ids collapse to
+     one close, a tab closed before its navigation commits is still recorded, out-of-order
+     ids restore to their recorded index order, a batch whose window vanished comes back in a
+     window of the same privacy context, a private batch reopens private (and is left failed,
+     never normalised, when private access is off), a partial undo keeps its failures for a
+     retry, and regenerating the token drops the live socket rather than letting the old one
+     keep serving. Run against pre-fix code the same script fails six of those; the Firefox
+     path is unproven, as with `tab-discarded` below.
    - `tab_read` on a genuinely discarded tab returns a clean `tab-discarded` — exercised on
      **Chrome only**, where `chrome.tabs.discard()` can manufacture the fixture over CDP.
      The guard is one shared, target-agnostic line reading the standard `tab.discarded`, but

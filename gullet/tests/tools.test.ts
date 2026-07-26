@@ -56,12 +56,14 @@ describe("tool definitions", () => {
     ]);
   });
 
-  test("marks only tabs_close destructive, and the two reads read-only", () => {
+  test("marks every tool that can close a tab destructive, and the reads read-only", () => {
     const byName = new Map(GULLET_TOOLS.map((t) => [t.name, t]));
     expect(byName.get("tabs_close")?.annotations?.destructiveHint).toBe(true);
+    // `close: true` ends in tabs.remove, and annotations cannot vary by argument.
+    expect(byName.get("tab_clip")?.annotations?.destructiveHint).toBe(true);
+    expect(byName.get("undo_close")?.annotations?.destructiveHint).toBe(false);
     expect(byName.get("tab_read")?.annotations?.readOnlyHint).toBe(true);
     expect(byName.get("tabs_list")?.annotations?.readOnlyHint).toBe(true);
-    expect(byName.get("tab_clip")?.annotations?.destructiveHint).toBe(false);
   });
 
   test("every schema is a closed object, so bad arguments surface at the client", () => {

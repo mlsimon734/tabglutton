@@ -247,6 +247,12 @@ export interface ClosedTabEntry {
   pinned: boolean;
   windowId: number;
   index: number;
+  /**
+   * Private/incognito tab. Absent on entries written before this was recorded,
+   * which are treated as normal — a restore must never move a private URL into
+   * a normal window, where it would enter history and sync.
+   */
+  incognito?: boolean;
 }
 
 export interface TabsCloseResult {
@@ -360,7 +366,10 @@ export function parseTabsCloseParams(raw: unknown): TabsCloseParams {
     badRequest("tabIds must be an array of integers");
   }
   if (ids.length === 0) badRequest("tabIds must not be empty");
-  return { tabIds: ids as number[] };
+  // Deduplicate rather than reject: a repeated id would be looked up twice, so
+  // the batch would record the same tab twice, report an inflated `closed`
+  // count, and reopen two copies of it on undo.
+  return { tabIds: [...new Set(ids as number[])] };
 }
 
 export function parseUndoCloseParams(raw: unknown): UndoCloseParams {

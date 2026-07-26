@@ -48,6 +48,8 @@ export class BridgeClient {
   private readonly deps: BridgeClientDeps;
   private socket: WebSocket | null = null;
   private phase: Phase = "closed";
+  /** Token this socket authenticated with. Regenerating it must revoke the socket. */
+  private socketToken = "";
   private clientNonce = "";
   private heartbeat: ReturnType<typeof setInterval> | null = null;
   private handshakeTimer: ReturnType<typeof setTimeout> | null = null;
@@ -97,7 +99,12 @@ export class BridgeClient {
       return;
     }
     // Port or token changed under an open socket — drop it and redial clean.
-    if (this.phase !== "closed" && this.socket?.url !== this.socketUrl(settings)) {
+    // The token half matters most: regenerating it is how a user revokes a
+    // sidecar, and a live socket that keeps serving requests would let the
+    // revoked token retain read/clip/close access for the rest of the session.
+    const stale =
+      this.socket?.url !== this.socketUrl(settings) || this.socketToken !== settings.bridgeToken;
+    if (this.phase !== "closed" && stale) {
       this.teardown();
     }
     this.tick();
@@ -137,6 +144,9 @@ export class BridgeClient {
       return;
     }
     this.socket = socket;
+    // Pinned for the life of the socket: the handshake proves *this* token, and
+    // `sync()` compares against it to decide whether the socket is still valid.
+    this.socketToken = settings.bridgeToken;
     this.setPhase("connecting");
 
     socket.addEventListener("open", () => {
@@ -174,7 +184,7 @@ export class BridgeClient {
           this.teardown();
           return;
         }
-        const token = this.deps.getSettings().bridgeToken;
+        const token = this.socketToken;
         this.clientNonce = randomNonce();
         const hello: HelloMessage = {
           type: "hello",
@@ -189,8 +199,7 @@ export class BridgeClient {
         return;
       }
       case "hello-ack": {
-        const token = this.deps.getSettings().bridgeToken;
-        const expected = await deriveProof(token, this.clientNonce);
+        const expected = await deriveProof(this.socketToken, this.clientNonce);
         if (!proofsMatch(msg.proof, expected)) {
           // Something is on our port that does not know the token. Do not talk to it.
           console.warn("[tabglutton] bridge server failed the token challenge");
@@ -290,6 +299,7 @@ export class BridgeClient {
     this.clearHandshakeTimer();
     const socket = this.socket;
     this.socket = null;
+    this.socketToken = "";
     this.phase = "closed";
     if (socket && socket.readyState <= WebSocket.OPEN) {
       try {

@@ -181,6 +181,10 @@ describe("parseTabsCloseParams()", () => {
     expect(() => parseTabsCloseParams({ tabIds: [] })).toThrow(BridgeRequestError);
   });
 
+  test("deduplicates repeated ids — one tab, one close, one undo entry", () => {
+    expect(parseTabsCloseParams({ tabIds: [1, 2, 1, 2, 1] })).toEqual({ tabIds: [1, 2] });
+  });
+
   test("rejects non-array and non-integer members", () => {
     expect(() => parseTabsCloseParams({ tabIds: 5 })).toThrow(BridgeRequestError);
     expect(() => parseTabsCloseParams({ tabIds: [1, "2"] })).toThrow(BridgeRequestError);

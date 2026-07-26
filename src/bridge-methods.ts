@@ -38,7 +38,7 @@ import {
   appendBatch,
   findBatch,
   parseUndoLog,
-  removeBatch,
+  retainEntries,
   UNDO_LOG_KEY,
   type UndoBatch,
 } from "./undo-log.js";
@@ -97,12 +97,24 @@ function fail(code: BridgeErrorCode, message: string): never {
   throw new BridgeRequestError(code, message);
 }
 
+/**
+ * Chrome reports `url: ""` until a navigation commits, parking the target in
+ * the Chrome-only `pendingUrl`. A tab caught mid-load would otherwise look like
+ * it has no address at all — missing from a listing and, worse, unrecordable in
+ * the undo log, so closing it would be the one thing `undo_close` cannot
+ * reverse. Firefox fills `url` in immediately and never needs the fallback.
+ */
+function tabUrl(tab: browser.tabs.Tab): string | undefined {
+  return tab.url || (tab as { pendingUrl?: string }).pendingUrl || undefined;
+}
+
 function toBridgeTab(tab: browser.tabs.Tab): BridgeTab | null {
-  if (tab.id === undefined || tab.url === undefined) return null;
+  const url = tabUrl(tab);
+  if (tab.id === undefined || url === undefined) return null;
   const bridgeTab: BridgeTab = {
     id: tab.id,
     title: tab.title ?? "",
-    url: tab.url,
+    url,
     lastAccessed: tab.lastAccessed ?? 0,
     discarded: tab.discarded ?? false,
     pinned: tab.pinned,
@@ -117,13 +129,15 @@ function toBridgeTab(tab: browser.tabs.Tab): BridgeTab | null {
 }
 
 function toClosedEntry(tab: browser.tabs.Tab): ClosedTabEntry | null {
-  if (!tab.url) return null;
+  const url = tabUrl(tab);
+  if (!url) return null;
   return {
-    url: tab.url,
+    url,
     title: tab.title ?? "",
     pinned: tab.pinned,
     windowId: tab.windowId ?? -1,
     index: tab.index,
+    incognito: tab.incognito,
   };
 }
 
@@ -148,6 +162,82 @@ async function readUndoLog(): Promise<UndoBatch[]> {
 
 async function writeUndoLog(log: UndoBatch[]): Promise<void> {
   await browser.storage.local.set({ [UNDO_LOG_KEY]: log });
+}
+
+/**
+ * The windows that exist at the moment an undo runs, indexed for restore
+ * decisions. A recorded window id is not proof of anything on its own: the undo
+ * log survives a browser restart, after which ids start over and the id we
+ * stored may belong to a different window — possibly one of the other privacy
+ * context. So placement is only trusted when a live window with that id shares
+ * the tab's context.
+ */
+class LiveWindows {
+  private readonly contexts = new Map<number, boolean>();
+  private readonly preferred = new Map<boolean, number>();
+
+  static async load(): Promise<LiveWindows> {
+    return new LiveWindows(await browser.windows.getAll());
+  }
+
+  private constructor(windows: browser.windows.Window[]) {
+    for (const w of windows) {
+      if (w.id === undefined) continue;
+      this.contexts.set(w.id, w.incognito);
+      // The focused window is where a plain `tabs.create` would have landed, so
+      // it is the natural home for a tab whose own window is gone.
+      if (w.focused || !this.preferred.has(w.incognito)) this.preferred.set(w.incognito, w.id);
+    }
+  }
+
+  matches(windowId: number, incognito: boolean): boolean {
+    return this.contexts.get(windowId) === incognito;
+  }
+
+  /** A window of this privacy context, opening one if the last was closed. */
+  async windowFor(incognito: boolean): Promise<number> {
+    const existing = this.preferred.get(incognito);
+    if (existing !== undefined) return existing;
+    const created = await browser.windows.create({ incognito });
+    if (created.id === undefined) {
+      throw new Error(`Could not open a ${incognito ? "private" : "normal"} window.`);
+    }
+    this.preferred.set(incognito, created.id);
+    return created.id;
+  }
+}
+
+/**
+ * Recreate one closed tab. Position is best-effort — the original window may be
+ * gone — but the privacy context is not. Closing the last tabs of a private
+ * window takes the window with them, and reopening those URLs in a normal
+ * window would put them into history and sync, so a private tab is only ever
+ * restored into a private window. If none can be opened (the extension has no
+ * private-browsing access), this throws and the entry stays in the undo log.
+ */
+async function restoreEntry(entry: ClosedTabEntry, windows: LiveWindows): Promise<void> {
+  const incognito = entry.incognito ?? false;
+  if (windows.matches(entry.windowId, incognito)) {
+    try {
+      await browser.tabs.create({
+        url: entry.url,
+        windowId: entry.windowId,
+        index: entry.index,
+        pinned: entry.pinned,
+        active: false,
+      });
+      return;
+    } catch (err) {
+      // Window closing under us, or an index it will not take: reopen loose
+      // rather than lose the tab.
+      console.warn("[tabglutton] bridge undo placement failed for", entry.url, err);
+    }
+  }
+  await browser.tabs.create({
+    url: entry.url,
+    windowId: await windows.windowFor(incognito),
+    active: false,
+  });
 }
 
 async function recordClosed(entries: ClosedTabEntry[]): Promise<string> {
@@ -306,29 +396,27 @@ export class BridgeMethodRunner {
       );
     }
 
-    let restored = 0;
-    for (const entry of batch.entries) {
+    // Ascending index within each window: inserting a low index *after* a high
+    // one shifts the tab already sitting there, so the batch would come back in
+    // an order that does not match what was recorded.
+    const ordered = [...batch.entries].sort((a, b) => a.windowId - b.windowId || a.index - b.index);
+    const windows = await LiveWindows.load();
+    const failed: ClosedTabEntry[] = [];
+    for (const entry of ordered) {
       try {
-        await browser.tabs.create({
-          url: entry.url,
-          windowId: entry.windowId >= 0 ? entry.windowId : undefined,
-          index: entry.index,
-          pinned: entry.pinned,
-          active: false,
-        });
-        restored += 1;
+        await restoreEntry(entry, windows);
       } catch (err) {
-        // Most often the original window is gone; retry without placement.
-        try {
-          await browser.tabs.create({ url: entry.url, active: false });
-          restored += 1;
-        } catch {
-          console.warn("[tabglutton] bridge undo failed for", entry.url, err);
-        }
+        console.warn("[tabglutton] bridge undo failed for", entry.url, err);
+        failed.push(entry);
       }
     }
-    await writeUndoLog(removeBatch(log, batch.id));
-    return { batchId: batch.id, restored, failed: batch.entries.length - restored };
+
+    // Only what actually came back leaves the log. Dropping a failed entry
+    // would put the tab beyond every retry, which is the one thing undo exists
+    // to prevent. Re-read first: restoring is slow, and a close recorded while
+    // it ran must not be clobbered by our stale copy of the log.
+    await writeUndoLog(retainEntries(await readUndoLog(), batch.id, failed));
+    return { batchId: batch.id, restored: ordered.length - failed.length, failed: failed.length };
   }
 
   private handoff(task: () => Promise<void>): Promise<void> {

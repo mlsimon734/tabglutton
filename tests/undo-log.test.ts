@@ -5,6 +5,7 @@ import {
   findBatch,
   parseUndoLog,
   removeBatch,
+  retainEntries,
   UNDO_LOG_KEY,
   type UndoBatch,
 } from "../src/undo-log.js";
@@ -88,6 +89,30 @@ describe("removeBatch()", () => {
 
   test("is a no-op for an unknown id", () => {
     expect(removeBatch([batch("a")], "zzz").map((b) => b.id)).toEqual(["a"]);
+  });
+});
+
+describe("retainEntries()", () => {
+  test("drops the batch when every tab came back", () => {
+    expect(retainEntries([batch("a"), batch("b")], "a", []).map((b) => b.id)).toEqual(["b"]);
+  });
+
+  test("keeps the tabs that failed to reopen, so undo can be retried", () => {
+    const stuck = entry("https://x/stuck");
+    const log = retainEntries([batch("a", 3), batch("b")], "a", [stuck]);
+    expect(log.map((b) => b.id)).toEqual(["a", "b"]);
+    expect(log[0]?.entries).toEqual([stuck]);
+  });
+
+  test("leaves other batches and the batch's own id and time alone", () => {
+    const log = retainEntries([batch("a", 2, 99)], "a", [entry("https://x/stuck")]);
+    expect(log[0]).toMatchObject({ id: "a", closedAt: 99 });
+  });
+
+  test("is a no-op when the batch has already been evicted", () => {
+    expect(retainEntries([batch("b")], "gone", [entry("https://x/1")]).map((b) => b.id)).toEqual([
+      "b",
+    ]);
   });
 });
 
