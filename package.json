@@ -40,7 +40,7 @@
     "commit-and-tag-version": "^12.7.3",
     "oxfmt": "latest",
     "oxlint": "^1",
-    "typescript": "^6.0.3",
+    "typescript": "^7.0.0",
     "web-ext": "^10.0.0"
   }
 }
