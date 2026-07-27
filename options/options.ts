@@ -54,6 +54,15 @@ function parseParams(text: string): string[] {
     .filter(Boolean);
 }
 
+/**
+ * `save()` persists the whole settings object from DOM state, so it must never
+ * run before `load()` has populated it — an empty `bridgeToken` field would be
+ * written over a real token, revoking the bridge as a side effect of touching
+ * an unrelated switch. Flipping the toggle is enough to trigger it, because the
+ * change listener saves directly.
+ */
+let loaded = false;
+
 async function load(): Promise<void> {
   const stored = (await browser.storage.local.get(Object.keys(DEFAULTS))) as Partial<Settings>;
   const settings = { ...DEFAULTS, ...stored };
@@ -77,6 +86,7 @@ async function load(): Promise<void> {
     const scopeBlock = scopeRadios[0]?.closest(".setting.block") as HTMLElement | null;
     if (scopeBlock) scopeBlock.hidden = true;
   }
+  loaded = true;
 }
 
 let saveTimer: ReturnType<typeof setTimeout> | undefined;
@@ -89,6 +99,7 @@ function flashStatus(msg: string): void {
 }
 
 async function save(): Promise<void> {
+  if (!loaded) return;
   const checked = [...scopeRadios].find((r) => r.checked);
   const scope: ScopeMode = (checked?.value as ScopeMode) ?? FALLBACK_SCOPE;
   const checkedClipMode = [...clipModeRadios].find((r) => r.checked);
@@ -102,7 +113,11 @@ async function save(): Promise<void> {
     clipMode,
     bridgeEnabled: bridgeEnabled.checked,
     bridgePort: parsePort(bridgePort.value),
-    bridgeToken: bridgeToken.value,
+    // Only ever written when we have one. The field is readonly and Generate is
+    // the sole way to set it, so an empty value means "not populated", never
+    // "the user cleared it" — and writing it back would silently revoke the
+    // sidecar's access.
+    ...(bridgeToken.value ? { bridgeToken: bridgeToken.value } : {}),
   });
   flashStatus("Saved");
 }
@@ -209,9 +224,12 @@ async function refreshBridgeStatus(): Promise<void> {
       | undefined;
     if (res) status = res.status;
   } catch {
-    // Background asleep or restarting; treat as not connected rather than
-    // showing an error the user cannot act on.
-    status = bridgeEnabled.checked ? "idle" : "disabled";
+    // Background asleep or restarting; infer from the settings we rendered
+    // rather than showing an error the user cannot act on. This mirrors
+    // BridgeClient.isConfigured() — enabled *and* holding a token — because
+    // guessing from the toggle alone reports "waiting" for a bridge that has
+    // no token and is therefore not dialling at all.
+    status = bridgeEnabled.checked && bridgeToken.value ? "idle" : "disabled";
   }
   renderBridgeStatus(status);
 }
@@ -258,5 +276,11 @@ if (logoMark) {
   })();
 }
 
-void load();
-void refreshBridgeStatus();
+// Sequenced, not fired in parallel: refreshBridgeStatus() falls back to reading
+// the rendered settings when the background is asleep, which is the normal case
+// on MV3 when this page opens. Racing it against load() meant that fallback read
+// an unpopulated checkbox and reported "Off" for a bridge that was connected.
+void (async () => {
+  await load();
+  await refreshBridgeStatus();
+})();
