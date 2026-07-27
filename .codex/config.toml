@@ -1,0 +1,13 @@
+# Project-local Codex config. Applies to sessions started from this repo, the
+# same scoping .mcp.json gives Claude Code — no flag required.
+#
+# The token is NOT stored here. It is read at spawn time from the gitignored
+# .env, so this file carries no credential and is safe to commit.
+
+[mcp_servers.tabglutton]
+command = "bash"
+args = [
+  "-c",
+  "export TABGLUTTON_TOKEN=\"$(grep -m1 '^TABGLUTTON_TOKEN=' .env | cut -d= -f2-)\"; exec bun run ./gullet/gullet.ts",
+]
+startup_timeout_sec = 30
