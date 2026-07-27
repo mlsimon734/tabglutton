@@ -1,7 +1,11 @@
 // Wires the two halves together: MCP on stdio facing the agent, WebSocket hub
 // on loopback facing the browsers.
 
-import { errorMessage, type BridgeError } from "../../src/bridge-protocol.js";
+import {
+  BRIDGE_CONNECT_WAIT_MS,
+  errorMessage,
+  type BridgeError,
+} from "../../src/bridge-protocol.js";
 import { ConfigError, parseConfig, USAGE } from "./config.js";
 import { Hub } from "./hub.js";
 import { serveStdio } from "./mcp.js";
@@ -74,7 +78,7 @@ export async function main(
     instructions: GULLET_INSTRUCTIONS,
     tools: GULLET_TOOLS,
     call: createToolCaller({
-      connections: () => hub.summaries(),
+      connections: () => hub.connectionsWithin(BRIDGE_CONNECT_WAIT_MS),
       request: (connectionId, method, params) => hub.request(connectionId, method, params),
       startupError,
     }),

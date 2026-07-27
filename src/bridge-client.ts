@@ -34,6 +34,41 @@ const BRIDGE_ALARM = "tabglutton-bridge-reconnect";
  */
 const RECONNECT_PERIOD_MINUTES = 0.5;
 
+/**
+ * Extra dials between alarm ticks, to close the gap after a socket drops
+ * without waiting out a whole alarm period.
+ *
+ * Best-effort by design: a pending timer does not keep a suspended background
+ * page alive, so these only fire while something else is holding it up — in
+ * practice the keepalive below, which is exactly the case that matters, since
+ * that is when an agent is mid-session and waiting on us. The alarm remains the
+ * guaranteed path.
+ */
+const FAST_RETRY_MS = 3_000;
+const FAST_RETRIES_PER_WAKE = 8;
+
+/**
+ * Both engines suspend an idle background context — Gecko after
+ * `extensions.background.idle.timeout` (30s by default), Chrome MV3 on the same
+ * order — and suspension destroys the page's WebSocket. Crucially, *WebSocket
+ * traffic is not activity*: only WebExtension API calls reset the idle timer.
+ * So a connected bridge whose only traffic is its own heartbeat gets suspended
+ * out from under its socket, and stays dark until the reconnect alarm fires.
+ *
+ * Measured on Zen 1.21.9b before this existed: the socket dropped every 20-60s
+ * (the variation is incidental API activity from tab events resetting the
+ * timer) and took a further ~30s to return, so a third of the time there was no
+ * bridge and tool calls answered "no browser is connected".
+ *
+ * The fix is to touch a real API on a timer — but only while an agent is
+ * actually talking to us. A browser nobody is using has no reason to be held
+ * awake, which is the whole point of the suspension we are defeating. So the
+ * window is *earned by traffic*: every served request extends it, and it lapses
+ * a few minutes after the last one.
+ */
+const KEEPALIVE_PING_MS = 20_000;
+const KEEPALIVE_LINGER_MS = 5 * 60_000;
+
 export type BridgeStatus = "disabled" | "idle" | "connecting" | "connected";
 
 export interface BridgeClientDeps {
@@ -56,6 +91,12 @@ export class BridgeClient {
   private clientNonce = "";
   private heartbeat: ReturnType<typeof setInterval> | null = null;
   private handshakeTimer: ReturnType<typeof setTimeout> | null = null;
+  private fastRetryTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Dials spent since the last wake; reset per alarm tick, not per attempt. */
+  private fastRetries = 0;
+  private keepaliveTimer: ReturnType<typeof setInterval> | null = null;
+  /** Epoch ms until which served traffic has earned a reprieve from suspension. */
+  private keepaliveUntil = 0;
   private awaitingPong = false;
   private label = IS_CHROME ? "Chrome" : "Firefox";
 
@@ -65,7 +106,11 @@ export class BridgeClient {
     // level: an MV3 service worker that restarts on an alarm must already have
     // the listener attached, so it cannot be deferred behind an await.
     browser.alarms.onAlarm.addListener((alarm) => {
-      if (alarm.name === BRIDGE_ALARM) this.tick();
+      if (alarm.name !== BRIDGE_ALARM) return;
+      // Each wake gets a fresh budget, so a browser left idle for hours still
+      // gets a burst of attempts the next time it is woken.
+      this.fastRetries = 0;
+      this.tick();
     });
   }
 
@@ -73,6 +118,7 @@ export class BridgeClient {
   async start(): Promise<void> {
     this.label = await resolveLabel();
     await this.syncAlarm();
+    this.fastRetries = 0;
     this.tick();
   }
 
@@ -98,9 +144,13 @@ export class BridgeClient {
     void this.syncAlarm();
     const settings = this.deps.getSettings();
     if (!this.isConfigured(settings)) {
-      this.teardown();
+      this.disable();
       return;
     }
+    // A settings change is a deliberate user action — most often enabling the
+    // bridge or generating a token — so it earns a fresh burst rather than
+    // inheriting whatever the last wake had left.
+    this.fastRetries = 0;
     // Port or token changed under an open socket — drop it and redial clean.
     // The token half matters most: regenerating it is how a user revokes a
     // sidecar, and a live socket that keeps serving requests would let the
@@ -131,11 +181,22 @@ export class BridgeClient {
   private tick(): void {
     const settings = this.deps.getSettings();
     if (!this.isConfigured(settings)) {
-      this.teardown();
+      this.disable();
       return;
     }
     if (this.phase !== "closed") return;
     this.connect(settings);
+  }
+
+  /**
+   * The bridge has been switched off, as opposed to a socket merely dropping.
+   * That distinction is the keepalive's: a dropped socket should keep the page
+   * awake so the redial lands promptly, but a bridge nobody enabled must not
+   * hold the page up at all.
+   */
+  private disable(): void {
+    this.stopKeepalive();
+    this.teardown();
   }
 
   private connect(settings: Settings): void {
@@ -143,7 +204,10 @@ export class BridgeClient {
     try {
       socket = new WebSocket(this.socketUrl(settings));
     } catch (err) {
+      // Constructor threw, so no close/error event will arrive to route us
+      // through teardown() — ask for the next attempt here instead.
       console.warn("[tabglutton] bridge dial failed", err);
+      this.scheduleFastRetry();
       return;
     }
     this.socket = socket;
@@ -209,6 +273,7 @@ export class BridgeClient {
           return;
         }
         this.clearHandshakeTimer();
+        this.clearFastRetry();
         this.setPhase("open");
         this.startHeartbeat(socket);
         console.log("[tabglutton] bridge connected as", msg.connectionId);
@@ -226,6 +291,9 @@ export class BridgeClient {
         return;
       case "request": {
         if (this.phase !== "open") return;
+        // Before serving, not after: a slow method must not let the page suspend
+        // out from under the very request it is answering.
+        this.armKeepalive();
         const response = await this.serve(msg.id, msg.method, msg.params);
         this.send(socket, response);
         return;
@@ -260,9 +328,10 @@ export class BridgeClient {
     socket.send(JSON.stringify(msg));
   }
 
-  // Application-level ping (not a WebSocket control frame): on Chrome MV3 this
-  // doubles as the service-worker keepalive, and control frames answered by the
-  // browser itself would not extend the worker's lifetime.
+  // Application-level ping rather than a WebSocket control frame, so that a
+  // half-open socket is detected here rather than being answered by the browser
+  // itself. It does *not* keep the background page alive — see the keepalive
+  // constants above; assuming it did is what hid the reconnect churn.
   private startHeartbeat(socket: WebSocket): void {
     this.stopHeartbeat();
     this.awaitingPong = false;
@@ -291,6 +360,55 @@ export class BridgeClient {
     this.handshakeTimer = null;
   }
 
+  private clearFastRetry(): void {
+    if (this.fastRetryTimer !== null) clearTimeout(this.fastRetryTimer);
+    this.fastRetryTimer = null;
+  }
+
+  /**
+   * Extend the no-suspend window, starting the timer if it is not already
+   * running. Deliberately independent of the socket rather than folded into the
+   * heartbeat: the heartbeat dies with the connection, and holding the page up
+   * *across* a reconnect is precisely when it earns its keep — that is the gap
+   * an agent would otherwise sit through.
+   */
+  private armKeepalive(): void {
+    this.keepaliveUntil = Date.now() + KEEPALIVE_LINGER_MS;
+    if (this.keepaliveTimer !== null) return;
+    this.keepaliveTimer = setInterval(() => {
+      if (Date.now() >= this.keepaliveUntil) {
+        this.stopKeepalive();
+        return;
+      }
+      // Making the call is the entire point; the answer is discarded. This is
+      // the cheapest API that needs no permission and cannot fail meaningfully.
+      void browser.runtime.getPlatformInfo().catch(() => {});
+    }, KEEPALIVE_PING_MS);
+  }
+
+  private stopKeepalive(): void {
+    if (this.keepaliveTimer !== null) clearInterval(this.keepaliveTimer);
+    this.keepaliveTimer = null;
+    this.keepaliveUntil = 0;
+  }
+
+  /**
+   * Queue another dial before the next alarm, while the budget for this wake
+   * lasts. Deliberately flat rather than backing off: the window we are trying
+   * to catch is a sidecar that lives for seconds, and a backoff would spend the
+   * budget past the point where it could still land.
+   */
+  private scheduleFastRetry(): void {
+    if (this.fastRetryTimer !== null) return;
+    if (this.fastRetries >= FAST_RETRIES_PER_WAKE) return;
+    if (!this.isConfigured(this.deps.getSettings())) return;
+    this.fastRetryTimer = setTimeout(() => {
+      this.fastRetryTimer = null;
+      this.fastRetries += 1;
+      this.tick();
+    }, FAST_RETRY_MS);
+  }
+
   /** Drop the socket and report whatever the settings now imply — idle if the
    * bridge is still on and we should keep dialling, disabled if it is not. */
   private teardown(): void {
@@ -308,6 +426,10 @@ export class BridgeClient {
       }
     }
     this.deps.onStatusChange(this.status);
+    // Every failed dial and every dropped connection lands here, so this is the
+    // one place that needs to ask for another attempt. No-ops once the bridge is
+    // switched off, or once this wake's budget is spent.
+    this.scheduleFastRetry();
   }
 
   private setPhase(phase: Phase): void {

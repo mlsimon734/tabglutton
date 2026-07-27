@@ -55,6 +55,7 @@ export class Hub {
   private readonly connections = new Map<string, Connection>();
   private server: Bun.Server<SocketData> | null = null;
   private heartbeat: ReturnType<typeof setInterval> | null = null;
+  private readonly connectWaiters = new Set<() => void>();
   private nextId = 1;
 
   constructor(options: HubOptions) {
@@ -94,6 +95,9 @@ export class Hub {
   stop(): void {
     if (this.heartbeat !== null) clearInterval(this.heartbeat);
     this.heartbeat = null;
+    // Release anyone mid-wait; nothing will ever connect now, and a pending
+    // timer would keep the process alive past the shutdown that triggered this.
+    for (const done of [...this.connectWaiters]) done();
     for (const conn of this.connections.values()) {
       this.rejectPending(conn, "Gullet is shutting down.");
       conn.socket.close();
@@ -114,6 +118,33 @@ export class Hub {
       label,
       extVersion,
     }));
+  }
+
+  /**
+   * Connected browsers, waiting up to `timeoutMs` for a first one to arrive.
+   *
+   * The extension is not continuously connected and cannot be: its background
+   * page is an event page that the browser suspends when idle, which destroys
+   * the socket, and it only redials when its alarm fires. So "nothing connected
+   * right now" is the normal resting state between agent sessions, not a fault,
+   * and a tool call that reports it as one is wrong more often than it is right.
+   * Waiting one reconnect period turns that into a slow first call instead of a
+   * spurious failure. Returns whatever is connected when the wait ends, which
+   * may still be nothing — the caller decides what an empty list means.
+   */
+  async connectionsWithin(timeoutMs: number): Promise<ConnectionSummary[]> {
+    if (this.connections.size === 0 && timeoutMs > 0) {
+      await new Promise<void>((resolve) => {
+        const done = (): void => {
+          clearTimeout(timer);
+          this.connectWaiters.delete(done);
+          resolve();
+        };
+        const timer = setTimeout(done, timeoutMs);
+        this.connectWaiters.add(done);
+      });
+    }
+    return this.summaries();
   }
 
   /** Send one bridge method to one browser and await its answer. */
@@ -233,6 +264,10 @@ export class Hub {
       proof: await deriveProof(this.options.token, msg.nonce),
     });
     console.error(`[gullet] ${conn.label} connected (${conn.connectionId}, v${conn.extVersion})`);
+    // Only once the handshake passes: a socket that cannot prove the token is
+    // not a browser we can serve, so releasing waiters on `open` would hand
+    // them an empty list and waste the wait.
+    for (const done of [...this.connectWaiters]) done();
     this.options.onConnectionsChanged?.(this.summaries());
   }
 

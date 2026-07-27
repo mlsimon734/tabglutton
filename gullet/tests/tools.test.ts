@@ -17,7 +17,7 @@ function caller(
 ): { call: ReturnType<typeof createToolCaller>; sent: Sent[] } {
   const sent: Sent[] = [];
   const call = createToolCaller({
-    connections: () => connections,
+    connections: async () => connections,
     request: async (connectionId, method, params) => {
       const entry = { connectionId, method, params };
       sent.push(entry);

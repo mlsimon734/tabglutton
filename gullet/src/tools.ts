@@ -14,7 +14,8 @@ import type { McpTool, McpToolResult } from "./mcp.js";
 import { selectAll, selectOne, type ConnectionSummary } from "./select.js";
 
 export interface ToolContext {
-  connections: () => ConnectionSummary[];
+  /** May block briefly waiting for a browser to dial in; see Hub.connectionsWithin. */
+  connections: () => Promise<ConnectionSummary[]>;
   request: (connectionId: string, method: BridgeMethod, params: unknown) => Promise<unknown>;
   /**
    * Why this sidecar cannot serve anything, if it cannot. Reported in answer to
@@ -182,7 +183,7 @@ async function route(
   }
   const target = typeof args.browser === "string" ? args.browser : undefined;
   const { browser: _browser, ...params } = args;
-  const summaries = ctx.connections();
+  const summaries = await ctx.connections();
 
   if (name === "tabs_list") {
     // Read-only and id-free, so fanning out over every browser is safe and

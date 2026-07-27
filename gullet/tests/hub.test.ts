@@ -314,3 +314,54 @@ describe("request routing", () => {
     ).toEqual([idA, idB].sort());
   });
 });
+
+// The extension is not continuously connected: its background page is suspended
+// whenever no agent is using the bridge, which destroys the socket, and it only
+// redials when its alarm fires. Waiting out one reconnect period is what turns
+// that from a spurious "no browser is connected" into a slow first call.
+describe("connectionsWithin", () => {
+  test("returns at once when a browser is already connected", async () => {
+    const started = startHub();
+    const ext = new FakeExtension(started.port);
+    const connectionId = await ext.handshake();
+
+    const begin = performance.now();
+    const summaries = await started.connectionsWithin(5_000);
+    expect(performance.now() - begin).toBeLessThan(250);
+    expect(summaries.map((s) => s.connectionId)).toEqual([connectionId]);
+  });
+
+  test("resolves as soon as a browser dials in mid-wait", async () => {
+    const started = startHub();
+    const waiting = started.connectionsWithin(5_000);
+    await Bun.sleep(50);
+
+    const ext = new FakeExtension(started.port);
+    const connectionId = await ext.handshake();
+    expect((await waiting).map((s) => s.connectionId)).toEqual([connectionId]);
+  });
+
+  // A socket that cannot prove the token is not a browser we can serve, so
+  // releasing the wait on `open` would hand back an empty list for no reason.
+  test("an unauthenticated socket does not end the wait", async () => {
+    const started = startHub();
+    const waiting = started.connectionsWithin(400);
+    const ext = new FakeExtension(started.port);
+    await ext.next(); // challenge, never answered
+    expect(await waiting).toEqual([]);
+  });
+
+  test("gives up after the timeout rather than hanging the tool call", async () => {
+    const started = startHub();
+    const begin = performance.now();
+    expect(await started.connectionsWithin(300)).toEqual([]);
+    expect(performance.now() - begin).toBeGreaterThanOrEqual(250);
+  });
+
+  test("shutdown releases a pending wait", async () => {
+    const started = startHub();
+    const waiting = started.connectionsWithin(30_000);
+    started.stop();
+    expect(await waiting).toEqual([]);
+  });
+});

@@ -22,6 +22,16 @@ export const BRIDGE_HEARTBEAT_MS = 20_000;
 export const BRIDGE_REQUEST_TIMEOUT_MS = 45_000;
 export const BRIDGE_HANDSHAKE_TIMEOUT_MS = 5_000;
 
+/**
+ * How long a tool call waits for a browser to dial in before giving up on one.
+ * Must exceed the extension's reconnect period: its background page is
+ * suspended whenever no agent is using the bridge, and it only redials when the
+ * alarm wakes it, so a call can legitimately arrive up to one period before
+ * there is any socket. Answering "no browser is connected" inside that window
+ * reports a scheduling artefact as a missing browser.
+ */
+export const BRIDGE_CONNECT_WAIT_MS = 35_000;
+
 export type BridgeBrowser = "firefox" | "chrome";
 
 export type BridgeErrorCode =
