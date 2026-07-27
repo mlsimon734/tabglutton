@@ -129,14 +129,21 @@ export class BridgeClient {
    * to rediscover that it has nothing to dial.
    */
   private async syncAlarm(): Promise<void> {
-    if (this.isConfigured(this.deps.getSettings())) {
-      browser.alarms.create(BRIDGE_ALARM, {
-        delayInMinutes: RECONNECT_PERIOD_MINUTES,
-        periodInMinutes: RECONNECT_PERIOD_MINUTES,
-      });
-    } else {
+    if (!this.isConfigured(this.deps.getSettings())) {
       await browser.alarms.clear(BRIDGE_ALARM);
+      return;
     }
+    // Never re-arm an alarm that is already running. `create()` clears and
+    // replaces a same-named alarm, restarting its countdown — and this runs on
+    // every event-page restart, which a busy browser triggers constantly. Left
+    // unguarded, a page woken more often than the period pushes the next fire
+    // back indefinitely and the alarm never fires at all, starving the one
+    // reconnect path that is supposed to be guaranteed.
+    if (await browser.alarms.get(BRIDGE_ALARM)) return;
+    browser.alarms.create(BRIDGE_ALARM, {
+      delayInMinutes: RECONNECT_PERIOD_MINUTES,
+      periodInMinutes: RECONNECT_PERIOD_MINUTES,
+    });
   }
 
   /** Re-evaluate after a settings change: connect, disconnect, or re-dial. */
