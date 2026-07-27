@@ -1,6 +1,7 @@
 // Wires the two halves together: MCP on stdio facing the agent, WebSocket hub
 // on loopback facing the browsers.
 
+import { errorMessage, type BridgeError } from "../../src/bridge-protocol.js";
 import { ConfigError, parseConfig, USAGE } from "./config.js";
 import { Hub } from "./hub.js";
 import { serveStdio } from "./mcp.js";
@@ -26,24 +27,37 @@ export async function main(
     return 1;
   }
 
+  // Neither of the two ways this can be misconfigured is fatal. The MCP server
+  // starts regardless so that tool calls can explain the fix and the agent can
+  // relay it; exiting instead kills the session before `initialize`, and every
+  // client reports that the same unhelpful way — "connection closed".
   const hub = new Hub({ port: config.port, token: config.token });
+  let startupError: BridgeError | null = null;
+
   try {
     hub.listen();
+    console.error(`[gullet] listening on ws://127.0.0.1:${hub.port} (proto MCP over stdio)`);
   } catch (err) {
-    // Almost always "port already in use" — usually a second Gullet from
-    // another agent session. Say so instead of dying silently.
-    console.error(
-      `[gullet] could not listen on 127.0.0.1:${config.port}: ${err instanceof Error ? err.message : String(err)}`,
-    );
-    return 1;
+    // Almost always a second Gullet from another agent session: only one
+    // process can hold the port, and the browser only ever dials that one.
+    const message =
+      `Another process is already listening on 127.0.0.1:${config.port}, ` +
+      `almost certainly a Tabglutton sidecar from another agent session. Only one can hold ` +
+      `the port. Close that session, or start this one with --port <free port> and set the ` +
+      `same port in Tabglutton's settings.`;
+    console.error(`[gullet] ${message} (${errorMessage(err)})`);
+    startupError = { code: "unsupported", message };
   }
 
   if (!config.token) {
-    // Not fatal: the MCP server still starts so tool calls can explain the fix,
-    // which the agent can relay. A hard exit just reads as "server crashed".
-    console.error("[gullet] no token configured — set TABGLUTTON_TOKEN. Refusing all connections.");
+    const message =
+      "Tabglutton's bridge has no token. Open Tabglutton's settings, enable the agent bridge, " +
+      "generate a token, and set TABGLUTTON_TOKEN to it.";
+    console.error(`[gullet] ${message}`);
+    // `??=`: a port we never bound is the more proximate problem, and fixing
+    // the token would not make this process serve anything.
+    startupError ??= { code: "unauthorized", message };
   }
-  console.error(`[gullet] listening on ws://127.0.0.1:${hub.port} (proto MCP over stdio)`);
 
   const shutdown = (): void => {
     hub.stop();
@@ -62,7 +76,7 @@ export async function main(
     call: createToolCaller({
       connections: () => hub.summaries(),
       request: (connectionId, method, params) => hub.request(connectionId, method, params),
-      tokenConfigured: config.token.length > 0,
+      startupError,
     }),
   });
 

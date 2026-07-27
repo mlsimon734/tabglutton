@@ -23,7 +23,7 @@ function caller(
       sent.push(entry);
       return respond(entry);
     },
-    tokenConfigured: true,
+    startupError: null,
     ...overrides,
   });
   return { call, sent };
@@ -164,9 +164,25 @@ describe("error handling", () => {
   });
 
   test("a missing token is explained instead of failing to connect silently", async () => {
-    const { call, sent } = caller([zen], () => ({}), { tokenConfigured: false });
+    const { call, sent } = caller([zen], () => ({}), {
+      startupError: { code: "unauthorized", message: "no token" },
+    });
     const result = await call("tabs_list", {});
     expect(payload(result)).toMatchObject({ error: "unauthorized" });
+    expect(sent).toEqual([]);
+  });
+
+  // The port-conflict case, which used to exit before the MCP handshake and so
+  // could only be reported by the client as "connection closed".
+  test("a startup fault answers every tool rather than killing the session", async () => {
+    const { call, sent } = caller([zen], () => ({}), {
+      startupError: { code: "unsupported", message: "Another process is already listening" },
+    });
+    for (const tool of GULLET_TOOLS) {
+      const result = await call(tool.name, {});
+      expect(result.isError).toBe(true);
+      expect(payload(result)).toMatchObject({ error: "unsupported" });
+    }
     expect(sent).toEqual([]);
   });
 });

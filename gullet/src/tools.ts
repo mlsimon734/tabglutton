@@ -7,6 +7,7 @@ import {
   BridgeRequestError,
   isBridgeMethod,
   toBridgeError,
+  type BridgeError,
   type BridgeMethod,
 } from "../../src/bridge-protocol.js";
 import type { McpTool, McpToolResult } from "./mcp.js";
@@ -15,7 +16,13 @@ import { selectAll, selectOne, type ConnectionSummary } from "./select.js";
 export interface ToolContext {
   connections: () => ConnectionSummary[];
   request: (connectionId: string, method: BridgeMethod, params: unknown) => Promise<unknown>;
-  tokenConfigured: boolean;
+  /**
+   * Why this sidecar cannot serve anything, if it cannot. Reported in answer to
+   * every tool call, because the alternative — exiting at startup — kills the
+   * MCP session before `initialize` and leaves the agent with nothing but
+   * "connection closed", which names neither the cause nor the fix.
+   */
+  startupError: BridgeError | null;
 }
 
 const BROWSER_PROPERTY = {
@@ -152,11 +159,8 @@ export function createToolCaller(
 ): (name: string, args: Record<string, unknown>) => Promise<McpToolResult> {
   return async (name, args) => {
     try {
-      if (!ctx.tokenConfigured) {
-        throw new BridgeRequestError(
-          "unauthorized",
-          "Tabglutton's bridge has no token. Open Tabglutton's settings, enable the agent bridge, generate a token, and set TABGLUTTON_TOKEN to it.",
-        );
+      if (ctx.startupError) {
+        throw new BridgeRequestError(ctx.startupError.code, ctx.startupError.message);
       }
       return ok(await route(ctx, name, args));
     } catch (err) {
