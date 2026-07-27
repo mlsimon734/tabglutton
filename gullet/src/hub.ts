@@ -97,7 +97,7 @@ export class Hub {
     this.heartbeat = null;
     // Release anyone mid-wait; nothing will ever connect now, and a pending
     // timer would keep the process alive past the shutdown that triggered this.
-    for (const done of [...this.connectWaiters]) done();
+    this.releaseConnectWaiters();
     for (const conn of this.connections.values()) {
       this.rejectPending(conn, "Gullet is shutting down.");
       conn.socket.close();
@@ -145,6 +145,11 @@ export class Hub {
       });
     }
     return this.summaries();
+  }
+
+  /** Each callback removes itself, which Set iteration handles — no copy needed. */
+  private releaseConnectWaiters(): void {
+    for (const done of this.connectWaiters) done();
   }
 
   /** Send one bridge method to one browser and await its answer. */
@@ -267,7 +272,7 @@ export class Hub {
     // Only once the handshake passes: a socket that cannot prove the token is
     // not a browser we can serve, so releasing waiters on `open` would hand
     // them an empty list and waste the wait.
-    for (const done of [...this.connectWaiters]) done();
+    this.releaseConnectWaiters();
     this.options.onConnectionsChanged?.(this.summaries());
   }
 
