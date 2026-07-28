@@ -362,10 +362,23 @@ export interface ClosedTabEntry {
 }
 
 export interface TabsCloseResult {
+  /** Tabs actually closed. Always equals `entries.length` — a close nothing
+   * recorded would be a close `undo_close` could not reverse, so it is not made. */
   closed: number;
   /** Hand back to `undo_close` to reopen exactly this batch. */
   batchId: string;
   entries: ClosedTabEntry[];
+  /**
+   * Requested ids that no longer resolve, so nothing was done about them.
+   * Omitted when every id resolved. Usually stale rather than already closed —
+   * Chrome renumbers a tab when it discards it.
+   */
+  missing?: number[];
+  /**
+   * Requested ids that resolved but had not committed a URL, so closing them
+   * could not have been undone. Left open on purpose; omitted when empty.
+   */
+  skipped?: number[];
 }
 
 export interface UndoCloseParams {

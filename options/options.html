@@ -218,7 +218,12 @@
           </div>
           <div class="setting-control">
             <div class="field-row">
-              <input type="text" id="bridgeToken" readonly placeholder="No token yet" />
+              <!-- Masked by default: Copy does not need it visible, and this page
+                   is one a user may well have open while screen-sharing. -->
+              <input type="password" id="bridgeToken" readonly placeholder="No token yet" />
+              <button type="button" id="bridgeTokenReveal" class="mini-button" aria-pressed="false">
+                Show
+              </button>
               <button type="button" id="bridgeTokenCopy" class="mini-button">Copy</button>
               <button type="button" id="bridgeTokenGenerate" class="mini-button">Generate</button>
             </div>

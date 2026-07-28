@@ -36,6 +36,7 @@ import {
   type TabsLoadResult,
   type UndoCloseResult,
 } from "./bridge-protocol.js";
+import { createTaskQueue } from "./serialize.js";
 import { pickRule } from "./site-rules.js";
 import type { Settings } from "./storage.js";
 import { IS_CHROME } from "./target.js";
@@ -193,6 +194,26 @@ async function writeUndoLog(log: UndoBatch[]): Promise<void> {
 }
 
 /**
+ * Every read-modify-write of the undo log runs here, one at a time.
+ *
+ * `storage.local` has no compare-and-swap, so the read and the write are two
+ * awaits with a gap between them, and bridge requests are served concurrently —
+ * `bridge-client.ts` dispatches each frame independently, and the hub/peer design
+ * exists precisely so two agent sessions can drive one browser at once. Two
+ * `tabs_close` calls interleaving there both read the same log, both append their
+ * own batch, and the second write drops the first: those tabs are closed, the
+ * batch is gone, and `undo_close` answers not-found. That is the one guarantee
+ * the whole close path is built on, so the log gets a lock rather than a hope.
+ *
+ * `undo_close` holds it across its restores, not just its two critical sections.
+ * Slower, but a close landing in the middle of a restore is genuinely ambiguous,
+ * and it makes a double undo of one batch safe for free: the second caller
+ * re-reads inside the lock and finds the batch already dropped or already
+ * narrowed to what failed, instead of reopening everything twice.
+ */
+const withUndoLog = createTaskQueue();
+
+/**
  * The windows that exist at the moment an undo runs, indexed for restore
  * decisions. A recorded window id is not proof of anything on its own: the undo
  * log survives a browser restart, after which ids start over and the id we
@@ -270,14 +291,16 @@ async function restoreEntry(entry: ClosedTabEntry, windows: LiveWindows): Promis
 
 async function recordClosed(entries: ClosedTabEntry[]): Promise<string> {
   const batch: UndoBatch = { id: crypto.randomUUID(), closedAt: Date.now(), entries };
-  await writeUndoLog(appendBatch(await readUndoLog(), batch));
-  return batch.id;
+  return withUndoLog(async () => {
+    await writeUndoLog(appendBatch(await readUndoLog(), batch));
+    return batch.id;
+  });
 }
 
 export class BridgeMethodRunner {
   private readonly deps: BridgeMethodDeps;
   /** Serializes Obsidian handoffs; the OS clipboard is a global resource. */
-  private handoffQueue: Promise<void> = Promise.resolve();
+  private readonly handoffQueue = createTaskQueue();
 
   constructor(deps: BridgeMethodDeps) {
     this.deps = deps;
@@ -491,7 +514,12 @@ export class BridgeMethodRunner {
     try {
       const tab = await browser.tabs.get(params.tabId);
       const entry = toClosedEntry(tab);
-      if (entry) batchId = await recordClosed([entry]);
+      // Same invariant `tabs_close` holds: nothing is closed that the undo log
+      // could not put back. Reaching this without a URL means the tab navigated
+      // away between the read and here, which is also a good reason not to close
+      // it — it is no longer the page that was filed.
+      if (!entry) throw new Error("the tab has no committed URL to record");
+      batchId = await recordClosed([entry]);
       await browser.tabs.remove(params.tabId);
     } catch (err) {
       // The note is already in Obsidian, so this is a partial success, not a
@@ -508,65 +536,97 @@ export class BridgeMethodRunner {
     // the hundred (BRIDGE.md sizes one at ~180), and that many IPC round-trips
     // just to build undo entries is the bulk of the call.
     const byId = new Map((await queryAllTabs()).filter(hasTabId).map((t) => [t.id, t] as const));
+    const missing = tabIds.filter((id) => !byId.has(id));
     const live = tabIds.map((id) => byId.get(id)).filter((t) => t !== undefined);
     if (live.length === 0) failMissingTab("None of the given tab ids exist.");
 
-    const entries = live.map(toClosedEntry).filter((e): e is ClosedTabEntry => e !== null);
+    // Paired rather than filtered, so a tab that cannot be recorded is left
+    // standing instead of being closed off the end of the undo log. A tab whose
+    // navigation has not committed has no URL on either engine (`tabUrl` covers
+    // Chrome's `pendingUrl`; nothing exposes Gecko's), so closing it would be
+    // the one close `undo_close` could never reverse. Reported as skipped: the
+    // window is milliseconds wide, and a re-list gets a URL.
+    const closable: Array<{ id: number; entry: ClosedTabEntry }> = [];
+    const skipped: number[] = [];
+    for (const tab of live) {
+      const entry = toClosedEntry(tab);
+      if (entry) closable.push({ id: tab.id, entry });
+      else skipped.push(tab.id);
+    }
+    if (closable.length === 0) {
+      fail(
+        "not-found",
+        "None of the given tabs have committed a URL yet, so closing them could not be undone. They are still loading — re-run tabs_list and close them again.",
+      );
+    }
+
+    const entries = closable.map((c) => c.entry);
     // Record before removing: a crash mid-remove must not lose the trail.
     const batchId = await recordClosed(entries);
-    await browser.tabs.remove(live.map((t) => t.id));
-    return { closed: live.length, batchId, entries };
+    await browser.tabs.remove(closable.map((c) => c.id));
+    return {
+      closed: closable.length,
+      batchId,
+      entries,
+      // Present only when there is something to say, so the common case stays
+      // compact in a model's context.
+      ...(missing.length > 0 ? { missing } : {}),
+      ...(skipped.length > 0 ? { skipped } : {}),
+    };
   }
 
   private async undoClose(raw: unknown): Promise<UndoCloseResult> {
     const params = parseUndoCloseParams(raw);
-    const log = await readUndoLog();
-    const batch = findBatch(log, params.batchId);
-    if (!batch) {
-      fail(
-        "not-found",
-        params.batchId
-          ? `No close batch with id ${params.batchId}.`
-          : "Nothing to undo — the close log is empty.",
-      );
-    }
-
-    // Ascending index within each window: inserting a low index *after* a high
-    // one shifts the tab already sitting there, so the batch would come back in
-    // an order that does not match what was recorded.
-    const ordered = [...batch.entries].sort((a, b) => a.windowId - b.windowId || a.index - b.index);
-    const windows = await LiveWindows.load();
-    const failed: ClosedTabEntry[] = [];
-    for (const entry of ordered) {
-      try {
-        await restoreEntry(entry, windows);
-      } catch (err) {
-        console.warn("[tabglutton] bridge undo failed for", entry.url, err);
-        failed.push(entry);
+    // The whole undo runs under the log's lock, restores included — see
+    // `withUndoLog`. Reading, restoring, and writing back are one transaction
+    // as far as any concurrent close is concerned.
+    return withUndoLog(async () => {
+      const batch = findBatch(await readUndoLog(), params.batchId);
+      if (!batch) {
+        fail(
+          "not-found",
+          params.batchId
+            ? `No close batch with id ${params.batchId}.`
+            : "Nothing to undo — the close log is empty.",
+        );
       }
-    }
 
-    // Only what actually came back leaves the log. Dropping a failed entry
-    // would put the tab beyond every retry, which is the one thing undo exists
-    // to prevent. Re-read first: restoring is slow, and a close recorded while
-    // it ran must not be clobbered by our stale copy of the log.
-    await writeUndoLog(retainEntries(await readUndoLog(), batch.id, failed));
-    return { batchId: batch.id, restored: ordered.length - failed.length, failed: failed.length };
+      // Ascending index within each window: inserting a low index *after* a high
+      // one shifts the tab already sitting there, so the batch would come back in
+      // an order that does not match what was recorded.
+      const ordered = [...batch.entries].sort(
+        (a, b) => a.windowId - b.windowId || a.index - b.index,
+      );
+      const windows = await LiveWindows.load();
+      const failed: ClosedTabEntry[] = [];
+      for (const entry of ordered) {
+        try {
+          await restoreEntry(entry, windows);
+        } catch (err) {
+          console.warn("[tabglutton] bridge undo failed for", entry.url, err);
+          failed.push(entry);
+        }
+      }
+
+      // Only what actually came back leaves the log. Dropping a failed entry
+      // would put the tab beyond every retry, which is the one thing undo exists
+      // to prevent. Re-read rather than reusing the copy above: restoring is
+      // slow, and the lock orders concurrent closes against us but does not stop
+      // this process's own view from going stale across those awaits.
+      await writeUndoLog(retainEntries(await readUndoLog(), batch.id, failed));
+      return { batchId: batch.id, restored: ordered.length - failed.length, failed: failed.length };
+    });
   }
 
+  /**
+   * The gap is paid inside the queued task, not between tasks, so the next clip
+   * cannot start launching `obsidian://` until this one's pacing has elapsed.
+   */
   private handoff<T>(task: () => Promise<T>): Promise<T> {
-    const next = this.handoffQueue.then(async () => {
+    return this.handoffQueue(async () => {
       const result = await task();
       await delay(OBSIDIAN_HANDOFF_GAP_MS);
       return result;
     });
-    // Keep the chain alive even if a handoff rejects, so one bad clip does not
-    // wedge every later one. Discards the value as well as the error — the
-    // queue only tracks ordering.
-    this.handoffQueue = next.then(
-      () => {},
-      () => {},
-    );
-    return next;
   }
 }

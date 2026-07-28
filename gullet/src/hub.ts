@@ -6,6 +6,7 @@
 // against a nonce the other side chose before any method is served.
 
 import {
+  BRIDGE_HANDSHAKE_TIMEOUT_MS,
   BRIDGE_HEARTBEAT_MS,
   BRIDGE_PROTO,
   BRIDGE_REQUEST_TIMEOUT_MS,
@@ -36,6 +37,8 @@ export function isExtensionOrigin(origin: string | null): boolean {
 interface SocketData {
   connectionId: string;
   serverNonce: string;
+  /** Reaper for a socket that opens and then never proves the token. */
+  handshakeTimer?: ReturnType<typeof setTimeout>;
 }
 
 /** Sidecar attached to this hub, proxying its MCP session through us. */
@@ -59,6 +62,8 @@ export interface HubOptions {
   port: number;
   token: string;
   onConnectionsChanged?: (summaries: ConnectionSummary[]) => void;
+  /** Overridable so tests need not wait out the real deadline. */
+  handshakeTimeoutMs?: number;
 }
 
 /**
@@ -204,13 +209,27 @@ export class Hub {
 
   private onOpen(ws: Bun.ServerWebSocket<SocketData>): void {
     // Unauthenticated sockets are not tracked: `connections` only gains an entry
-    // once the handshake passes, and Bun owns the socket until then.
+    // once the handshake passes, and Bun owns the socket until then. Untracked
+    // is not the same as bounded, though — a local process that opens sockets
+    // and never answers the challenge would otherwise accumulate them for the
+    // life of the sidecar, so each gets a deadline to prove the token in.
+    ws.data.handshakeTimer = setTimeout(() => {
+      console.error(`[gullet] closing ${ws.data.connectionId}: no handshake`);
+      ws.close();
+    }, this.options.handshakeTimeoutMs ?? BRIDGE_HANDSHAKE_TIMEOUT_MS);
     this.send(ws, {
       type: "challenge",
       proto: BRIDGE_PROTO,
       server: "gullet",
       nonce: ws.data.serverNonce,
     });
+  }
+
+  /** Disarm the reaper — the socket has either proved the token or gone away. */
+  private clearHandshakeTimer(ws: Bun.ServerWebSocket<SocketData>): void {
+    if (ws.data.handshakeTimer === undefined) return;
+    clearTimeout(ws.data.handshakeTimer);
+    ws.data.handshakeTimer = undefined;
   }
 
   private async onMessage(
@@ -287,6 +306,8 @@ export class Hub {
       return;
     }
 
+    this.clearHandshakeTimer(ws);
+
     if (msg.role === "peer") {
       // A peer has proved the token, which is the whole check: it is another
       // Gullet on this machine, and it gets exactly what our own MCP half gets.
@@ -337,6 +358,7 @@ export class Hub {
   }
 
   private onClose(ws: Bun.ServerWebSocket<SocketData>): void {
+    this.clearHandshakeTimer(ws);
     if (this.peers.delete(ws.data.connectionId)) {
       console.error(`[gullet] peer sidecar detached (${ws.data.connectionId})`);
       return;
@@ -395,6 +417,7 @@ export class Hub {
   }
 
   private send(ws: Bun.ServerWebSocket<SocketData>, msg: ServerMessage): void {
+    if (ws.readyState !== WebSocket.OPEN) return;
     ws.send(JSON.stringify(msg));
   }
 

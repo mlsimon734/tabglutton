@@ -151,7 +151,7 @@ export const GULLET_TOOLS: readonly McpTool[] = [
     name: "tabs_close",
     title: "Close tabs",
     description:
-      "Close one or more tabs. Every batch is recorded first and returns a batchId that undo_close reverses, so this is reversible — but it still removes tabs from the user's browser. Get approval before closing anything the user did not explicitly ask you to close.",
+      "Close one or more tabs. Every batch is recorded first and returns a batchId that undo_close reverses, so this is reversible — but it still removes tabs from the user's browser. Get approval before closing anything the user did not explicitly ask you to close. `closed` counts what was actually closed; ids that no longer resolve come back under `missing` (usually a stale listing — Chrome renumbers a tab when it discards it — so re-run tabs_list rather than assuming they were already closed), and ids left open because the tab had not finished loading come back under `skipped`.",
     inputSchema: {
       type: "object",
       properties: {
@@ -222,20 +222,47 @@ async function route(
     // Read-only and id-free, so fanning out over every browser is safe and
     // saves the agent a round trip to discover what is connected.
     const targets = selectAll(summaries, target);
+    // Settled, not all: one browser timing out must not throw away the listing
+    // another already returned. A half-answer the agent can see the shape of
+    // beats no answer, and with two browsers attached the healthy one is usually
+    // the one being triaged anyway.
     const perBrowser = await Promise.all(
       targets.map(async (conn) => {
-        const result = (await ctx.request(conn.connectionId, "tabs_list", params)) as {
-          tabs?: Array<Record<string, unknown>>;
-        };
-        return (result?.tabs ?? []).map((tab) => ({
-          ...tab,
-          browser: conn.label,
-          connectionId: conn.connectionId,
-        }));
+        try {
+          const result = (await ctx.request(conn.connectionId, "tabs_list", params)) as {
+            tabs?: Array<Record<string, unknown>>;
+          };
+          const tabs = (result?.tabs ?? []).map((tab) => ({
+            ...tab,
+            browser: conn.label,
+            connectionId: conn.connectionId,
+          }));
+          return { tabs };
+        } catch (err) {
+          const { code, message } = toBridgeError(err);
+          return {
+            tabs: [],
+            failure: { connectionId: conn.connectionId, browser: conn.label, error: code, message },
+          };
+        }
       }),
     );
+    const failures = perBrowser.map((r) => r.failure).filter((f) => f !== undefined);
+    // Every browser failed: there is no partial answer to give, and an empty
+    // `tabs` array would read as "the user has no tabs" rather than as a fault.
+    if (failures.length === targets.length) {
+      const first = failures[0];
+      throw new BridgeRequestError(
+        first?.error ?? "internal",
+        first?.message ?? "tabs_list failed.",
+      );
+    }
     // Tabs carry their origin so ids from two browsers can never be confused.
-    return { browsers: targets, tabs: perBrowser.flat() };
+    return {
+      browsers: targets,
+      tabs: perBrowser.flatMap((r) => r.tabs),
+      ...(failures.length > 0 ? { failures } : {}),
+    };
   }
 
   // Everything else is tab-scoped: ids only mean something inside one browser.

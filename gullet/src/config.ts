@@ -37,10 +37,10 @@ export function parseConfig(
     const [flag, inline] = splitFlag(arg);
     switch (flag) {
       case "--port":
-        port = inline ?? argv[++i];
+        port = inline ?? requireValue(flag, argv[++i]);
         break;
       case "--token":
-        token = inline ?? argv[++i];
+        token = inline ?? requireValue(flag, argv[++i]);
         break;
       default:
         throw new ConfigError(`Unknown argument ${arg}.\n\n${USAGE}`);
@@ -48,6 +48,17 @@ export function parseConfig(
   }
 
   return { port: parsePort(port), token: (token ?? "").trim() };
+}
+
+/**
+ * A trailing `--port` or `--token` with nothing after it. Rejected rather than
+ * defaulted: silently falling back to port 4588 or an empty token turns a typo
+ * into a sidecar that starts, binds the wrong thing, and refuses every browser
+ * with an error naming neither.
+ */
+function requireValue(flag: string, value: string | undefined): string {
+  if (value === undefined) throw new ConfigError(`${flag} needs a value.\n\n${USAGE}`);
+  return value;
 }
 
 function splitFlag(arg: string): [string, string | undefined] {

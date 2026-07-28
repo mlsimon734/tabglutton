@@ -218,3 +218,55 @@ describe("error handling", () => {
     expect(sent).toEqual([]);
   });
 });
+
+describe("tabs_list with a browser that fails", () => {
+  test("keeps the listing the healthy browser returned", async () => {
+    // Promise.all here would throw away Zen's tabs because Chrome timed out.
+    const { call } = caller([zen, chrome], ({ connectionId }) => {
+      if (connectionId === chrome.connectionId) {
+        throw new BridgeRequestError("timeout", "tabs_list timed out after 45000ms.");
+      }
+      return { tabs: [{ id: 1, title: "kept" }] };
+    });
+    const result = payload(await call("tabs_list", {})) as {
+      tabs: Array<Record<string, unknown>>;
+      failures: Array<Record<string, unknown>>;
+    };
+    expect(result.tabs).toEqual([
+      { id: 1, title: "kept", browser: zen.label, connectionId: zen.connectionId },
+    ]);
+    expect(result.failures).toEqual([
+      {
+        connectionId: chrome.connectionId,
+        browser: chrome.label,
+        error: "timeout",
+        message: "tabs_list timed out after 45000ms.",
+      },
+    ]);
+  });
+
+  test("omits the failures key when every browser answered", async () => {
+    const { call } = caller([zen, chrome], () => ({ tabs: [] }));
+    expect(payload(await call("tabs_list", {}))).not.toHaveProperty("failures");
+  });
+
+  test("every browser failing is an error, not an empty tab list", async () => {
+    // An empty `tabs` would read as "the user has no tabs open", which is a
+    // materially different thing to tell an agent than "nothing answered".
+    const { call } = caller([zen, chrome], () => {
+      throw new BridgeRequestError("no-connection", "gone");
+    });
+    const result = await call("tabs_list", {});
+    expect(result.isError).toBe(true);
+    expect(payload(result)).toEqual({ error: "no-connection", message: "gone" });
+  });
+
+  test("a single browser failing still surfaces its error", async () => {
+    const { call } = caller([zen], () => {
+      throw new BridgeRequestError("internal", "boom");
+    });
+    const result = await call("tabs_list", {});
+    expect(result.isError).toBe(true);
+    expect(payload(result)).toMatchObject({ error: "internal" });
+  });
+});

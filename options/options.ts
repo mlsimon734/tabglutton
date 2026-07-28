@@ -20,6 +20,7 @@ const bridgeAllowTabLoad = document.getElementById("bridgeAllowTabLoad") as HTML
 const bridgePort = document.getElementById("bridgePort") as HTMLInputElement;
 const bridgeToken = document.getElementById("bridgeToken") as HTMLInputElement;
 const bridgeTokenCopy = document.getElementById("bridgeTokenCopy") as HTMLButtonElement;
+const bridgeTokenReveal = document.getElementById("bridgeTokenReveal") as HTMLButtonElement;
 const bridgeTokenGenerate = document.getElementById("bridgeTokenGenerate") as HTMLButtonElement;
 const bridgeStatusEl = document.getElementById("bridgeStatus") as HTMLSpanElement;
 const bridgeSnippet = document.getElementById("bridgeSnippet") as HTMLPreElement;
@@ -166,6 +167,15 @@ bridgeTokenGenerate.addEventListener("click", () => {
   bridgeToken.value = generateToken();
   updateBridgeSnippet();
   void save();
+});
+
+// The token stays masked unless asked for. Copy works either way, so revealing
+// it is only ever needed to eyeball one against a config file.
+bridgeTokenReveal.addEventListener("click", () => {
+  const reveal = bridgeToken.type === "password";
+  bridgeToken.type = reveal ? "text" : "password";
+  bridgeTokenReveal.textContent = reveal ? "Hide" : "Show";
+  bridgeTokenReveal.setAttribute("aria-pressed", String(reveal));
 });
 
 bridgeTokenCopy.addEventListener("click", () => {

@@ -64,3 +64,21 @@ describe("parseConfig()", () => {
     expect(() => parseConfig(["--daemon"], {})).toThrow(/Unknown argument --daemon/);
   });
 });
+
+describe("flags with no value", () => {
+  test("rejects a trailing --port rather than silently defaulting", () => {
+    // Defaulting turns a typo into a sidecar that binds the wrong port and then
+    // reports a failure naming neither the flag nor the port.
+    expect(() => parseConfig(["--port"], {})).toThrow(ConfigError);
+    expect(() => parseConfig(["--port"], {})).toThrow("--port needs a value");
+  });
+
+  test("rejects a trailing --token rather than starting with none", () => {
+    expect(() => parseConfig(["--token"], {})).toThrow("--token needs a value");
+  });
+
+  test("still accepts an explicitly empty value", () => {
+    // `--token=` is a deliberate override of an inherited environment variable.
+    expect(parseConfig(["--token="], { TABGLUTTON_TOKEN: "inherited" }).token).toBe("");
+  });
+});

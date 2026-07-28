@@ -27,8 +27,12 @@ afterEach(() => {
   hub = null;
 });
 
-function startHub(token = TOKEN): Hub {
-  const created = new Hub({ port: 0, token });
+function startHub(token = TOKEN, handshakeTimeoutMs?: number): Hub {
+  const created = new Hub({
+    port: 0,
+    token,
+    ...(handshakeTimeoutMs === undefined ? {} : { handshakeTimeoutMs }),
+  });
   created.listen();
   hub = created;
   return created;
@@ -363,5 +367,32 @@ describe("connectionsWithin", () => {
     const waiting = started.connectionsWithin(30_000);
     started.stop();
     expect(await waiting).toEqual([]);
+  });
+});
+
+describe("unauthenticated sockets", () => {
+  test("a socket that never proves the token is reaped", async () => {
+    // Untracked is not the same as bounded: without a reaper, a local process
+    // opening sockets and ignoring the challenge accumulates them for the life
+    // of the sidecar.
+    const h = startHub(TOKEN, 60);
+    const ext = new FakeExtension(h.port);
+    expect((await ext.next()).type).toBe("challenge");
+
+    const closed = new Promise<number>((resolve) => {
+      ext.socket.addEventListener("close", (event) => resolve(event.code));
+    });
+    await closed;
+    expect(h.summaries()).toEqual([]);
+  });
+
+  test("proving the token disarms the reaper", async () => {
+    const h = startHub(TOKEN, 60);
+    const ext = new FakeExtension(h.port);
+    await ext.handshake(TOKEN);
+    // Well past the deadline: a connection that authenticated must survive it.
+    await Bun.sleep(150);
+    expect(h.summaries()).toHaveLength(1);
+    expect(ext.socket.readyState).toBe(WebSocket.OPEN);
   });
 });

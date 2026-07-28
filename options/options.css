@@ -243,7 +243,9 @@ code {
   width: 100%;
 }
 
-.field-row input[type="text"] {
+/* Both types: the token field toggles between text and password. */
+.field-row input[type="text"],
+.field-row input[type="password"] {
   font-family: var(--font-mono);
   font-size: var(--fs-small);
 }
