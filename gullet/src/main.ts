@@ -6,8 +6,8 @@ import {
   errorMessage,
   type BridgeError,
 } from "../../src/bridge-protocol.js";
+import { Supervisor } from "./backend.js";
 import { ConfigError, parseConfig, USAGE } from "./config.js";
-import { Hub } from "./hub.js";
 import { serveStdio } from "./mcp.js";
 import { createToolCaller, GULLET_INSTRUCTIONS, GULLET_TOOLS } from "./tools.js";
 
@@ -31,25 +31,24 @@ export async function main(
     return 1;
   }
 
-  // Neither of the two ways this can be misconfigured is fatal. The MCP server
-  // starts regardless so that tool calls can explain the fix and the agent can
-  // relay it; exiting instead kills the session before `initialize`, and every
-  // client reports that the same unhelpful way — "connection closed".
-  const hub = new Hub({ port: config.port, token: config.token });
+  // Misconfiguration is not fatal. The MCP server starts regardless so that tool
+  // calls can explain the fix and the agent can relay it; exiting instead kills
+  // the session before `initialize`, and every client reports that the same
+  // unhelpful way — "connection closed".
+  const backend = new Supervisor({ port: config.port, token: config.token });
   let startupError: BridgeError | null = null;
 
+  // Losing the port is no longer a failure. Whoever binds it serves the browser
+  // and everyone else attaches to them, because nothing guarantees one Gullet
+  // per agent session — Codex spawns two for one session, so a design where the
+  // loser dies strands a client behind its own sibling.
   try {
-    hub.listen();
-    console.error(`[gullet] listening on ws://127.0.0.1:${hub.port} (proto MCP over stdio)`);
+    await backend.start();
   } catch (err) {
-    // Almost always a second Gullet from another agent session: only one
-    // process can hold the port, and the browser only ever dials that one.
     const message =
-      `Another process is already listening on 127.0.0.1:${config.port}, ` +
-      `almost certainly a Tabglutton sidecar from another agent session. Only one can hold ` +
-      `the port. Close that session, or start this one with --port <free port> and set the ` +
-      `same port in Tabglutton's settings.`;
-    console.error(`[gullet] ${message} (${errorMessage(err)})`);
+      `Could not reach the Tabglutton bridge on 127.0.0.1:${config.port}: ` +
+      `${errorMessage(err)}. Nothing could bind the port or attach to whatever holds it.`;
+    console.error(`[gullet] ${message}`);
     startupError = { code: "unsupported", message };
   }
 
@@ -64,7 +63,7 @@ export async function main(
   }
 
   const shutdown = (): void => {
-    hub.stop();
+    backend.stop();
     process.exit(0);
   };
   process.on("SIGINT", shutdown);
@@ -78,13 +77,15 @@ export async function main(
     instructions: GULLET_INSTRUCTIONS,
     tools: GULLET_TOOLS,
     call: createToolCaller({
-      connections: () => hub.connectionsWithin(BRIDGE_CONNECT_WAIT_MS),
-      request: (connectionId, method, params) => hub.request(connectionId, method, params),
+      connections: () => backend.connections(BRIDGE_CONNECT_WAIT_MS),
+      request: (connectionId, method, params) => backend.request(connectionId, method, params),
       startupError,
     }),
   });
 
-  // stdin closed: the agent harness has gone away, so the socket should too.
-  hub.stop();
+  // stdin closed: the agent harness has gone away, so the socket should too. If
+  // this process was the hub, dropping it is what tells the attached peers to
+  // re-elect one of themselves.
+  backend.stop();
   return 0;
 }

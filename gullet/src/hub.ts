@@ -14,10 +14,16 @@ import {
   parseMessage,
   proofsMatch,
   randomNonce,
+  toBridgeError,
   type BridgeMethod,
   type HelloMessage,
   type ServerMessage,
 } from "../../src/bridge-protocol.js";
+import {
+  parsePeerMessage,
+  type PeerRequestMessage,
+  type PeerResponseMessage,
+} from "./peer-protocol.js";
 import type { ConnectionSummary } from "./select.js";
 
 const EXTENSION_ORIGIN_PREFIXES = ["moz-extension://", "chrome-extension://"];
@@ -30,6 +36,11 @@ export function isExtensionOrigin(origin: string | null): boolean {
 interface SocketData {
   connectionId: string;
   serverNonce: string;
+}
+
+/** Sidecar attached to this hub, proxying its MCP session through us. */
+interface Peer {
+  socket: Bun.ServerWebSocket<SocketData>;
 }
 
 interface PendingRequest {
@@ -50,9 +61,20 @@ export interface HubOptions {
   onConnectionsChanged?: (summaries: ConnectionSummary[]) => void;
 }
 
+/**
+ * How long a peer's `connections` request may wait for a browser. The peer
+ * inherits the hub's wait rather than running its own, so it must not be so long
+ * that the peer's request timeout fires first and reports a timeout for what is
+ * really "still waiting". Kept under BRIDGE_REQUEST_TIMEOUT_MS.
+ */
+const PEER_CONNECT_WAIT_MS = 35_000;
+
 export class Hub {
   private readonly options: HubOptions;
   private readonly connections = new Map<string, Connection>();
+  /** Attached sidecars, keyed like connections but deliberately kept apart: a
+   * peer is never a target for a bridge method, only a source of them. */
+  private readonly peers = new Map<string, Peer>();
   private server: Bun.Server<SocketData> | null = null;
   private heartbeat: ReturnType<typeof setInterval> | null = null;
   private readonly connectWaiters = new Set<() => void>();
@@ -103,6 +125,10 @@ export class Hub {
       conn.socket.close();
     }
     this.connections.clear();
+    // Dropping these is how attached sidecars learn the hub is gone and start
+    // re-electing one of themselves; nothing else tells them.
+    for (const peer of this.peers.values()) peer.socket.close();
+    this.peers.clear();
     this.server?.stop(true);
     this.server = null;
   }
@@ -191,7 +217,17 @@ export class Hub {
     ws: Bun.ServerWebSocket<SocketData>,
     raw: string | Buffer,
   ): Promise<void> {
-    const msg = parseMessage(typeof raw === "string" ? raw : raw.toString("utf8"));
+    const text = typeof raw === "string" ? raw : raw.toString("utf8");
+
+    // Role is settled at handshake and never mixes afterwards, so a peer's
+    // frames go to the peer parser and a browser's to the shared one.
+    if (this.peers.has(ws.data.connectionId)) {
+      const peerMsg = parsePeerMessage(text);
+      if (peerMsg?.type === "peer-request") await this.servePeer(ws, peerMsg);
+      return;
+    }
+
+    const msg = parseMessage(text);
     if (!msg) return;
     const conn = this.connections.get(ws.data.connectionId);
 
@@ -251,6 +287,20 @@ export class Hub {
       return;
     }
 
+    if (msg.role === "peer") {
+      // A peer has proved the token, which is the whole check: it is another
+      // Gullet on this machine, and it gets exactly what our own MCP half gets.
+      this.peers.set(ws.data.connectionId, { socket: ws });
+      this.send(ws, {
+        type: "hello-ack",
+        proto: BRIDGE_PROTO,
+        connectionId: ws.data.connectionId,
+        proof: await deriveProof(this.options.token, msg.nonce),
+      });
+      console.error(`[gullet] peer sidecar attached (${ws.data.connectionId})`);
+      return;
+    }
+
     const conn: Connection = {
       connectionId: ws.data.connectionId,
       browser: msg.browser === "chrome" ? "chrome" : "firefox",
@@ -287,6 +337,10 @@ export class Hub {
   }
 
   private onClose(ws: Bun.ServerWebSocket<SocketData>): void {
+    if (this.peers.delete(ws.data.connectionId)) {
+      console.error(`[gullet] peer sidecar detached (${ws.data.connectionId})`);
+      return;
+    }
     const conn = this.connections.get(ws.data.connectionId);
     if (!conn) return;
     this.connections.delete(conn.connectionId);
@@ -310,7 +364,42 @@ export class Hub {
     }
   }
 
+  /**
+   * Answer one attached sidecar. Its two operations are exactly what this hub's
+   * own MCP half calls, so a peer is served through the same paths rather than a
+   * parallel set — there is no behaviour a peer can reach that the hub's own
+   * session cannot, and none it misses.
+   */
+  private async servePeer(
+    ws: Bun.ServerWebSocket<SocketData>,
+    msg: PeerRequestMessage,
+  ): Promise<void> {
+    try {
+      const result =
+        msg.op === "connections"
+          ? await this.connectionsWithin(PEER_CONNECT_WAIT_MS)
+          : await this.requestFromPeer(msg);
+      this.sendPeer(ws, { type: "peer-response", id: msg.id, result });
+    } catch (err) {
+      this.sendPeer(ws, { type: "peer-response", id: msg.id, error: toBridgeError(err) });
+    }
+  }
+
+  private requestFromPeer(msg: PeerRequestMessage): Promise<unknown> {
+    if (!msg.connectionId || !msg.method) {
+      return Promise.reject(
+        new BridgeRequestError("bad-request", "peer call needs a connectionId and a method."),
+      );
+    }
+    return this.request(msg.connectionId, msg.method, msg.params);
+  }
+
   private send(ws: Bun.ServerWebSocket<SocketData>, msg: ServerMessage): void {
+    ws.send(JSON.stringify(msg));
+  }
+
+  private sendPeer(ws: Bun.ServerWebSocket<SocketData>, msg: PeerResponseMessage): void {
+    if (ws.readyState !== WebSocket.OPEN) return;
     ws.send(JSON.stringify(msg));
   }
 

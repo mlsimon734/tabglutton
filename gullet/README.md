@@ -71,6 +71,7 @@ Diagnostics go to **stderr**; stdout is the MCP transport and carries nothing el
 | Tool         | What it does                                                                                                                                                                                    |
 | ------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `tabs_list`  | Metadata for every open tab — id, title, url, `lastAccessed`, `discarded`, `pinned`, `active`, window, and `hidden` on Firefox/Zen. No page content, so it stays cheap across hundreds of tabs. |
+| `tabs_load`  | Reloads discarded tabs so they can be read, ≤20 per call, a few at a time. Off by default — see below.                                                                                          |
 | `tab_read`   | Extracts one loaded tab as clean markdown via Defuddle.                                                                                                                                         |
 | `tab_clip`   | Files a tab into Obsidian exactly as the popup's Devour does. Optionally closes it after.                                                                                                       |
 | `tabs_close` | Closes tabs. Records the batch first and returns a `batchId`.                                                                                                                                   |
@@ -80,6 +81,12 @@ Deliberately absent: navigate, click, type, evaluate. The agent can read what yo
 chose to open, file it, and clean up — it cannot act as you. Adding anything richer means
 revisiting the prompt-injection posture in `BRIDGE.md` first.
 
+`tabs_load` is the one tool that acts on a page rather than observing it, so it has its own
+switch — **Agent bridge → "Let agents load unloaded tabs"** in Tabglutton's settings — and
+enabling the bridge does not enable it. Until it is on, the tool answers `not-enabled` with
+that instruction, so an agent can tell you what to flip. Even on, all it does is reload a
+tab you already opened; the URL never comes from the agent.
+
 `tabs_list` with no `browser` argument fans out across every connected browser and tags
 each tab with its origin. The tab-scoped tools refuse to guess between two browsers, since
 tab ids only mean something within one.
@@ -87,11 +94,25 @@ tab ids only mean something within one.
 ## Suggested workflow
 
 Triage on metadata first. In a 300-tab backlog most tabs are discarded (unloaded), and
-`tab_read` cannot reach those — it fails with `tab-discarded` so the agent can report
-"needs manual load" rather than retrying. Cutting on title, URL, and age before reading
-anything is also what makes triaging that many tabs affordable in tokens.
+`tab_read` cannot reach those. Cutting on title, URL, and age before reading anything is
+what makes triaging that many tabs affordable in tokens — and it also keeps the survivors
+few enough to be worth waking.
+
+Then wake the survivors in batches: one `tabs_load` per 20 tabs, not one per tab. Loads run
+three at a time under a fixed budget per call, so a batch is bounded by the slowest few
+pages rather than by their sum, and each tab comes back `ready`, `pending` (still loading,
+or not reached — ask again), or `failed` (gone, or not an http(s) page). Read the `ready`
+ones. With loading switched off, `tab_read` fails with `tab-discarded` instead and those
+tabs are yours to open by hand.
 
 ## Troubleshooting
+
+**Several agent sessions at once.** Supported, and nothing needs configuring. The first
+Gullet to start binds the port and serves the browser; later ones attach to it and proxy
+through, so every session sees the same tabs. When the one holding the port exits, the
+others re-race and one takes over within a second. You may see more `bun run gullet` processes
+than you have sessions — some MCP clients spawn more than one — which is harmless now that
+losing the race is not fatal.
 
 **"No browser is connected."** The bridge is off in Tabglutton's settings, no token has
 been generated, the ports do not match, or the browser has not re-dialled yet — the retry

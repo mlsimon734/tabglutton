@@ -148,8 +148,8 @@
         <p class="section-intro">
           Lets a coding agent (Claude Code, Codex, any MCP client) see your open tabs and triage
           them — read a page, file it into Obsidian, close it, undo the close. Nothing else: no
-          navigating, clicking, or typing on your behalf. Runs over a loopback socket that only a
-          local process holding the token below can use.
+          clicking, no typing, and no opening pages you did not open yourself. Runs over a loopback
+          socket that only a local process holding the token below can use.
         </p>
 
         <div class="setting">
@@ -169,6 +169,27 @@
           <div class="setting-control">
             <label class="switch">
               <input type="checkbox" id="bridgeEnabled" />
+              <span class="switch-track" aria-hidden="true">
+                <span class="switch-thumb"></span>
+              </span>
+            </label>
+          </div>
+        </div>
+
+        <div class="setting">
+          <div class="setting-text">
+            <strong>Let agents load unloaded tabs</strong>
+            <small>
+              A tab your browser has unloaded to save memory has no page left to read. With this on,
+              an agent can reload one so it becomes readable — the only thing the bridge ever does
+              <em>to</em> a page rather than with it. It can only reload tabs you already opened,
+              never open a new address, and a few load at a time so a triage run does not undo what
+              unloading saved.
+            </small>
+          </div>
+          <div class="setting-control">
+            <label class="switch">
+              <input type="checkbox" id="bridgeAllowTabLoad" />
               <span class="switch-track" aria-hidden="true">
                 <span class="switch-thumb"></span>
               </span>

@@ -16,19 +16,24 @@ import {
 import type { ClipPayload } from "./clip-format.js";
 import {
   BridgeRequestError,
+  errorMessage,
   parseTabClipParams,
   parseTabReadParams,
   parseTabsCloseParams,
   parseTabsListParams,
+  parseTabsLoadParams,
   parseUndoCloseParams,
+  TABS_LOAD_DEADLINE_MS,
   type BridgeErrorCode,
   type BridgeMethod,
   type BridgeTab,
   type ClosedTabEntry,
   type TabClipResult,
+  type TabLoadOutcome,
   type TabReadResult,
   type TabsCloseResult,
   type TabsListResult,
+  type TabsLoadResult,
   type UndoCloseResult,
 } from "./bridge-protocol.js";
 import { pickRule } from "./site-rules.js";
@@ -80,14 +85,30 @@ export interface BridgeExtractResult {
 export interface BridgeMethodDeps {
   getSettings: () => Settings;
   /**
-   * Extract the tab through Defuddle WITHOUT waking it. `tab_load` is a v1.1
-   * tool that ships default-off, so v1 must never navigate on the agent's
-   * behalf — a discarded tab is reported as such instead.
+   * Extract the tab through Defuddle WITHOUT waking it. Waking is its own
+   * explicitly-gated act (`tabs_load`), so reading never navigates as a side
+   * effect — a discarded tab is reported as discarded instead.
    */
   extract: (tabId: number) => Promise<BridgeExtractResult>;
+  /** Reload a discarded tab and resolve once it is loaded. Backs `tabs_load`. */
+  load: (tabId: number, timeoutMs: number) => Promise<void>;
   openObsidianUrl: (url: string) => Promise<void>;
   copyToClipboardViaTab: (tabId: number, text: string) => Promise<boolean>;
 }
+
+/**
+ * Per-tab ceiling, held separate from the batch deadline so one page that never
+ * finishes cannot spend the whole call's budget: it is reported pending and the
+ * next tab gets its turn.
+ */
+const TAB_LOAD_TIMEOUT_MS = 20_000;
+
+/**
+ * How many pages load at once. Anyone with a backlog big enough to need
+ * `tabs_load` is running an auto-discarder because memory is scarce, and waking
+ * twenty pages simultaneously would spend exactly what the discarder saved.
+ */
+const TABS_LOAD_CONCURRENCY = 3;
 
 function fail(code: BridgeErrorCode, message: string): never {
   throw new BridgeRequestError(code, message);
@@ -108,6 +129,11 @@ function fail(code: BridgeErrorCode, message: string): never {
  */
 function tabUrl(tab: browser.tabs.Tab): string | undefined {
   return tab.url || (tab as { pendingUrl?: string }).pendingUrl || undefined;
+}
+
+/** Defuddle needs a real document; `about:`, `file:`, and the rest never have one. */
+function isHttpUrl(url: string | undefined): boolean {
+  return url?.startsWith("http://") === true || url?.startsWith("https://") === true;
 }
 
 function toBridgeTab(tab: browser.tabs.Tab): BridgeTab | null {
@@ -261,6 +287,8 @@ export class BridgeMethodRunner {
     switch (method) {
       case "tabs_list":
         return this.tabsList(params);
+      case "tabs_load":
+        return this.tabsLoad(params);
       case "tab_read":
         return this.tabRead(params);
       case "tab_clip":
@@ -287,6 +315,106 @@ export class BridgeMethodRunner {
   }
 
   /**
+   * Wake unloaded tabs so `tab_read` can reach them — the bridge's one action
+   * tool, and the only place it navigates anything. It ships default-off, and a
+   * reload is all it will ever do: the URL comes from a tab the user opened, not
+   * from the agent.
+   *
+   * Batched rather than one-per-call because loading is dominated by the network
+   * wait, and a triage run has tens of discarded survivors. Loads run a few at a
+   * time under a wall-clock deadline, and every tab in the request gets an
+   * outcome — a call that ran out of budget still reports what it managed.
+   */
+  private async tabsLoad(raw: unknown): Promise<TabsLoadResult> {
+    const { tabIds } = parseTabsLoadParams(raw);
+    if (!this.deps.getSettings().bridgeAllowTabLoad) {
+      fail(
+        "not-enabled",
+        'Loading tabs is switched off. The user can turn it on in Tabglutton\'s settings, under Agent bridge → "Let agents load unloaded tabs".',
+      );
+    }
+
+    const deadline = Date.now() + TABS_LOAD_DEADLINE_MS;
+    const outcomes: TabLoadOutcome[] = Array.from({ length: tabIds.length });
+    let next = 0;
+    const worker = async (): Promise<void> => {
+      for (let i = next++; i < tabIds.length; i = next++) {
+        const tabId = tabIds[i];
+        const budget = Math.min(deadline - Date.now(), TAB_LOAD_TIMEOUT_MS);
+        outcomes[i] =
+          budget > 0
+            ? await this.loadOne(tabId, budget)
+            : {
+                tabId,
+                status: "pending",
+                reason: `Not reached within the ${TABS_LOAD_DEADLINE_MS}ms budget for one tabs_load call. Call again for this tab.`,
+              };
+      }
+    };
+    await Promise.all(
+      Array.from({ length: Math.min(TABS_LOAD_CONCURRENCY, tabIds.length) }, worker),
+    );
+
+    return {
+      tabs: outcomes,
+      ready: outcomes.filter((o) => o.status === "ready").length,
+      pending: outcomes.filter((o) => o.status === "pending").length,
+      failed: outcomes.filter((o) => o.status === "failed").length,
+    };
+  }
+
+  /**
+   * One tab, never throwing: a batch reports per-tab outcomes, so a tab that
+   * cannot be loaded must not take the other nineteen down with it.
+   */
+  private async loadOne(tabId: number, timeoutMs: number): Promise<TabLoadOutcome> {
+    let tab: browser.tabs.Tab;
+    try {
+      tab = await browser.tabs.get(tabId);
+    } catch {
+      return { tabId, status: "failed", reason: `No tab with id ${tabId}. ${STALE_ID_HINT}` };
+    }
+    const url = tabUrl(tab) ?? "";
+    if (!isHttpUrl(url)) {
+      return { tabId, status: "failed", url, reason: "Only http and https pages can be loaded." };
+    }
+    // Already live: loading it again would re-fetch a page the user may have
+    // state in, which is well outside what waking a discarded tab authorises.
+    if (!tab.discarded && tab.status === "complete") return { tabId, status: "ready", url };
+
+    try {
+      await this.deps.load(tabId, timeoutMs);
+      return { tabId, status: "ready", url };
+    } catch (err) {
+      // A wait that ended badly is not proof the tab did not load, so ask the
+      // browser before answering. It settles two cases the wait cannot see: a
+      // page that finished right at the timeout boundary, and — the one that
+      // would otherwise make this tool useless on Chrome — a tab whose id
+      // changed under us, since the completion event then names an id our
+      // listener is not watching for. The second reads back as a vanished tab,
+      // which STALE_ID_HINT already knows how to explain.
+      return await this.verifyLoaded(tabId, url, errorMessage(err));
+    }
+  }
+
+  private async verifyLoaded(
+    tabId: number,
+    url: string,
+    waitError: string,
+  ): Promise<TabLoadOutcome> {
+    let tab: browser.tabs.Tab;
+    try {
+      tab = await browser.tabs.get(tabId);
+    } catch {
+      return { tabId, status: "failed", url, reason: `${waitError}. ${STALE_ID_HINT}` };
+    }
+    if (!tab.discarded && tab.status === "complete") return { tabId, status: "ready", url };
+    // Pending, not failed: the reload is usually still running and the tab is
+    // often readable a moment later, so the agent's move is to try again.
+    return { tabId, status: "pending", url, reason: waitError };
+  }
+
+  /**
    * Reads through the same Defuddle clipper the popup uses. Discarded tabs
    * cannot host a content script and are reported with a distinct code so the
    * agent can say "needs manual load" instead of retrying.
@@ -296,13 +424,13 @@ export class BridgeMethodRunner {
     // Deliberately the committed `tab.url`, not the `tabUrl` fallback: a tab
     // still resolving its `pendingUrl` has no document to extract, and `wake` is
     // false here, so there is nothing to wait for either.
-    if (!tab.url?.startsWith("http://") && !tab.url?.startsWith("https://")) {
+    if (!isHttpUrl(tab.url)) {
       fail("unsupported", "Only http and https pages can be read.");
     }
     if (tab.discarded) {
       fail(
         "tab-discarded",
-        `Tab ${tabId} is unloaded, so its content cannot be read. Needs manual load.`,
+        `Tab ${tabId} is unloaded, so its content cannot be read. Wake it with tabs_load and read it again; if that reports the capability is off, the tab needs a manual load.`,
       );
     }
     const result = await this.deps.extract(tabId);

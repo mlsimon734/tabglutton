@@ -19,6 +19,12 @@ export interface Settings {
   bridgePort: number;
   /** Shared secret; also pasted into Gullet's env. Empty until first generated. */
   bridgeToken: string;
+  /**
+   * Lets the bridge's `tabs_load` wake unloaded tabs. Separate from
+   * `bridgeEnabled` because it is the one bridge method that acts on a page
+   * rather than reading one, so enabling the bridge must not enable it too.
+   */
+  bridgeAllowTabLoad: boolean;
 }
 
 const DEFAULTS: Readonly<Settings> = Object.freeze({
@@ -34,6 +40,7 @@ const DEFAULTS: Readonly<Settings> = Object.freeze({
   bridgeEnabled: false,
   bridgePort: DEFAULT_BRIDGE_PORT,
   bridgeToken: "",
+  bridgeAllowTabLoad: false,
 });
 
 export function defaults(): Settings {

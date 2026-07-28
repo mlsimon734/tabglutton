@@ -27,9 +27,13 @@ agent (prompts, skills, the user's vault context); the extension stays hands and
 
 ## Trust boundary (non-goals)
 
-The bridge deliberately exposes **read + file + close** and nothing else:
+The bridge deliberately exposes **read + file + close**, plus a separately-gated **load**,
+and nothing else:
 
-- No navigation, no clicking, no form input, no arbitrary script execution in pages.
+- No clicking, no form input, no arbitrary script execution in pages, and no navigation to
+  any address the agent chooses. `tabs_load` reloads a tab the _user_ opened, at its own
+  URL, and is the only tool that touches a page rather than reading one; it ships off and
+  has its own settings switch, so enabling the bridge does not enable it.
 - No access to page state beyond what the existing Defuddle clipper extracts.
 - Closing tabs is the only destructive action, and it leaves an undo trail. It reaches the
   agent through two tools — `tabs_close` and `tab_clip { close: true }` — and both are
@@ -71,6 +75,19 @@ identical on Gecko and Chromium, and trivially debuggable (`bunx wscat`). Native
 remains the right tool if the sidecar ever needs to be browser-launched (see Lifecycle),
 with the caveat that Zen's `NativeMessagingHosts` directory location needs verification —
 Firefox forks differ.
+
+▸ **"No gain" was measured against the wrong thing.** That paragraph weighs native messaging
+purely as a _launch_ mechanism, where a second hop really does buy nothing. It misses the
+lifecycle property: an open native-messaging port is understood to keep a Firefox MV3 event
+page alive, which is precisely the guarantee the whole keepalive-and-alarm apparatus below
+exists to counterfeit. Firefox MV3 has no persistent background option, so a loopback socket
+can never be more than polling around a lifetime the browser does not know it should extend.
+If that property holds, native messaging is not a second hop for no gain — it is the only
+supported way to get the thing this design keeps working around. **Unverified**: the
+behaviour, the Firefox version it landed in, and Zen's host-manifest path all need
+confirming before this becomes a plan. Weigh it against what it costs — a separately
+installed host binary and manifest per browser, replacing today's "install the extension,
+add one line to `.mcp.json`".
 
 ## Lifecycle: nobody launches an app
 
@@ -120,17 +137,38 @@ extension and Gullet so the contract is typechecked from one definition.
 
 ## Tool surface (v1)
 
-| MCP tool     | Backing APIs                                           | Notes                                                                                                                                                                                             |
-| ------------ | ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `tabs_list`  | `tabs.query`                                           | id, title, url, `lastAccessed`, `discarded`, `pinned`; on Firefox also `hidden` (≈ other Zen workspaces). Metadata only — cheap over hundreds of tabs.                                            |
-| `tab_read`   | `scripting.executeScript` + existing `clip-current.ts` | Returns Defuddle markdown + metadata. Fails cleanly on discarded tabs (see below).                                                                                                                |
-| `tab_clip`   | existing `clip-format.ts` + `obsidian://new` handoff   | Files into the vault exactly as manual Devour does, including the Chrome redirect-page dance.                                                                                                     |
-| `tabs_close` | `tabs.remove`                                          | Batched, ids deduplicated. Entries (title, url, pinned, window, index, private) are recorded in an undo log in `storage.local` _before_ the removal, and the batch id comes back with the result. |
-| `undo_close` | reopen from the log                                    | Safety valve for the one destructive act. Omit the batch id to undo the most recent.                                                                                                              |
+| MCP tool     | Backing APIs                                           | Notes                                                                                                                                                                                                           |
+| ------------ | ------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `tabs_list`  | `tabs.query`                                           | id, title, url, `lastAccessed`, `discarded`, `pinned`; on Firefox also `hidden` (≈ other Zen workspaces). Metadata only — cheap over hundreds of tabs.                                                          |
+| `tabs_load`  | `tabs.reload` + `tabs.onUpdated`                       | Wakes discarded tabs so they can be read. Batched (≤20), three at a time, under a 30s deadline; per-tab `ready`/`pending`/`failed`. Gated on a settings toggle, default off — answers `not-enabled` until then. |
+| `tab_read`   | `scripting.executeScript` + existing `clip-current.ts` | Returns Defuddle markdown + metadata. Fails cleanly on discarded tabs (see below).                                                                                                                              |
+| `tab_clip`   | existing `clip-format.ts` + `obsidian://new` handoff   | Files into the vault exactly as manual Devour does, including the Chrome redirect-page dance.                                                                                                                   |
+| `tabs_close` | `tabs.remove`                                          | Batched, ids deduplicated. Entries (title, url, pinned, window, index, private) are recorded in an undo log in `storage.local` _before_ the removal, and the batch id comes back with the result.               |
+| `undo_close` | reopen from the log                                    | Safety valve for the one destructive act. Omit the batch id to undo the most recent.                                                                                                                            |
 
-Deliberately absent: navigate, click, type, evaluate. A gated `tab_load` (reload a
-discarded tab so `tab_read` works on authed pages) is a candidate for v1.1, but it is the
-first "action" tool, so it ships default-off behind an options toggle.
+Deliberately absent: navigate, click, type, evaluate.
+
+▸ **`tab_load` shipped as `tabs_load`, plural.** It was sketched as a per-tab v1.1 tool.
+But loading is dominated by the network wait, not by IPC, and the workflow that needs it —
+"here are the 30 discarded survivors of a metadata cut" — is inherently a batch. One tab per
+call would have serialised 30 page loads into 30 round trips, each of them mostly idle. So
+it takes an id array like `tabs_close`, loads a few concurrently, and answers per tab.
+
+Being a batch is also what forces the rest of its shape. Its wall-clock budget
+(`TABS_LOAD_DEADLINE_MS`, 30s) sits deliberately under `BRIDGE_REQUEST_TIMEOUT_MS` (45s):
+a batch that overran the request timeout would reach the agent as a bare timeout even though
+most of its tabs had in fact loaded, and the agent would then redo work the browser had
+already done. Stopping first lets every tab in the request get an outcome, with the ones it
+never reached marked `pending` rather than silently missing. `pending` and `failed` are kept
+apart for the same reason: one means "ask again", the other means "asking again will not
+help". The batch cap (20) and the concurrency limit (3) are the memory manners — anyone with
+a backlog big enough to need this is running an auto-discarder precisely because memory is
+scarce, and waking twenty pages at once would spend exactly what the discarder saved.
+
+The gate is a real one and it is separate from `bridgeEnabled`: `bridgeAllowTabLoad`,
+default off, surfaced as **Agent bridge → "Let agents load unloaded tabs"**. A refused call
+returns the `not-enabled` code — distinct from `unsupported` because this one has a fix the
+agent can state to the user.
 
 `tabs_list` with no `browser` argument fans out over every connected browser and tags each
 tab with its origin, so discovering what is connected costs no extra round trip. The
@@ -158,7 +196,11 @@ Strategy, in order:
    runs Defuddle over the HTML (`defuddle/node` + a DOM shim). Works for the public-
    article majority of a foraging backlog; loses cookies, so authed/paywalled pages fail
    with a distinct error the agent can report ("needs manual load").
-3. **`tab_load`** (v1.1, opt-in) for the authed remainder.
+3. **`tabs_load`** — _shipped, opt-in_. Wakes the survivors so `tab_read` reaches them,
+   including the authed and paywalled ones a sidecar fetch could never get. In practice this
+   inverts the order above rather than sitting behind it: once loading is switched on, waking
+   30 tabs the user is already logged into beats fetching them cookie-less, so the fetch
+   fallback matters mainly when loading is left off.
 
 ## Security model
 
@@ -180,8 +222,12 @@ Strategy, in order:
   MCP client and is not persisted.
 - Prompt-injection posture: page content is attacker-controlled input to the agent. The
   narrow tool surface is the mitigation — the worst a poisoned page can trick the agent
-  into is closing tabs (undoable) or clipping junk into the Obsidian inbox (deletable).
-  This posture must be re-evaluated before any richer tool is added.
+  into is closing tabs (undoable), clipping junk into the Obsidian inbox (deletable), or
+  loading a tab the user already had open. `tabs_load` was weighed against this before it
+  shipped: the agent chooses _which_ tab to wake but never its URL, so the reachable set is
+  exactly the user's own open tabs, and the delta is that a page the user opened once runs
+  again. That is small, but it is not nothing — it is why the tool is gated rather than
+  simply added. This posture must be re-evaluated before any richer tool.
 
 ## Manifest / build changes
 
@@ -245,8 +291,25 @@ Strategy, in order:
 2. **Curation workflow**: a `/triage-tabs` skill (lives with the agent, not this repo):
    metadata cut → read survivors → digest note in Obsidian ("12 high-signal, 40 clipped,
    180 proposed closures — approve?"). Closure stays behind human approval.
-3. **v1.1**: sidecar fetch fallback, `tab_load` opt-in, autonomy ratchets (auto-close
-   known-noise domains, auto-close anything clipped), scheduled runs.
+3. **v1.1**: `tabs_load` opt-in — _shipped and verified on Gecko_. Definition of done met on
+   **Zen 1.21.9b** (ext 0.1.3.3) against a real ~975-tab session, driven from a Codex MCP
+   session: two discarded X tabs loaded in one `tabs_load` call returned `2 ready, 0 pending,
+0 failed`, both flipped `discarded: true → false`, both stayed inactive — the load does not
+   steal focus — and `tab_read` then extracted 253 and 196 words through Defuddle. No tab was
+   closed or otherwise altered. That run also finally exercises the Gecko `tab-discarded` path
+   left unproven in phase 1, since the fixtures were tabs Zen had lazily discarded on its own
+   rather than anything manufactured.
+   - **Still unverified on Chrome**, and the id question there is the whole reason: a Chrome
+     tab gets a new id when it is _discarded_, and whether waking one churns the id a second
+     time is unknown. If it does, the completion event names an id `ensureTabReady` is not
+     watching and the wait times out on a tab that in fact loaded — which is why a failed wait
+     re-reads the tab before answering, so a vanished id surfaces as `failed` with
+     `STALE_ID_HINT` ("re-list for current ids") rather than a silent `pending` for a tab the
+     agent already has. Gecko cannot tell us which branch fires; it keeps tab ids, and every
+     load in the run above came back under the id it was asked about. Needs a CDP run with
+     `chrome.tabs.discard()`.
+   - Still outstanding for v1.1: sidecar fetch fallback, autonomy ratchets (auto-close
+     known-noise domains, auto-close anything clipped), scheduled runs.
 
 ## Open questions
 
@@ -258,3 +321,23 @@ Strategy, in order:
   whether a 30s alarm is worth the wakeups it costs when no sidecar will ever answer.
 - Whether `tab_clip` batching needs throttling on the `obsidian://` handoff (Obsidian URI
   handling under burst load is untested beyond manual Devour rates).
+- ~~One port, many sessions.~~ **Resolved: hub mode.** The sidecar no longer assumes it owns
+  the browser. Whichever Gullet binds the port becomes the _hub_ and serves the browser; every
+  later one attaches to it as a _peer_ over the same socket and proxies its MCP calls through,
+  so N agent sessions share one browser connection. When the hub exits, its peers see the
+  socket drop and re-race for the port; binding is the election, so the OS settles it
+  atomically and two processes can never both believe they are the hub. See
+  `gullet/src/backend.ts` (election), `gullet/src/peer.ts` (the attached side), and
+  `gullet/src/peer-protocol.ts` (the sidecar-only wire types).
+  - What forced it: **nothing guarantees one Gullet per agent session.** The old design read
+    a bind failure as "another session has it" and told the user to close that session or pick
+    another port. Both are wrong — observed live, a single `codex` process spawned _two_
+    sidecars eight seconds apart, and the one its MCP client was actually talking to was the
+    loser. Port arbitration cannot fix that at any retry rate, because the winner is the
+    loser's own sibling with an identical lifetime.
+  - The peer leg reuses the browser handshake — same token, same challenge/proof in both
+    directions — and is told apart by an optional `role: "peer"` on the hello. A peer proves
+    the token like anything else, and the hub proves it back, so a process squatting the port
+    cannot collect another session's tool traffic. Peers are held in their own map: a peer is
+    a source of requests, never a target for one, so it can never be offered to an agent as a
+    browser.

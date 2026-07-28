@@ -34,9 +34,10 @@ function payload(result: { content: Array<{ type: "text"; text: string }> }): un
 }
 
 describe("tool definitions", () => {
-  test("exposes exactly the five v1 tools", () => {
+  test("exposes exactly the shipped tools", () => {
     expect(GULLET_TOOLS.map((t) => t.name)).toEqual([
       "tabs_list",
+      "tabs_load",
       "tab_read",
       "tab_clip",
       "tabs_close",
@@ -52,6 +53,9 @@ describe("tool definitions", () => {
     expect(byName.get("undo_close")?.annotations?.destructiveHint).toBe(false);
     expect(byName.get("tab_read")?.annotations?.readOnlyHint).toBe(true);
     expect(byName.get("tabs_list")?.annotations?.readOnlyHint).toBe(true);
+    // Loading acts on a page, so it is not read-only — but it removes nothing.
+    expect(byName.get("tabs_load")?.annotations?.readOnlyHint).toBe(false);
+    expect(byName.get("tabs_load")?.annotations?.destructiveHint).toBe(false);
   });
 
   test("every schema is a closed object, so bad arguments surface at the client", () => {
@@ -122,6 +126,34 @@ describe("tab-scoped tools", () => {
     expect(payload(result)).toMatchObject({ browser: "Chrome", batchId: "b1" });
   });
 
+  test("tabs_load routes like any tab-scoped tool", async () => {
+    const { call, sent } = caller([zen], () => ({ tabs: [], ready: 0, pending: 0, failed: 0 }));
+    const result = await call("tabs_load", { tabIds: [1, 2] });
+    expect(sent[0]).toEqual({
+      connectionId: "conn-1",
+      method: "tabs_load",
+      params: { tabIds: [1, 2] },
+    });
+    expect(payload(result)).toMatchObject({ browser: "Zen", ready: 0 });
+  });
+
+  test("tabs_load refuses to guess between two browsers, like every id-scoped tool", async () => {
+    const { call, sent } = caller([zen, chrome], () => ({}));
+    expect(payload(await call("tabs_load", { tabIds: [1] }))).toMatchObject({
+      error: "ambiguous-target",
+    });
+    expect(sent).toEqual([]);
+  });
+
+  test("a browser with loading switched off is reported, not retried", async () => {
+    const { call } = caller([zen], () => {
+      throw new BridgeRequestError("not-enabled", "switched off");
+    });
+    const result = await call("tabs_load", { tabIds: [1] });
+    expect(result.isError).toBe(true);
+    expect(payload(result)).toMatchObject({ error: "not-enabled" });
+  });
+
   test("undo_close passes an omitted batchId straight through", async () => {
     const { call, sent } = caller([zen], () => ({ restored: 2 }));
     await call("undo_close", {});
@@ -158,7 +190,7 @@ describe("error handling", () => {
 
   test("an unknown tool name is rejected before reaching the browser", async () => {
     const { call, sent } = caller([zen], () => ({}));
-    const result = await call("tab_load", { tabId: 1 });
+    const result = await call("tab_navigate", { url: "http://example.com" });
     expect(payload(result)).toMatchObject({ error: "bad-request" });
     expect(sent).toEqual([]);
   });

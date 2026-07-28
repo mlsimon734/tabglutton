@@ -20,7 +20,32 @@ export function isBridgePort(value: number): boolean {
 }
 export const BRIDGE_HEARTBEAT_MS = 20_000;
 export const BRIDGE_REQUEST_TIMEOUT_MS = 45_000;
+/**
+ * Deadline for the token exchange, measured from the socket *opening*. By then
+ * both ends are connected and the remaining work is two SHA-256 digests over
+ * loopback, so this is generous.
+ */
 export const BRIDGE_HANDSHAKE_TIMEOUT_MS = 5_000;
+
+/**
+ * Deadline for the dial itself — getting a socket open at all — and far longer
+ * than the handshake it precedes, because the two are not the same kind of wait.
+ *
+ * A connect is not ours to schedule. Gecko delays repeated failed WebSocket
+ * connections to an endpoint that keeps refusing (`network.websocket
+ * .delay-failed-reconnects`), which is exactly the traffic pattern an idle
+ * reconnect loop produces, so `new WebSocket()` can sit in CONNECTING for many
+ * seconds before the browser even attempts the TCP connect. Sharing the
+ * handshake's 5s here aborted every one of those attempts before it could land —
+ * and since an abort is itself another failed connect, the delay grew, which
+ * aborted the next one sooner. Verified live: a healthy sidecar sat listening
+ * through eight alarm periods with the extension dialling and timing out every
+ * cycle, and nothing ever connected.
+ *
+ * Kept under RECONNECT_PERIOD_MINUTES so a genuinely wedged dial is cleared
+ * before the next alarm rather than colliding with it.
+ */
+export const BRIDGE_DIAL_TIMEOUT_MS = 25_000;
 
 /**
  * How long a tool call waits for a browser to dial in before giving up on one.
@@ -42,6 +67,9 @@ export type BridgeErrorCode =
   | "extract-failed"
   | "vault-missing"
   | "unsupported"
+  /** The capability exists but the user has not switched it on. Distinct from
+   * "unsupported" on purpose: this one has a fix the agent can tell them. */
+  | "not-enabled"
   | "no-connection"
   | "ambiguous-target"
   | "timeout"
@@ -79,6 +107,15 @@ export interface HelloMessage {
   label: string;
   nonce: string;
   proof: string;
+  /**
+   * Who is dialling. Absent means "browser", which is what the extension always
+   * is and always omits. The other value is used only between Gullet processes:
+   * the one that binds the port serves the browser, and later ones attach as
+   * peers rather than dying, so several agent sessions share one connection.
+   * Everything after the handshake differs by role, so it has to be settled
+   * inside it.
+   */
+  role?: "browser" | "peer";
 }
 
 export interface HelloAckMessage {
@@ -175,6 +212,7 @@ export function generateToken(): string {
 
 export const BRIDGE_METHODS = [
   "tabs_list",
+  "tabs_load",
   "tab_read",
   "tab_clip",
   "tabs_close",
@@ -212,6 +250,53 @@ export interface TabsListParams {
 
 export interface TabsListResult {
   tabs: BridgeTab[];
+}
+
+/**
+ * Ceiling on one `tabs_load` batch. Loading is the one bridge method whose cost
+ * is network- and memory-bound rather than IPC-bound: every tab in the batch
+ * fetches a page and holds a live document afterwards. A backlog large enough to
+ * need this is also large enough that the user runs an auto-discarder, so an
+ * agent that asks for 200 at once is asked to chunk instead.
+ */
+export const TABS_LOAD_MAX_BATCH = 20;
+
+/**
+ * Wall-clock budget for one `tabs_load` call, deliberately under
+ * BRIDGE_REQUEST_TIMEOUT_MS. A batch that overran the request timeout would be
+ * reported to the agent as a plain timeout even though most of its tabs had in
+ * fact loaded — the worst outcome available, since the agent would then repeat
+ * work the browser already did. Stopping first lets the call answer for every
+ * tab, marking the ones it did not reach as pending.
+ */
+export const TABS_LOAD_DEADLINE_MS = 30_000;
+
+export interface TabsLoadParams {
+  tabIds: number[];
+}
+
+/**
+ * - `ready`: loaded and readable now.
+ * - `pending`: still loading, or not reached inside the call's budget. Nothing
+ *   went wrong; call again or just try `tab_read`.
+ * - `failed`: will not become readable by retrying (gone, or not http(s)).
+ */
+export type TabLoadStatus = "ready" | "pending" | "failed";
+
+export interface TabLoadOutcome {
+  tabId: number;
+  status: TabLoadStatus;
+  /** The tab's URL as known before the load; absent when the tab is gone. */
+  url?: string;
+  /** Why it is not ready. Absent exactly when the status is "ready". */
+  reason?: string;
+}
+
+export interface TabsLoadResult {
+  tabs: TabLoadOutcome[];
+  ready: number;
+  pending: number;
+  failed: number;
 }
 
 export interface TabReadParams {
@@ -385,17 +470,36 @@ export function parseTabClipParams(raw: unknown): TabClipParams {
   return { tabId: requireTabId(raw), close: obj.close ?? false };
 }
 
-export function parseTabsCloseParams(raw: unknown): TabsCloseParams {
+/**
+ * Deduplicated tab ids. Deduplicating rather than rejecting matters most for
+ * `tabs_close`, where a repeated id would be looked up twice — recording the
+ * same tab twice, inflating the `closed` count, and reopening two copies of it
+ * on undo — and Chrome rejects the whole `tabs.remove` call on the second one.
+ */
+function requireTabIds(raw: unknown): number[] {
   const obj = asRecord(raw) ?? {};
   const ids = obj.tabIds;
   if (!Array.isArray(ids) || ids.some((id) => typeof id !== "number" || !Number.isInteger(id))) {
     badRequest("tabIds must be an array of integers");
   }
   if (ids.length === 0) badRequest("tabIds must not be empty");
-  // Deduplicate rather than reject: a repeated id would be looked up twice, so
-  // the batch would record the same tab twice, report an inflated `closed`
-  // count, and reopen two copies of it on undo.
-  return { tabIds: [...new Set(ids as number[])] };
+  return [...new Set(ids as number[])];
+}
+
+export function parseTabsCloseParams(raw: unknown): TabsCloseParams {
+  return { tabIds: requireTabIds(raw) };
+}
+
+export function parseTabsLoadParams(raw: unknown): TabsLoadParams {
+  const tabIds = requireTabIds(raw);
+  // After dedup, so a caller is never told to split a batch that was only
+  // oversized because it repeated itself.
+  if (tabIds.length > TABS_LOAD_MAX_BATCH) {
+    badRequest(
+      `tabIds has ${tabIds.length} tabs; load at most ${TABS_LOAD_MAX_BATCH} at a time and call again for the rest`,
+    );
+  }
+  return { tabIds };
 }
 
 export function parseUndoCloseParams(raw: unknown): UndoCloseParams {

@@ -11,7 +11,9 @@ import {
   parseTabReadParams,
   parseTabsCloseParams,
   parseTabsListParams,
+  parseTabsLoadParams,
   parseUndoCloseParams,
+  TABS_LOAD_MAX_BATCH,
   proofsMatch,
   randomNonce,
 } from "../src/bridge-protocol.js";
@@ -78,14 +80,21 @@ describe("token and nonce generation", () => {
 });
 
 describe("isBridgeMethod()", () => {
-  test("accepts the five v1 methods", () => {
-    for (const m of ["tabs_list", "tab_read", "tab_clip", "tabs_close", "undo_close"]) {
+  test("accepts every shipped method", () => {
+    for (const m of [
+      "tabs_list",
+      "tabs_load",
+      "tab_read",
+      "tab_clip",
+      "tabs_close",
+      "undo_close",
+    ]) {
       expect(isBridgeMethod(m)).toBe(true);
     }
   });
 
   test("rejects tools the trust boundary excludes", () => {
-    for (const m of ["tab_load", "navigate", "click", "evaluate", ""]) {
+    for (const m of ["navigate", "click", "type", "evaluate", ""]) {
       expect(isBridgeMethod(m)).toBe(false);
     }
   });
@@ -188,6 +197,34 @@ describe("parseTabsCloseParams()", () => {
   test("rejects non-array and non-integer members", () => {
     expect(() => parseTabsCloseParams({ tabIds: 5 })).toThrow(BridgeRequestError);
     expect(() => parseTabsCloseParams({ tabIds: [1, "2"] })).toThrow(BridgeRequestError);
+  });
+});
+
+describe("parseTabsLoadParams()", () => {
+  test("accepts an array of integers", () => {
+    expect(parseTabsLoadParams({ tabIds: [1, 2] })).toEqual({ tabIds: [1, 2] });
+  });
+
+  test("deduplicates rather than loading the same tab twice", () => {
+    expect(parseTabsLoadParams({ tabIds: [4, 4, 5] })).toEqual({ tabIds: [4, 5] });
+  });
+
+  test("rejects an empty array and non-integer members", () => {
+    expect(() => parseTabsLoadParams({ tabIds: [] })).toThrow(BridgeRequestError);
+    expect(() => parseTabsLoadParams({ tabIds: [1, 1.5] })).toThrow(BridgeRequestError);
+  });
+
+  test("caps the batch so one call cannot outrun its own deadline", () => {
+    const ids = Array.from({ length: TABS_LOAD_MAX_BATCH + 1 }, (_, i) => i + 1);
+    expect(() => parseTabsLoadParams({ tabIds: ids })).toThrow(BridgeRequestError);
+    expect(parseTabsLoadParams({ tabIds: ids.slice(0, -1) }).tabIds).toHaveLength(
+      TABS_LOAD_MAX_BATCH,
+    );
+  });
+
+  test("the cap applies after dedup — a repetitive batch is not oversized", () => {
+    const ids = Array.from({ length: TABS_LOAD_MAX_BATCH * 2 }, (_, i) => (i % 3) + 1);
+    expect(parseTabsLoadParams({ tabIds: ids })).toEqual({ tabIds: [1, 2, 3] });
   });
 });
 

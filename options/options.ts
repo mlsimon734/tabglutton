@@ -16,6 +16,7 @@ const scopeRadios = document.querySelectorAll<HTMLInputElement>('input[name="sco
 const clipModeRadios = document.querySelectorAll<HTMLInputElement>('input[name="clipMode"]');
 const statusEl = document.getElementById("status") as HTMLParagraphElement;
 const bridgeEnabled = document.getElementById("bridgeEnabled") as HTMLInputElement;
+const bridgeAllowTabLoad = document.getElementById("bridgeAllowTabLoad") as HTMLInputElement;
 const bridgePort = document.getElementById("bridgePort") as HTMLInputElement;
 const bridgeToken = document.getElementById("bridgeToken") as HTMLInputElement;
 const bridgeTokenCopy = document.getElementById("bridgeTokenCopy") as HTMLButtonElement;
@@ -35,6 +36,7 @@ const DEFAULTS: Pick<
   | "bridgeEnabled"
   | "bridgePort"
   | "bridgeToken"
+  | "bridgeAllowTabLoad"
 > = {
   stripFragment: true,
   extraStripParams: [],
@@ -45,6 +47,7 @@ const DEFAULTS: Pick<
   bridgeEnabled: false,
   bridgePort: DEFAULT_BRIDGE_PORT,
   bridgeToken: "",
+  bridgeAllowTabLoad: false,
 };
 
 function parseParams(text: string): string[] {
@@ -78,6 +81,7 @@ async function load(): Promise<void> {
     radio.checked = radio.value === settings.clipMode;
   }
   bridgeEnabled.checked = settings.bridgeEnabled;
+  bridgeAllowTabLoad.checked = settings.bridgeAllowTabLoad;
   bridgePort.value = String(settings.bridgePort);
   bridgeToken.value = settings.bridgeToken;
   updateBridgeSnippet();
@@ -112,6 +116,7 @@ async function save(): Promise<void> {
     clippingsBaseFolder: clippingsBaseFolder.value.trim(),
     clipMode,
     bridgeEnabled: bridgeEnabled.checked,
+    bridgeAllowTabLoad: bridgeAllowTabLoad.checked,
     bridgePort: parsePort(bridgePort.value),
     // Only ever written when we have one. The field is readonly and Generate is
     // the sole way to set it, so an empty value means "not populated", never
@@ -134,7 +139,13 @@ function queueSave(): void {
   saveTimer = setTimeout(() => void save(), 400);
 }
 
-for (const el of [stripFragment, bridgeEnabled, ...scopeRadios, ...clipModeRadios]) {
+for (const el of [
+  stripFragment,
+  bridgeEnabled,
+  bridgeAllowTabLoad,
+  ...scopeRadios,
+  ...clipModeRadios,
+]) {
   el.addEventListener("change", () => void save());
 }
 extraStripParams.addEventListener("input", queueSave);

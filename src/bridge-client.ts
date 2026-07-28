@@ -7,6 +7,7 @@
 // who never enables it never opens a socket at all.
 
 import {
+  BRIDGE_DIAL_TIMEOUT_MS,
   BRIDGE_HANDSHAKE_TIMEOUT_MS,
   BRIDGE_HEARTBEAT_MS,
   BRIDGE_PROTO,
@@ -50,21 +51,29 @@ const FAST_RETRIES_PER_WAKE = 8;
 /**
  * Both engines suspend an idle background context — Gecko after
  * `extensions.background.idle.timeout` (30s by default), Chrome MV3 on the same
- * order — and suspension destroys the page's WebSocket. Crucially, *WebSocket
- * traffic is not activity*: only WebExtension API calls reset the idle timer.
- * So a connected bridge whose only traffic is its own heartbeat gets suspended
- * out from under its socket, and stays dark until the reconnect alarm fires.
+ * order — and suspension destroys the page's WebSocket. What differs is what
+ * counts as activity, and this exists for Gecko: **there, WebSocket traffic is
+ * not activity** — only WebExtension API calls reset the idle timer — so a
+ * connected bridge whose only traffic is its own heartbeat gets suspended out
+ * from under its socket and stays dark until the reconnect alarm fires. Chrome
+ * counts socket traffic as activity from 116, already our
+ * `minimum_chrome_version`, so the heartbeat alone holds the worker up there and
+ * this timer is harmless redundancy rather than the load-bearing part.
  *
  * Measured on Zen 1.21.9b before this existed: the socket dropped every 20-60s
  * (the variation is incidental API activity from tab events resetting the
  * timer) and took a further ~30s to return, so a third of the time there was no
  * bridge and tool calls answered "no browser is connected".
  *
- * The fix is to touch a real API on a timer — but only while an agent is
- * actually talking to us. A browser nobody is using has no reason to be held
- * awake, which is the whole point of the suspension we are defeating. So the
- * window is *earned by traffic*: every served request extends it, and it lapses
- * a few minutes after the last one.
+ * The fix is to touch a real API on a timer, for as long as a sidecar is
+ * connected. The connection is the entitlement: Gullet is spawned by an agent
+ * harness and exits with it, so a live socket already means a session is open
+ * and no browser is held awake for nobody. Tying this to *requests* instead —
+ * the first shape of it — kept the page awake only for a few minutes after each
+ * tool call, which left the connect-then-idle gap uncovered: the socket came up,
+ * nothing was asked of it, the page suspended, and the agent's first real call
+ * found no browser. The linger below now governs only how long we stay awake
+ * *after* a socket drops, which is the window a redial has to land in.
  */
 const KEEPALIVE_PING_MS = 20_000;
 const KEEPALIVE_LINGER_MS = 5 * 60_000;
@@ -95,10 +104,16 @@ export class BridgeClient {
   /** Dials spent since the last wake; reset per alarm tick, not per attempt. */
   private fastRetries = 0;
   private keepaliveTimer: ReturnType<typeof setInterval> | null = null;
-  /** Epoch ms until which served traffic has earned a reprieve from suspension. */
+  /**
+   * Epoch ms until which the page stays awake. Renewed on every keepalive tick
+   * while the socket is open, so once it closes this reads as a linger measured
+   * from the drop rather than from whenever we last connected or served.
+   */
   private keepaliveUntil = 0;
   private awaitingPong = false;
   private label = IS_CHROME ? "Chrome" : "Firefox";
+  /** Whether `start()` has run, i.e. whether the settings we read are real ones. */
+  private started = false;
 
   constructor(deps: BridgeClientDeps) {
     this.deps = deps;
@@ -107,6 +122,12 @@ export class BridgeClient {
     // the listener attached, so it cannot be deferred behind an await.
     browser.alarms.onAlarm.addListener((alarm) => {
       if (alarm.name !== BRIDGE_ALARM) return;
+      // The alarm is also what *woke* this page, so it can be delivered while
+      // init is still awaiting `loadSettings()` — at which point the settings we
+      // would read are the defaults, the bridge reads as switched off, and this
+      // tick would tear down and report "disabled" instead of dialling. Dropping
+      // it costs nothing: init always ends in `start()`, which dials anyway.
+      if (!this.started) return;
       // Each wake gets a fresh budget, so a browser left idle for hours still
       // gets a burst of attempts the next time it is woken.
       this.fastRetries = 0;
@@ -114,8 +135,12 @@ export class BridgeClient {
     });
   }
 
-  /** Arm the reconnect alarm and make the first dial. Call once at startup. */
+  /**
+   * Arm the reconnect alarm and make the first dial. Called once per page
+   * lifetime — which on an event page means once per wake, not once per session.
+   */
   async start(): Promise<void> {
+    this.started = true;
     this.label = await resolveLabel();
     await this.syncAlarm();
     this.fastRetries = 0;
@@ -222,9 +247,27 @@ export class BridgeClient {
     // `sync()` compares against it to decide whether the socket is still valid.
     this.socketToken = settings.bridgeToken;
     this.setPhase("connecting");
+    const dialStarted = Date.now();
+    console.debug("[tabglutton] bridge dialling", socket.url);
+
+    // The dial gets a deadline of its own — a long one, see BRIDGE_DIAL_TIMEOUT_MS
+    // — because without any, a socket that neither opens nor errors pins `phase`
+    // at "connecting" for the rest of this page's life, and both `tick()` and the
+    // alarm return early on every phase but "closed". That is a wedge no retry
+    // can clear. Sized to bound that case without preempting a slow-but-live
+    // connect, which is the mistake this replaces.
+    this.handshakeTimer = setTimeout(() => {
+      console.warn(`[tabglutton] bridge dial timed out after ${Date.now() - dialStarted}ms`);
+      this.teardown();
+    }, BRIDGE_DIAL_TIMEOUT_MS);
 
     socket.addEventListener("open", () => {
-      // The server speaks first (challenge); we just arm a deadline.
+      // Connected: swap the dial's deadline for the handshake's much shorter one.
+      // The elapsed time is worth having — it is the only direct measure of how
+      // long the browser made us wait, which is what distinguishes "no sidecar"
+      // from "throttled reconnect".
+      this.clearHandshakeTimer();
+      console.debug(`[tabglutton] bridge socket open after ${Date.now() - dialStarted}ms`);
       this.handshakeTimer = setTimeout(() => {
         console.warn("[tabglutton] bridge handshake timed out");
         this.teardown();
@@ -283,6 +326,14 @@ export class BridgeClient {
         this.clearFastRetry();
         this.setPhase("open");
         this.startHeartbeat(socket);
+        // On connect, not on first request. A connected sidecar is *itself* the
+        // proof that someone is using this: Gullet is spawned by an agent
+        // harness and lives exactly as long as the session does, so there is no
+        // such thing as a connection nobody wants. Waiting for a request instead
+        // left the gap that actually bit — connect, sit idle, get suspended out
+        // from under the socket before the agent's first call, and answer that
+        // call with "no browser is connected" after a 35s wait for a redial.
+        this.armKeepalive();
         console.log("[tabglutton] bridge connected as", msg.connectionId);
         return;
       }
@@ -383,7 +434,16 @@ export class BridgeClient {
     this.keepaliveUntil = Date.now() + KEEPALIVE_LINGER_MS;
     if (this.keepaliveTimer !== null) return;
     this.keepaliveTimer = setInterval(() => {
-      if (Date.now() >= this.keepaliveUntil) {
+      // Renewed on every tick while the socket is open, so the deadline always
+      // reads "linger from the drop". Deriving it once at connect (or at the
+      // last served request) instead leaves it stale by however long the session
+      // has been quiet: an hour-long idle connection would reach its drop with a
+      // deadline 55 minutes past, and the very next tick would stop keeping the
+      // page awake — at the exact moment the redial needs it up. The linger is
+      // meant to cover the reconnect gap, so it has to be measured from the gap.
+      if (this.phase === "open") {
+        this.keepaliveUntil = Date.now() + KEEPALIVE_LINGER_MS;
+      } else if (Date.now() >= this.keepaliveUntil) {
         this.stopKeepalive();
         return;
       }

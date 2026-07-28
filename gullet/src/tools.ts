@@ -6,6 +6,7 @@ import {
   asRecord,
   BridgeRequestError,
   isBridgeMethod,
+  TABS_LOAD_MAX_BATCH,
   toBridgeError,
   type BridgeError,
   type BridgeMethod,
@@ -40,8 +41,10 @@ Triage cheaply: tabs_list returns metadata only and is affordable across hundred
 tabs, so cut on title, URL, and lastAccessed BEFORE reading anything. Only call tab_read
 on the survivors.
 
-Most tabs in a large backlog are discarded (unloaded). tab_read and tab_clip cannot reach
-those and will say so — report them as "needs manual load" rather than retrying.
+Most tabs in a large backlog are discarded (unloaded), and tab_read and tab_clip cannot
+reach those. Wake them with tabs_load first — one call for every survivor you mean to read
+(up to 20), not one call per tab. If tabs_load reports not-enabled, the user has not turned
+it on; report those tabs as "needs manual load" rather than retrying.
 
 Closing is the only destructive act, and it happens in two places: tabs_close, and tab_clip
 with close: true. Both return a batchId that undo_close reverses. Get the user's approval
@@ -73,6 +76,36 @@ export const GULLET_TOOLS: readonly McpTool[] = [
       additionalProperties: false,
     },
     annotations: { readOnlyHint: true, openWorldHint: true },
+  },
+  {
+    name: "tabs_load",
+    title: "Load unloaded tabs",
+    description:
+      "Reload discarded (unloaded) tabs so tab_read and tab_clip can reach them, up to 20 per call. Batch every tab you intend to read into one call — loads run concurrently, so this is far faster than loading one at a time, and one call has a fixed time budget either way. Each tab comes back as ready (readable now), pending (still loading, or not reached in the budget — call again or just try reading it), or failed (gone, or not an http(s) page). Off by default: if it reports not-enabled, tell the user they can turn it on in Tabglutton's settings under Agent bridge. Only ever reloads a tab the user already opened; it cannot navigate anywhere new.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        ...BROWSER_PROPERTY,
+        tabIds: {
+          type: "array",
+          items: { type: "integer" },
+          minItems: 1,
+          maxItems: TABS_LOAD_MAX_BATCH,
+          description: "Tab ids from tabs_list, all from the same browser.",
+        },
+      },
+      required: ["tabIds"],
+      additionalProperties: false,
+    },
+    // Not destructive — nothing is removed and nothing is lost — but it does act
+    // on the browser rather than only observing it, so `readOnlyHint` would be a
+    // lie. `idempotentHint`: a tab already loaded is left exactly as it is.
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: true,
+    },
   },
   {
     name: "tab_read",

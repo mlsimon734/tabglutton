@@ -144,6 +144,7 @@ const pendingClips = new Map<
 const bridgeRunner = new BridgeMethodRunner({
   getSettings: () => settings,
   extract: (tabId) => clipTab(tabId, { wake: false }),
+  load: ensureTabReady,
   openObsidianUrl,
   copyToClipboardViaTab,
 });
@@ -377,15 +378,17 @@ async function resolveTargetTab(tabId?: number): Promise<Tab | null> {
 // discarded state with no live document — scripting.executeScript fails on
 // those. Reload via tabs.reload(); tabs.update({ discarded: false }) is
 // inconsistent across Firefox versions.
+//
+// The completion listener is attached before the tab is inspected rather than
+// after. `tabs.get` is an IPC round trip, and a tab that reaches "complete"
+// during it would otherwise fire into a listener that does not exist yet and
+// then sit until the timeout — cheap when one clip pays it, expensive now that
+// `tabs_load` runs this over a batch. Nothing is read back after the reload for
+// the mirror-image reason: `tabs.reload` resolves before the navigation starts,
+// so a status read there still reports the pre-reload "complete".
 async function ensureTabReady(tabId: number, timeoutMs: number): Promise<void> {
-  const tab = await browser.tabs.get(tabId);
-  if (!tab.discarded && tab.status === "complete") return;
-
-  if (tab.discarded) {
-    await browser.tabs.reload(tabId);
-  }
-
-  await new Promise<void>((resolve, reject) => {
+  let cleanup = (): void => {};
+  const settled = new Promise<void>((resolve, reject) => {
     const listener = (updatedTabId: number, changeInfo: { status?: string }): void => {
       if (updatedTabId !== tabId) return;
       if (changeInfo.status !== "complete") return;
@@ -396,19 +399,34 @@ async function ensureTabReady(tabId: number, timeoutMs: number): Promise<void> {
       cleanup();
       reject(new Error(`Tab did not finish loading within ${timeoutMs}ms`));
     }, timeoutMs);
-    function cleanup(): void {
+    cleanup = (): void => {
       clearTimeout(timer);
       browser.tabs.onUpdated.removeListener(listener);
-    }
+    };
     onTabUpdated(listener);
   });
+
+  try {
+    const tab = await browser.tabs.get(tabId);
+    if (!tab.discarded && tab.status === "complete") {
+      // Cleared, so `settled` simply never resolves — nothing awaits it here.
+      cleanup();
+      return;
+    }
+    if (tab.discarded) await browser.tabs.reload(tabId);
+  } catch (err) {
+    cleanup();
+    throw err;
+  }
+  await settled;
 }
 
 interface ClipTabOptions {
   /**
    * Reload a discarded tab before extracting. True for user-initiated clips;
-   * the agent bridge passes false, because navigating on the agent's behalf is
-   * outside its trust boundary (see BRIDGE.md — `tab_load` is v1.1, opt-in).
+   * the agent bridge passes false, because waking a tab on the agent's behalf is
+   * its own opt-in act there — the `tabs_load` method, which the user has to
+   * enable — and must never happen as a side effect of a read (see BRIDGE.md).
    */
   wake: boolean;
 }
@@ -783,8 +801,17 @@ browser.runtime.onInstalled.addListener(async (details) => {
 
 void (async function init() {
   settings = await loadSettings();
+  // Dial before the tab-heavy work below, not after. This is an event page: the
+  // browser re-runs init on every wake, including the wakes the reconnect alarm
+  // causes, so anything ahead of `start()` is paid again on every single
+  // reconnect attempt. `probeHeuristic` costs two `tabs.query` calls and
+  // `refreshBadge` a third plus a full duplicate-grouping pass — cheap on a
+  // normal window, seconds on the thousand-tab backlogs the bridge exists for,
+  // and every one of those seconds is time an agent is told no browser is
+  // connected. `start()` only *initiates* the dial, so the handshake completes
+  // while the badge work runs.
+  await bridge.start();
   await probeHeuristic();
   await refreshBadge();
-  await bridge.start();
   console.log("[tabglutton] ready", settings, "bridge:", bridge.status);
 })();
