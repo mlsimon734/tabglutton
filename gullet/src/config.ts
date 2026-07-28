@@ -67,8 +67,14 @@ function splitFlag(arg: string): [string, string | undefined] {
 }
 
 function parsePort(raw: string | undefined): number {
-  if (raw === undefined || raw === "") return DEFAULT_BRIDGE_PORT;
-  const port = Number.parseInt(raw, 10);
+  const value = raw?.trim() ?? "";
+  if (value === "") return DEFAULT_BRIDGE_PORT;
+  // The whole string or nothing. `Number.parseInt` stops at the first character
+  // it does not like and keeps what it has, so `4588oops` and `4588.5` both read
+  // as 4588 — a typo would bind a port the user never named, and then every
+  // browser that dials the port they *did* name is refused by a sidecar whose
+  // error message mentions neither.
+  const port = /^\d+$/.test(value) ? Number(value) : Number.NaN;
   if (!isBridgePort(port)) {
     throw new ConfigError(`Invalid port "${raw}" — expected an integer in 1024-65535.`);
   }

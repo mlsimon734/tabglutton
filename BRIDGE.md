@@ -121,7 +121,7 @@ extVersion, label, nonce, proof }`.
   `{ type: "response", id, result }` or `{ type: "response", id, error: { code, message } }`.
 - Heartbeat ping/pong every ~20s, as application-level messages rather than WebSocket
   control frames. On Chrome this doubles as the MV3 service-worker keepalive (socket
-  activity extends worker lifetime since Chrome 116, which is already our
+  activity extends worker lifetime since Chrome 116, below our
   `minimum_chrome_version`) — control frames the browser answers itself would not.
 
 ▸ **The token is not sent.** The sketch had the extension put its token in the hello and

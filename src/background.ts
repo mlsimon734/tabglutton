@@ -813,5 +813,16 @@ void (async function init() {
   await bridge.start();
   await probeHeuristic();
   await refreshBadge();
-  console.log("[tabglutton] ready", settings, "bridge:", bridge.status);
+  console.log("[tabglutton] ready", loggableSettings(settings), "bridge:", bridge.status);
 })();
+
+/**
+ * Settings minus the bridge token. That token is the whole of the bridge's
+ * authentication — anything holding it can list, read, clip, and close every tab
+ * — and this line runs on every wake of an event page, so leaving it in prints
+ * the credential continuously into a console whose contents get pasted wholesale
+ * into bug reports and agent sessions.
+ */
+function loggableSettings(current: Settings): Record<string, unknown> {
+  return { ...current, bridgeToken: current.bridgeToken ? "<set>" : "" };
+}

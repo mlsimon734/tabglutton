@@ -162,6 +162,40 @@ describe("hub/peer election", () => {
     browser.close();
   });
 
+  // The election used to loop until it won, and `main` awaits it before
+  // `serveStdio` — so a port held by something that will never authenticate meant
+  // the MCP server never answered `initialize` at all, and the startup-fault path
+  // written for exactly this case could not be reached.
+  test("a port held under another token settles instead of hanging", async () => {
+    const port = freePort();
+    const stranger = track(new Hub({ port, token: "some-other-token" }));
+    stranger.listen();
+
+    const sup = track(new Supervisor({ port, token: TOKEN, startTimeoutMs: 300 }));
+    await expect(sup.start()).rejects.toThrow(/127\.0\.0\.1:/);
+    // Published, not just thrown: tool calls read this per call, so they answer
+    // with the reason rather than waiting on an election with nothing to win.
+    expect(sup.fault()?.code).toBe("unsupported");
+  });
+
+  test("a fault clears once the port frees up, without a restart", async () => {
+    const port = freePort();
+    const stranger = track(new Hub({ port, token: "some-other-token" }));
+    stranger.listen();
+
+    const sup = track(new Supervisor({ port, token: TOKEN, startTimeoutMs: 300 }));
+    await expect(sup.start()).rejects.toThrow();
+    stranger.stop();
+
+    // The election kept running underneath; agent sessions outlive the conflict
+    // that stranded them, so giving up on waiting must not mean giving up.
+    for (let i = 0; i < 50 && sup.fault() !== null; i++) {
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    expect(sup.fault()).toBeNull();
+    expect(await sup.connections(0)).toEqual([]);
+  }, 10_000);
+
   test("an attached peer is not offered to tools as a browser", async () => {
     const port = freePort();
     const hub = await supervisor(port);

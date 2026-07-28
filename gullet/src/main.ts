@@ -36,7 +36,6 @@ export async function main(
   // the session before `initialize`, and every client reports that the same
   // unhelpful way — "connection closed".
   const backend = new Supervisor({ port: config.port, token: config.token });
-  let startupError: BridgeError | null = null;
 
   // Losing the port is no longer a failure. Whoever binds it serves the browser
   // and everyone else attaches to them, because nothing guarantees one Gullet
@@ -45,21 +44,22 @@ export async function main(
   try {
     await backend.start();
   } catch (err) {
-    const message =
-      `Could not reach the Tabglutton bridge on 127.0.0.1:${config.port}: ` +
-      `${errorMessage(err)}. Nothing could bind the port or attach to whatever holds it.`;
-    console.error(`[gullet] ${message}`);
-    startupError = { code: "unsupported", message };
+    // Neither fatal nor final. The election carries on underneath, so this is
+    // logged and then left to `backend.fault()`, which the tool caller re-reads
+    // per call — a port freed up mid-session starts working without a restart.
+    // Waiting here instead is the trap: `serveStdio` is below, so an election
+    // that never settles would hang `initialize` itself, and a client reports
+    // that as "connection closed" with nothing else to go on.
+    console.error(`[gullet] ${errorMessage(err)}`);
   }
 
+  let tokenError: BridgeError | null = null;
   if (!config.token) {
     const message =
       "Tabglutton's bridge has no token. Open Tabglutton's settings, enable the agent bridge, " +
       "generate a token, and set TABGLUTTON_TOKEN to it.";
     console.error(`[gullet] ${message}`);
-    // `??=`: a port we never bound is the more proximate problem, and fixing
-    // the token would not make this process serve anything.
-    startupError ??= { code: "unauthorized", message };
+    tokenError = { code: "unauthorized", message };
   }
 
   const shutdown = (): void => {
@@ -79,7 +79,9 @@ export async function main(
     call: createToolCaller({
       connections: () => backend.connections(BRIDGE_CONNECT_WAIT_MS),
       request: (connectionId, method, params) => backend.request(connectionId, method, params),
-      startupError,
+      // A port we never bound is the more proximate problem, and fixing the
+      // token would not make this process serve anything either way.
+      startupError: () => backend.fault() ?? tokenError,
     }),
   });
 

@@ -30,9 +30,12 @@ import { IS_CHROME, TARGET } from "./target.js";
 const BRIDGE_ALARM = "tabglutton-bridge-reconnect";
 
 /**
- * How often we re-dial while idle. 30s is Chrome's documented alarm floor;
- * Firefox honours it exactly (measured on 153 — it fires on the half minute),
- * so a sidecar started mid-session is picked up within one period.
+ * How often we re-dial while idle. 30s is Chrome's alarm floor for MV3 — but
+ * only from Chrome 120; 116-119 clamp every extension alarm to a minute, which
+ * is longer than the BRIDGE_CONNECT_WAIT_MS an agent's first call will wait, so
+ * `minimum_chrome_version` is 120 (see build.ts). Firefox honours 30s exactly
+ * (measured on 153 — it fires on the half minute), so a sidecar started
+ * mid-session is picked up within one period.
  */
 const RECONNECT_PERIOD_MINUTES = 0.5;
 
@@ -66,7 +69,7 @@ const FAST_RETRIES_PER_WAKE = 8;
  * not activity** — only WebExtension API calls reset the idle timer — so a
  * connected bridge whose only traffic is its own heartbeat gets suspended out
  * from under its socket and stays dark until the reconnect alarm fires. Chrome
- * counts socket traffic as activity from 116, already our
+ * counts socket traffic as activity from 116, below our
  * `minimum_chrome_version`, so the heartbeat alone holds the worker up there and
  * this timer is harmless redundancy rather than the load-bearing part.
  *
@@ -155,6 +158,8 @@ export class BridgeClient {
   private label = IS_CHROME ? "Chrome" : "Firefox";
   /** Whether `start()` has run, i.e. whether the settings we read are real ones. */
   private started = false;
+  /** The bridge settings this client last acted on; see `sync`. */
+  private lastBridgeConfig = "";
 
   constructor(deps: BridgeClientDeps) {
     this.deps = deps;
@@ -183,6 +188,9 @@ export class BridgeClient {
   async start(): Promise<void> {
     this.started = true;
     this.label = await resolveLabel();
+    // Seeded here so the first `sync()` of this page's life compares against
+    // what we actually dialled, rather than reading every key as new.
+    this.lastBridgeConfig = bridgeConfigKey(this.deps.getSettings());
     await this.syncAlarm();
     this.fastRetries = 0;
     this.tick();
@@ -216,14 +224,23 @@ export class BridgeClient {
   sync(): void {
     void this.syncAlarm();
     const settings = this.deps.getSettings();
+    // `background.ts` calls this whenever *any* setting changes, so most of the
+    // time nothing here has moved and this is a dedup scope or a clip folder
+    // passing through. Only a change to the three keys the bridge actually reads
+    // counts as the deliberate act that earns an unprobed dial below; treating
+    // every keystroke in the options page as one opens a failed WebSocket
+    // against an empty port and rebuilds precisely the Gecko reconnect penalty
+    // the probe exists to keep at zero (see PROBE_TIMEOUT_MS).
+    const config = bridgeConfigKey(settings);
+    const changed = config !== this.lastBridgeConfig;
+    this.lastBridgeConfig = config;
     if (!this.isConfigured(settings)) {
       this.disable();
       return;
     }
-    // A settings change is a deliberate user action — most often enabling the
-    // bridge or generating a token — so it earns a fresh burst rather than
-    // inheriting whatever the last wake had left.
-    this.fastRetries = 0;
+    // A deliberate bridge change — most often enabling it or generating a token
+    // — earns a fresh burst rather than inheriting whatever the last wake left.
+    if (changed) this.fastRetries = 0;
     // Port or token changed under an open socket — drop it and redial clean.
     // The token half matters most: regenerating it is how a user revokes a
     // sidecar, and a live socket that keeps serving requests would let the
@@ -233,7 +250,7 @@ export class BridgeClient {
     if (this.phase !== "closed" && stale) {
       this.teardown();
     }
-    this.tick(true);
+    this.tick(changed);
   }
 
   get status(): BridgeStatus {
@@ -585,6 +602,14 @@ export class BridgeClient {
     this.phase = phase;
     this.deps.onStatusChange(this.status);
   }
+}
+
+/**
+ * The three settings this client reads, as one comparable value. Everything else
+ * in `Settings` belongs to dedup or clipping and cannot change what we dial.
+ */
+function bridgeConfigKey(settings: Settings): string {
+  return `${settings.bridgeEnabled ? 1 : 0}:${settings.bridgePort}:${settings.bridgeToken}`;
 }
 
 /**

@@ -375,8 +375,9 @@ export interface TabsCloseResult {
    */
   missing?: number[];
   /**
-   * Requested ids that resolved but had not committed a URL, so closing them
-   * could not have been undone. Left open on purpose; omitted when empty.
+   * Requested ids whose tabs are still open: either they had not committed a URL
+   * yet, so closing them could not have been undone, or the browser refused the
+   * removal. Omitted when empty.
    */
   skipped?: number[];
 }

@@ -23,8 +23,12 @@ export interface ToolContext {
    * every tool call, because the alternative — exiting at startup — kills the
    * MCP session before `initialize` and leaves the agent with nothing but
    * "connection closed", which names neither the cause nor the fix.
+   *
+   * A function rather than a value: most of these come from an election that
+   * keeps running after it has failed, so a snapshot taken at startup would go
+   * on refusing calls the backend had since become able to serve.
    */
-  startupError: BridgeError | null;
+  startupError: () => BridgeError | null;
 }
 
 const BROWSER_PROPERTY = {
@@ -193,9 +197,8 @@ export function createToolCaller(
 ): (name: string, args: Record<string, unknown>) => Promise<McpToolResult> {
   return async (name, args) => {
     try {
-      if (ctx.startupError) {
-        throw new BridgeRequestError(ctx.startupError.code, ctx.startupError.message);
-      }
+      const fault = ctx.startupError();
+      if (fault) throw new BridgeRequestError(fault.code, fault.message);
       return ok(await route(ctx, name, args));
     } catch (err) {
       return toolError(err);

@@ -221,6 +221,19 @@ const withUndoLog = createTaskQueue();
  * context. So placement is only trusted when a live window with that id shares
  * the tab's context.
  */
+/** Where a fallback restore should land, and whether getting there already placed it. */
+interface WindowHome {
+  windowId: number;
+  /**
+   * The tab the window was opened with. `windows.create` always brings a tab of
+   * its own, so a new window is seeded with the entry's URL rather than opened
+   * blank — creating the restored tab separately would strand that blank one in
+   * every undo unlucky enough to need a new window.
+   */
+  seededTabId?: number;
+  seeded: boolean;
+}
+
 class LiveWindows {
   private readonly contexts = new Map<number, boolean>();
   private readonly preferred = new Map<boolean, number>();
@@ -243,16 +256,25 @@ class LiveWindows {
     return this.contexts.get(windowId) === incognito;
   }
 
-  /** A window of this privacy context, opening one if the last was closed. */
-  async windowFor(incognito: boolean): Promise<number> {
+  /**
+   * A window of this privacy context, opening one on `url` if the last was
+   * closed. Only the first entry to need a new window is seeded by it; the rest
+   * find it cached here and are created normally.
+   */
+  async windowFor(incognito: boolean, url: string): Promise<WindowHome> {
     const existing = this.preferred.get(incognito);
-    if (existing !== undefined) return existing;
-    const created = await browser.windows.create({ incognito });
+    if (existing !== undefined) return { windowId: existing, seeded: false };
+    const created = await browser.windows.create({ incognito, url });
     if (created.id === undefined) {
       throw new Error(`Could not open a ${incognito ? "private" : "normal"} window.`);
     }
     this.preferred.set(incognito, created.id);
-    return created.id;
+    const seededTabId = created.tabs?.[0]?.id;
+    return {
+      windowId: created.id,
+      seeded: true,
+      ...(seededTabId !== undefined ? { seededTabId } : {}),
+    };
   }
 }
 
@@ -282,9 +304,23 @@ async function restoreEntry(entry: ClosedTabEntry, windows: LiveWindows): Promis
       console.warn("[tabglutton] bridge undo placement failed for", entry.url, err);
     }
   }
+  const home = await windows.windowFor(incognito, entry.url);
+  if (home.seeded) {
+    // The window came up already showing this entry, so there is no tab left to
+    // create — only the pinned state to reapply, which `windows.create` has no
+    // way to express.
+    if (entry.pinned && home.seededTabId !== undefined) {
+      await browser.tabs.update(home.seededTabId, { pinned: true });
+    }
+    return;
+  }
+  // `pinned` survives even when the index and window cannot: a pinned tab
+  // reopened as an ordinary one is a change the user never asked for and would
+  // have to spot to fix.
   await browser.tabs.create({
     url: entry.url,
-    windowId: await windows.windowFor(incognito),
+    windowId: home.windowId,
+    pinned: entry.pinned,
     active: false,
   });
 }
@@ -295,6 +331,67 @@ async function recordClosed(entries: ClosedTabEntry[]): Promise<string> {
     await writeUndoLog(appendBatch(await readUndoLog(), batch));
     return batch.id;
   });
+}
+
+/**
+ * Narrow a recorded batch to the tabs that actually closed, dropping it whole if
+ * none did.
+ *
+ * The batch is written *before* `tabs.remove`, which is the right order — a
+ * crash mid-remove must not lose the trail — but it means a removal the browser
+ * refuses leaves the log describing a tab that is still open. An id-less
+ * `undo_close` takes the newest batch, so that orphan is exactly what the next
+ * undo reaches for, and it would reopen a duplicate of a tab that never went
+ * anywhere.
+ */
+async function reconcileBatch(batchId: string, closed: readonly ClosedTabEntry[]): Promise<void> {
+  await withUndoLog(async () => {
+    await writeUndoLog(retainEntries(await readUndoLog(), batchId, closed));
+  });
+}
+
+/**
+ * Close tabs, and report which ids are actually gone afterwards.
+ *
+ * `tabs.remove(ids)` is not all-or-nothing. Chrome removes in order and rejects
+ * the whole call at the first id that no longer resolves, leaving the tabs ahead
+ * of it closed and the ones behind it open — AGENTS.md records this for a
+ * duplicate id, and a stale id takes the identical path, which is the common one
+ * here since Chrome mints a new id every time it discards a tab. Treating the
+ * rejection as "nothing closed" would report an error over tabs that are gone
+ * and leave an undo batch describing tabs that are not.
+ *
+ * So a rejection only demotes the fast path: every id is retried on its own, and
+ * then the browser is asked which of them still exist. Absence is the signal
+ * rather than the retry's own result — a tab the batch call already took rejects
+ * the retry too, and dropping its entry would be the one close `undo_close`
+ * could never reverse. The residual ambiguity is a Chrome tab discarded between
+ * the listing and here: it reads as closed because its old id is gone, so its
+ * entry survives in the log. Keeping an entry too many costs a duplicate tab on
+ * undo; losing one costs a tab.
+ */
+/** Whether the browser still knows this id — the only honest answer to "did it close?". */
+async function tabExists(tabId: number): Promise<boolean> {
+  try {
+    await browser.tabs.get(tabId);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function removeTabs(ids: readonly number[]): Promise<Set<number>> {
+  try {
+    await browser.tabs.remove([...ids]);
+    return new Set(ids);
+  } catch (err) {
+    console.warn("[tabglutton] bridge batch close rejected; closing one at a time", err);
+  }
+  const removed = await Promise.allSettled(ids.map((id) => browser.tabs.remove(id)));
+  const alive = await Promise.allSettled(ids.map((id) => browser.tabs.get(id)));
+  return new Set(
+    ids.filter((_, i) => removed[i]?.status === "fulfilled" || alive[i]?.status === "rejected"),
+  );
 }
 
 export class BridgeMethodRunner {
@@ -510,24 +607,45 @@ export class BridgeMethodRunner {
     const filed = { tabId: params.tabId, title: payload.title, url: payload.url, file };
     if (!params.close) return { ...filed, closed: false };
 
-    let batchId: string | undefined;
+    // Nothing past here fails the call: the note is already in Obsidian, so a
+    // close that does not happen is a partial success, not a failure.
+    const batchId = await this.recordForClose(params.tabId);
+    if (batchId === null) return { ...filed, closed: false };
+
     try {
-      const tab = await browser.tabs.get(params.tabId);
-      const entry = toClosedEntry(tab);
-      // Same invariant `tabs_close` holds: nothing is closed that the undo log
-      // could not put back. Reaching this without a URL means the tab navigated
-      // away between the read and here, which is also a good reason not to close
-      // it — it is no longer the page that was filed.
-      if (!entry) throw new Error("the tab has no committed URL to record");
-      batchId = await recordClosed([entry]);
       await browser.tabs.remove(params.tabId);
     } catch (err) {
-      // The note is already in Obsidian, so this is a partial success, not a
-      // failure: report the clip and let the tab stand.
       console.warn("[tabglutton] bridge close-after-clip failed", params.tabId, err);
-      return { ...filed, closed: false };
+      // The record was written first, so a rejection here can leave a batch
+      // describing a tab that is still open — and an id-less `undo_close` takes
+      // the newest batch, making that orphan the very thing the next undo
+      // reopens. But a rejection is not proof the tab survived either (a Chrome
+      // id rollover rejects over a tab that is merely renumbered), so ask.
+      if (await tabExists(params.tabId)) {
+        await reconcileBatch(batchId, []);
+        return { ...filed, closed: false };
+      }
     }
-    return { ...filed, closed: true, ...(batchId ? { batchId } : {}) };
+    return { ...filed, closed: true, batchId };
+  }
+
+  /**
+   * Log one tab as closed before it is, returning null if it cannot be logged.
+   *
+   * Same invariant `tabs_close` holds: nothing is closed that the undo log could
+   * not put back. A tab with no committed URL is also a tab that navigated away
+   * between the read and here, which is its own reason to leave it alone — it is
+   * no longer the page that was filed.
+   */
+  private async recordForClose(tabId: number): Promise<string | null> {
+    try {
+      const entry = toClosedEntry(await browser.tabs.get(tabId));
+      if (!entry) throw new Error("the tab has no committed URL to record");
+      return await recordClosed([entry]);
+    } catch (err) {
+      console.warn("[tabglutton] bridge close-after-clip not recordable", tabId, err);
+      return null;
+    }
   }
 
   private async tabsClose(raw: unknown): Promise<TabsCloseResult> {
@@ -560,14 +678,33 @@ export class BridgeMethodRunner {
       );
     }
 
-    const entries = closable.map((c) => c.entry);
     // Record before removing: a crash mid-remove must not lose the trail.
-    const batchId = await recordClosed(entries);
-    await browser.tabs.remove(closable.map((c) => c.id));
+    const batchId = await recordClosed(closable.map((c) => c.entry));
+    // A batch removal can close some and refuse the rest — see `removeTabs`. So
+    // the report and the batch are both built from what the browser did, not
+    // from what was asked: `closed` still equals `entries.length`, and the tabs
+    // left standing join `skipped` instead of sitting in the log as an undo that
+    // would duplicate them.
+    const gone = await removeTabs(closable.map((c) => c.id));
+    const closed = closable.filter((c) => gone.has(c.id));
+    if (closed.length !== closable.length) {
+      skipped.push(...closable.filter((c) => !gone.has(c.id)).map((c) => c.id));
+      await reconcileBatch(
+        batchId,
+        closed.map((c) => c.entry),
+      );
+    }
+    if (closed.length === 0) {
+      fail(
+        "internal",
+        `The browser refused to close any of the ${closable.length} tab(s). Nothing was closed and nothing was recorded; re-run tabs_list for current ids and try again.`,
+      );
+    }
+
     return {
-      closed: closable.length,
+      closed: closed.length,
       batchId,
-      entries,
+      entries: closed.map((c) => c.entry),
       // Present only when there is something to say, so the common case stays
       // compact in a model's context.
       ...(missing.length > 0 ? { missing } : {}),
