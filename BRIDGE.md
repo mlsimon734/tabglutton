@@ -1,17 +1,22 @@
 # Agent Bridge
 
-Architecture doc for the planned agent interface: letting a coding agent (Claude Code,
-Codex, or any MCP client) see and manage the user's open tabs through Tabglutton. Working
-name for the sidecar: **Gullet** — the pipe content passes through on its way down.
+Engineering register for the agent bridge: letting a coding agent (Claude Code, Codex, or
+any MCP client) see and manage the user's open tabs through Tabglutton. Working name for
+the sidecar: **Gullet** — the pipe content passes through on its way down.
 
-Companion docs: PRODUCT.md (product register), DESIGN.md (visual system). This doc is the
-engineering register for the bridge; UI for it (badge states, consent surfaces) belongs in
-DESIGN.md when it lands.
+**The bridge is shipped; this doc is not a proposal.** What follows is the reasoning behind
+the design, the constraints that shaped it, and what is still open. Read "Trust boundary"
+as a contract rather than a sketch — it is enforced in code and things depend on it.
+Decisions that were made and later found wrong are marked ▸ and left in place rather than
+edited away, because the correction is usually worth more than the conclusion.
 
-**Status: v1 is implemented.** `gullet/` holds the sidecar (setup guide in
-`gullet/README.md`); `src/bridge-protocol.ts`, `src/bridge-client.ts`,
-`src/bridge-methods.ts`, and `src/undo-log.ts` hold the extension half. Two design
-decisions changed during implementation and are marked ▸ below.
+Where to look instead: `gullet/README.md` to _run_ it, and the MCP schema in
+`gullet/src/tools.ts` — which is executable, so it is authoritative — for exact tool
+signatures. Code lives in `gullet/` (sidecar) and `src/bridge-protocol.ts`,
+`src/bridge-client.ts`, `src/bridge-methods.ts`, `src/undo-log.ts` (extension half).
+
+Companion docs: PRODUCT.md (product register), DESIGN.md (visual system). UI for the bridge
+(badge states, consent surfaces) belongs in DESIGN.md when it lands.
 
 ## Why
 
@@ -259,57 +264,29 @@ Strategy, in order:
 
 ## Phasing
 
-1. **Bridge v1** — _shipped_: `gullet/` + extension socket client + the five tools +
-   token/origin auth + undo log. Definition of done: from a Claude Code session, list tabs
-   in Zen and in Chrome, read a loaded tab, clip it to Obsidian, close it, undo the close.
-   Protocol, auth, config, target selection, MCP framing, and a live-socket handshake and
-   routing test are covered by `bun test`; the browser-API surface is verified by running
-   the definition-of-done end to end against a real browser. **All five tools verified live
-   against Zen and against Chrome 150**, on TypeScript 7 and Defuddle 0.19. Also verified:
-   with both connected at once (14 tabs across the two), a tab-scoped call naming no
-   `browser` is refused with `ambiguous-target` rather than guessing; and a sidecar started
-   mid-session is picked up by the idle reconnect loop without a reload.
-   - The close/undo and revocation semantics above are verified on **both** engines, driven
-     from a script that runs the real hub against the browser — **Chrome 150** over CDP
-     (17 checks) and **Zen 1.21.9b** over Marionette (15 checks): duplicate ids collapse to
-     one close, out-of-order ids restore to their recorded index order, a batch whose window
-     vanished comes back in a window of the same privacy context, a private batch reopens
-     private, a partial undo keeps its failures for a retry (Gecko's fixture is a real
-     `about:config` tab, which `tabs.create` refuses), and regenerating the token drops the
-     live socket rather than letting the old one keep serving. Against pre-fix code the same
-     scripts fail 6 checks on Chrome and 11 on Zen — including the private URLs landing in a
-     _normal_ window on Gecko, and a revoked token still being served.
-   - Two engine differences fell out of that run and are recorded in AGENTS.md: a tab whose
-     navigation has not committed has no recoverable URL on Gecko (it reads `about:blank`,
-     where Chrome offers `pendingUrl`), and Zen mirrors its essential tabs into every new
-     window, so "close this window's tabs" is a bigger batch there than it looks.
-   - `tab_read` on a genuinely discarded tab returns a clean `tab-discarded` — exercised on
-     **Chrome only**, where `chrome.tabs.discard()` can manufacture the fixture over CDP.
-     The guard is one shared, target-agnostic line reading the standard `tab.discarded`, but
-     the Firefox path is unproven, and it is the one that matters most: Zen restores tabs
-     lazily, so a large session is full of discarded tabs from the moment it opens.
-2. **Curation workflow**: a `/triage-tabs` skill (lives with the agent, not this repo):
-   metadata cut → read survivors → digest note in Obsidian ("12 high-signal, 40 clipped,
-   180 proposed closures — approve?"). Closure stays behind human approval.
-3. **v1.1**: `tabs_load` opt-in — _shipped and verified on Gecko_. Definition of done met on
-   **Zen 1.21.9b** (ext 0.1.3.3) against a real ~975-tab session, driven from a Codex MCP
-   session: two discarded X tabs loaded in one `tabs_load` call returned `2 ready, 0 pending,
-0 failed`, both flipped `discarded: true → false`, both stayed inactive — the load does not
-   steal focus — and `tab_read` then extracted 253 and 196 words through Defuddle. No tab was
-   closed or otherwise altered. That run also finally exercises the Gecko `tab-discarded` path
-   left unproven in phase 1, since the fixtures were tabs Zen had lazily discarded on its own
-   rather than anything manufactured.
-   - **Still unverified on Chrome**, and the id question there is the whole reason: a Chrome
-     tab gets a new id when it is _discarded_, and whether waking one churns the id a second
-     time is unknown. If it does, the completion event names an id `ensureTabReady` is not
-     watching and the wait times out on a tab that in fact loaded — which is why a failed wait
-     re-reads the tab before answering, so a vanished id surfaces as `failed` with
-     `STALE_ID_HINT` ("re-list for current ids") rather than a silent `pending` for a tab the
-     agent already has. Gecko cannot tell us which branch fires; it keeps tab ids, and every
-     load in the run above came back under the id it was asked about. Needs a CDP run with
-     `chrome.tabs.discard()`.
-   - Still outstanding for v1.1: sidecar fetch fallback, autonomy ratchets (auto-close
-     known-noise domains, auto-close anything clipped), scheduled runs.
+Deliberately short: git records what shipped when, so this keeps only what each phase
+_proved_. Anything still unproven has moved to Open questions, where it gets read.
+
+1. **Bridge v1** — shipped. Six tools, token/origin auth, undo log. Verified end to end on
+   both engines by scripts driving the real hub against a real browser: **Chrome 150** over
+   CDP (17 checks) and **Zen 1.21.9b** over Marionette (15 checks). Between them: duplicate
+   ids collapse to one close, out-of-order ids restore to their recorded index order, a batch
+   whose window vanished returns to a window of the same privacy context, a private batch
+   reopens private, a partial undo keeps its failures for a retry, and regenerating the token
+   drops the live socket instead of letting it keep serving. The same scripts against pre-fix
+   code fail 6 checks on Chrome and 11 on Zen — they discriminate, rather than merely passing.
+   Two engine differences fell out of that run and live in AGENTS.md: uncommitted navigations
+   have no recoverable URL on Gecko, and Zen mirrors essential tabs into every window, so
+   "this window's tabs" is a bigger batch there than it looks.
+2. **v1.1 `tabs_load`** — shipped, verified on Gecko. Zen 1.21.9b against a real ~975-tab
+   session: two lazily-discarded tabs woken in one call (`2 ready, 0 pending, 0 failed`),
+   neither stealing focus, both then readable through Defuddle, nothing else altered. The
+   fixtures being tabs Zen had discarded on its own is what also finally exercised the Gecko
+   `tab-discarded` path, which phase 1 could only manufacture on Chrome.
+3. **Curation workflow** — next, and deliberately not in this repo: a `/triage-tabs` skill
+   living with the agent. Metadata cut → read survivors → digest note in Obsidian ("12
+   high-signal, 40 clipped, 180 proposed closures — approve?"). Closure stays behind human
+   approval.
 
 ## Open questions
 
@@ -340,6 +317,16 @@ Strategy, in order:
   - **Why it matters more than its frequency suggests.** It lands on the first call of a
     session and reads to an agent as a dead bridge — the exact failure mode the reconnect work
     was meant to eliminate — so it spends the credibility that work bought back.
+- **`tabs_load` on Chrome is unverified, and tab-id churn is exactly why.** A Chrome tab gets
+  a new id when it is _discarded_; whether waking one churns the id a second time is unknown.
+  If it does, the completion event names an id `ensureTabReady` is not watching, and the wait
+  times out on a tab that in fact loaded. That is why a failed wait re-reads the tab before
+  answering — a vanished id then surfaces as `failed` with `STALE_ID_HINT` ("re-list for
+  current ids") rather than a silent `pending` for a tab the agent already has. Gecko cannot
+  settle which branch fires: it keeps tab ids, and every load in the v1.1 run came back under
+  the id it was asked about. Needs a CDP run driving `chrome.tabs.discard()`.
+- Outstanding for v1.1 beyond `tabs_load` itself: sidecar fetch fallback, autonomy ratchets
+  (auto-close known-noise domains, auto-close anything clipped), scheduled runs.
 - Zen `NativeMessagingHosts` path (only matters for the deferred daemon mode).
 - Whether `tabs_list` should expose Zen workspace _names_ (no API today; `hidden` is the
   only signal — see the workspace-heuristic notes in AGENTS.md).
