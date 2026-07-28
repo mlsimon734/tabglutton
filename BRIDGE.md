@@ -313,6 +313,33 @@ Strategy, in order:
 
 ## Open questions
 
+- **Why the first `tabs_list` of a session times out on a large backlog.** Recurring, not a
+  one-off: the first call after an extension reload fails with `timeout` at the full 45s
+  `BRIDGE_REQUEST_TIMEOUT_MS`, and an immediate retry of the same call succeeds. Observed on
+  Zen 1.21.9b at 730 tabs in one window (~1000 total) with extension 0.1.3.7.
+  - **Ruled out.** Not the connection: a `tab_read` on the same `connectionId` answered
+    correctly and instantly inside the same window of time. Not a stale hub entry: `selectOne`
+    would have reported `ambiguous-target` and did not, so exactly one browser was registered.
+    Not `tabsList` itself: unchanged across the whole fix series, and it succeeds seconds later
+    against the same tab set.
+  - **Two hypotheses, and the observation does not separate them.**
+    1. _Startup contention._ The background page is single-threaded. `init()` runs
+       `bridge.start()` first — deliberately, so the handshake lands before the slow work — and
+       then `probeHeuristic()` and `refreshBadge()` over the entire tab set. But a completed
+       handshake does not mean the page is free to _serve_: a request arriving during the badge
+       pass queues behind it, and at this scale that pass is not cheap.
+    2. _Response size._ `tabs_list` for that window is ~253 KB of JSON in one WebSocket frame.
+       `tab_read` — the call that worked at the same moment — is a small fraction of that, so
+       size and timing were confounded in the observation and neither is excluded.
+  - **Discriminating test.** Immediately after an extension reload, call `tabs_list` twice back
+    to back. First fails and second succeeds ⇒ startup contention. Large responses failing
+    intermittently well after startup ⇒ size, and the thing to measure is `JSON.stringify` cost
+    plus whether the 45s budget is covering the frame write rather than the query. Worth timing
+    `queryAllTabs()`, `probeHeuristic()` and `refreshBadge()` in isolation at this scale first —
+    the answer may be visible without reproducing the failure at all.
+  - **Why it matters more than its frequency suggests.** It lands on the first call of a
+    session and reads to an agent as a dead bridge — the exact failure mode the reconnect work
+    was meant to eliminate — so it spends the credibility that work bought back.
 - Zen `NativeMessagingHosts` path (only matters for the deferred daemon mode).
 - Whether `tabs_list` should expose Zen workspace _names_ (no API today; `hidden` is the
   only signal — see the workspace-heuristic notes in AGENTS.md).
