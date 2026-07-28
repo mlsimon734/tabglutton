@@ -36,14 +36,22 @@ const BRIDGE_ALARM = "tabglutton-bridge-reconnect";
 const RECONNECT_PERIOD_MINUTES = 0.5;
 
 /**
- * Extra dials between alarm ticks, to close the gap after a socket drops
- * without waiting out a whole alarm period.
+ * Extra dials between alarm ticks, to close the gap after a socket drops without
+ * waiting out a whole alarm period.
  *
- * Best-effort by design: a pending timer does not keep a suspended background
+ * Only ever armed after losing a connection we actually had, never after a dial
+ * that failed to land. That distinction is the whole point. Gecko penalises
+ * repeated failed WebSocket connections to one endpoint by delaying the next
+ * attempt (see BRIDGE_DIAL_TIMEOUT_MS), so retrying hard into a port with
+ * nothing behind it manufactures precisely the delay that then stops us
+ * connecting when a sidecar finally does appear. Retrying is only justified when
+ * we have proof the other end exists — and having just been connected to it is
+ * that proof. With no such proof, the 30s alarm is the entire cadence.
+ *
+ * Best-effort even then: a pending timer does not keep a suspended background
  * page alive, so these only fire while something else is holding it up — in
  * practice the keepalive below, which is exactly the case that matters, since
- * that is when an agent is mid-session and waiting on us. The alarm remains the
- * guaranteed path.
+ * that is when an agent is mid-session and waiting on us.
  */
 const FAST_RETRY_MS = 3_000;
 const FAST_RETRIES_PER_WAKE = 8;
@@ -237,9 +245,9 @@ export class BridgeClient {
       socket = new WebSocket(this.socketUrl(settings));
     } catch (err) {
       // Constructor threw, so no close/error event will arrive to route us
-      // through teardown() — ask for the next attempt here instead.
+      // through teardown(). Nothing to retry into either — this never reached a
+      // connection — so the alarm picks it up on its own schedule.
       console.warn("[tabglutton] bridge dial failed", err);
-      this.scheduleFastRetry();
       return;
     }
     this.socket = socket;
@@ -479,6 +487,10 @@ export class BridgeClient {
   /** Drop the socket and report whatever the settings now imply — idle if the
    * bridge is still on and we should keep dialling, disabled if it is not. */
   private teardown(): void {
+    // Captured before the phase is reset: whether we are recovering from a live
+    // connection or from a dial that never landed decides if a fast retry is
+    // earned, and only the pre-teardown phase knows which.
+    const wasConnected = this.phase === "open";
     this.stopHeartbeat();
     this.clearHandshakeTimer();
     const socket = this.socket;
@@ -493,10 +505,12 @@ export class BridgeClient {
       }
     }
     this.deps.onStatusChange(this.status);
-    // Every failed dial and every dropped connection lands here, so this is the
-    // one place that needs to ask for another attempt. No-ops once the bridge is
-    // switched off, or once this wake's budget is spent.
-    this.scheduleFastRetry();
+    // Every failed dial and every dropped connection lands here, but only the
+    // second earns an immediate retry — see FAST_RETRY_MS. A dial that never
+    // landed waits for the alarm instead, so we stop bidding up the browser's
+    // own reconnect delay. No-ops once the bridge is switched off, or once this
+    // wake's budget is spent.
+    if (wasConnected) this.scheduleFastRetry();
   }
 
   private setPhase(phase: Phase): void {

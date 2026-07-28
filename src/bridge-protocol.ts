@@ -28,24 +28,29 @@ export const BRIDGE_REQUEST_TIMEOUT_MS = 45_000;
 export const BRIDGE_HANDSHAKE_TIMEOUT_MS = 5_000;
 
 /**
- * Deadline for the dial itself — getting a socket open at all — and far longer
- * than the handshake it precedes, because the two are not the same kind of wait.
+ * Deadline for the dial itself — getting a socket open at all. Deliberately
+ * enormous next to the handshake, because a connect is not ours to schedule.
  *
- * A connect is not ours to schedule. Gecko delays repeated failed WebSocket
- * connections to an endpoint that keeps refusing (`network.websocket
- * .delay-failed-reconnects`), which is exactly the traffic pattern an idle
- * reconnect loop produces, so `new WebSocket()` can sit in CONNECTING for many
- * seconds before the browser even attempts the TCP connect. Sharing the
- * handshake's 5s here aborted every one of those attempts before it could land —
- * and since an abort is itself another failed connect, the delay grew, which
- * aborted the next one sooner. Verified live: a healthy sidecar sat listening
- * through eight alarm periods with the extension dialling and timing out every
- * cycle, and nothing ever connected.
+ * Gecko delays repeated failed WebSocket connections to an endpoint that keeps
+ * refusing (`network.websocket.delay-failed-reconnects`), holding the socket in
+ * CONNECTING *before* it ever issues the TCP connect — so the delay is invisible
+ * to `lsof`, and any deadline shorter than it aborts every attempt before it can
+ * land. Worse, each abort is itself another failed connect, so a short deadline
+ * inflates the very delay it keeps losing to.
  *
- * Kept under RECONNECT_PERIOD_MINUTES so a genuinely wedged dial is cleared
- * before the next alarm rather than colliding with it.
+ * Both earlier values were under it and both wedged the bridge completely:
+ * verified on Zen against a sidecar answering `curl` in 0.47ms with a 101, while
+ * the extension dialled and timed out at a flat 25s forever. The tell that it is
+ * this and not a dead server: the browser reaches the same port fine over plain
+ * HTTP (`http://127.0.0.1:4588/` renders Gullet's 403), and the timeout is
+ * suspiciously *constant* — a real connect failure varies, a deadline does not.
+ *
+ * So this bounds only the pathological case where a socket neither opens nor
+ * errors at all, which would otherwise pin the client in "connecting" for the
+ * life of the page. It costs nothing normally: with no sidecar listening, a
+ * loopback dial is refused in microseconds.
  */
-export const BRIDGE_DIAL_TIMEOUT_MS = 25_000;
+export const BRIDGE_DIAL_TIMEOUT_MS = 120_000;
 
 /**
  * How long a tool call waits for a browser to dial in before giving up on one.
