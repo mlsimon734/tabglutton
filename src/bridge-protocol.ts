@@ -31,24 +31,30 @@ export const BRIDGE_HANDSHAKE_TIMEOUT_MS = 5_000;
  * Deadline for the dial itself — getting a socket open at all. Deliberately
  * enormous next to the handshake, because a connect is not ours to schedule.
  *
- * Gecko delays repeated failed WebSocket connections to an endpoint that keeps
- * refusing (`network.websocket.delay-failed-reconnects`), holding the socket in
- * CONNECTING *before* it ever issues the TCP connect — so the delay is invisible
- * to `lsof`, and any deadline shorter than it aborts every attempt before it can
- * land. Worse, each abort is itself another failed connect, so a short deadline
- * inflates the very delay it keeps losing to.
+ * Gecko delays reconnects to an endpoint that has been refusing
+ * (`network.websocket.delay-failed-reconnects`), and applies that delay *before*
+ * issuing the TCP connect — so the socket sits in CONNECTING with nothing for
+ * `lsof` to see, and any deadline shorter than the delay aborts every attempt
+ * before it can land. Both earlier values were shorter and both wedged the
+ * bridge completely: verified on Zen against a sidecar answering `curl` in
+ * 0.47ms with a 101, while the extension dialled and timed out at a flat 25s
+ * forever. The tell that it is this and not a dead server: the browser reaches
+ * the same port fine over plain HTTP (`http://127.0.0.1:4588/` renders Gullet's
+ * 403), and the timeout is suspiciously *constant* — a real connect failure
+ * varies, a deadline does not.
  *
- * Both earlier values were under it and both wedged the bridge completely:
- * verified on Zen against a sidecar answering `curl` in 0.47ms with a 101, while
- * the extension dialled and timed out at a flat 25s forever. The tell that it is
- * this and not a dead server: the browser reaches the same port fine over plain
- * HTTP (`http://127.0.0.1:4588/` renders Gullet's 403), and the timeout is
- * suspiciously *constant* — a real connect failure varies, a deadline does not.
+ * 120s is twice the worst case the browser can impose, which is worth stating
+ * exactly because the number looks arbitrary otherwise. The backoff is
+ * `FailDelayManager` in `netwerk/protocol/websocket/WebSocketChannel.cpp`:
+ * `kWSReconnectMaxDelay` caps it at 60s, reached by growing x1.5 per failed
+ * connect from 200-400ms, so ~14 consecutive failures hit the ceiling. It is
+ * measured from the *last* failure, and a successful connect drops the record
+ * outright — so it only ever bites a bridge that has been dialling an empty port
+ * for minutes, which is what BridgeClient's probe now avoids.
  *
- * So this bounds only the pathological case where a socket neither opens nor
+ * What this bounds, then, is the pathological socket that neither opens nor
  * errors at all, which would otherwise pin the client in "connecting" for the
- * life of the page. It costs nothing normally: with no sidecar listening, a
- * loopback dial is refused in microseconds.
+ * life of the page. Every other path resolves long before it.
  */
 export const BRIDGE_DIAL_TIMEOUT_MS = 120_000;
 

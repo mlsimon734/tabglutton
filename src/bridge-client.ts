@@ -1,10 +1,11 @@
 // Extension side of the agent bridge: dials the Gullet sidecar on loopback and
 // serves method calls with real `browser.*` APIs. See BRIDGE.md.
 //
-// Nobody launches an app. When no sidecar is running the socket just fails
-// cheaply and we idle; an alarm re-dials so a session that starts later is
-// picked up without user action. The bridge is opt-in (options page), so a user
-// who never enables it never opens a socket at all.
+// Nobody launches an app. An alarm re-probes the port every 30s so a session
+// that starts later is picked up without user action, and a socket is only
+// opened once something answers — see PROBE_TIMEOUT_MS for why that indirection
+// is worth having. The bridge is opt-in (options page), so a user who never
+// enables it never touches the network at all.
 
 import {
   BRIDGE_DIAL_TIMEOUT_MS,
@@ -44,9 +45,10 @@ const RECONNECT_PERIOD_MINUTES = 0.5;
  * repeated failed WebSocket connections to one endpoint by delaying the next
  * attempt (see BRIDGE_DIAL_TIMEOUT_MS), so retrying hard into a port with
  * nothing behind it manufactures precisely the delay that then stops us
- * connecting when a sidecar finally does appear. Retrying is only justified when
- * we have proof the other end exists — and having just been connected to it is
- * that proof. With no such proof, the 30s alarm is the entire cadence.
+ * connecting when a sidecar finally does appear: eight retries per wake is ~9
+ * failures per 30s, which reaches the 60s ceiling inside a minute, where the
+ * alarm alone would take ~7. Retrying is only justified when we have proof the
+ * other end exists — and having just been connected to it is that proof.
  *
  * Best-effort even then: a pending timer does not keep a suspended background
  * page alive, so these only fire while something else is holding it up — in
@@ -86,6 +88,33 @@ const FAST_RETRIES_PER_WAKE = 8;
 const KEEPALIVE_PING_MS = 20_000;
 const KEEPALIVE_LINGER_MS = 5 * 60_000;
 
+/**
+ * Before opening a WebSocket, ask the same port a plain HTTP question. Gullet
+ * answers a non-upgrade request with 403, so *any* response proves someone is
+ * listening — the status is irrelevant, we are asking "is a server there", not
+ * "is it well" — and a port with nothing behind it refuses in microseconds.
+ *
+ * This exists to keep Gecko's reconnect penalty at zero rather than merely
+ * survivable. That penalty is fed by failed *WebSocket* connects
+ * (`FailDelayManager`, see BRIDGE_DIAL_TIMEOUT_MS); an HTTP request is not one,
+ * so an extension left switched on with no sidecar running now accumulates
+ * nothing, and the socket it eventually opens connects at full speed. Without
+ * it, the steady state after ~7 idle minutes is the 60s ceiling, and since the
+ * ceiling is measured from the last failure while we re-dial every 30s, the
+ * first connection of a session lands somewhere in 0-60s. That is the "stuck on
+ * Connecting…" that this whole area kept producing while every part of the
+ * bridge was in fact healthy.
+ *
+ * The probe is an optimisation and must never become a gate. If `fetch` were
+ * blocked for a reason we have not anticipated — a future local-network
+ * restriction is the plausible one — a bridge that consequently refused to dial
+ * at all would be a far worse failure than the seconds this saves. So a run of
+ * misses dials anyway: the degraded case is the old behaviour, not a dead
+ * bridge.
+ */
+const PROBE_TIMEOUT_MS = 2_000;
+const PROBE_MISSES_BEFORE_DIALLING_BLIND = 4;
+
 export type BridgeStatus = "disabled" | "idle" | "connecting" | "connected";
 
 export interface BridgeClientDeps {
@@ -119,6 +148,10 @@ export class BridgeClient {
    */
   private keepaliveUntil = 0;
   private awaitingPong = false;
+  /** A probe is in flight; `phase` is still "closed", so ticks need their own guard. */
+  private probing = false;
+  /** Consecutive probes that found nothing — see PROBE_MISSES_BEFORE_DIALLING_BLIND. */
+  private probeMisses = 0;
   private label = IS_CHROME ? "Chrome" : "Firefox";
   /** Whether `start()` has run, i.e. whether the settings we read are real ones. */
   private started = false;
@@ -200,7 +233,7 @@ export class BridgeClient {
     if (this.phase !== "closed" && stale) {
       this.teardown();
     }
-    this.tick();
+    this.tick(true);
   }
 
   get status(): BridgeStatus {
@@ -218,14 +251,49 @@ export class BridgeClient {
     return `ws://127.0.0.1:${settings.bridgePort}/`;
   }
 
-  private tick(): void {
+  /**
+   * @param force skip the probe and dial regardless. For deliberate user actions
+   * only: someone who has just switched the bridge on is watching for it to do
+   * something, and one failed connect costs a few hundred milliseconds of
+   * penalty rather than the ceiling — it is the *repetition* that is expensive.
+   */
+  private tick(force = false): void {
     const settings = this.deps.getSettings();
     if (!this.isConfigured(settings)) {
       this.disable();
       return;
     }
-    if (this.phase !== "closed") return;
-    this.connect(settings);
+    if (this.phase !== "closed" || this.probing) return;
+    if (force) {
+      this.probeMisses = 0;
+      this.connect(settings);
+      return;
+    }
+    void this.probeThenConnect(settings);
+  }
+
+  /** Open a socket only once something has answered the port — see PROBE_TIMEOUT_MS. */
+  private async probeThenConnect(settings: Settings): Promise<void> {
+    this.probing = true;
+    let answered = false;
+    try {
+      answered = await portAnswers(settings.bridgePort);
+    } finally {
+      this.probing = false;
+    }
+    if (!answered) {
+      this.probeMisses += 1;
+      if (this.probeMisses < PROBE_MISSES_BEFORE_DIALLING_BLIND) return;
+      console.debug(`[tabglutton] bridge probe found nothing ${this.probeMisses}x; dialling blind`);
+    }
+    this.probeMisses = 0;
+    // Re-read rather than trusting the captured settings: the probe is an await,
+    // and a settings change or a socket opened by a fast retry can land inside
+    // it. Dialling on what was true before it would then leak a second socket or
+    // use a stale port.
+    const current = this.deps.getSettings();
+    if (this.phase !== "closed" || !this.isConfigured(current)) return;
+    this.connect(current);
   }
 
   /**
@@ -516,6 +584,26 @@ export class BridgeClient {
   private setPhase(phase: Phase): void {
     this.phase = phase;
     this.deps.onStatusChange(this.status);
+  }
+}
+
+/**
+ * Whether anything at all answers HTTP on the port — see PROBE_TIMEOUT_MS for
+ * why we ask this before opening a socket. Every failure mode (refused, blocked,
+ * timed out) reads the same as "nobody there", which is the honest answer: we
+ * cannot tell them apart from here, and the caller treats a run of them as a
+ * reason to dial anyway rather than as proof.
+ */
+async function portAnswers(port: number): Promise<boolean> {
+  try {
+    await fetch(`http://127.0.0.1:${port}/`, {
+      method: "GET",
+      cache: "no-store",
+      signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
+    });
+    return true;
+  } catch {
+    return false;
   }
 }
 
