@@ -1,11 +1,13 @@
 // Extension side of the agent bridge: dials the Gullet sidecar on loopback and
 // serves method calls with real `browser.*` APIs. See BRIDGE.md.
 //
-// Nobody launches an app. An alarm re-probes the port every 30s so a session
-// that starts later is picked up without user action, and a socket is only
-// opened once something answers — see PROBE_TIMEOUT_MS for why that indirection
-// is worth having. The bridge is opt-in (options page), so a user who never
-// enables it never touches the network at all.
+// Nobody launches an app. While the page is awake, an idle loop re-probes the
+// port every few seconds (IDLE_PROBE_MS) so a sidecar started mid-session is
+// picked up within seconds; a 30s alarm is the backstop that survives page
+// suspension. A socket is only opened once something answers — see
+// PROBE_TIMEOUT_MS for why that indirection is worth having. The bridge is
+// opt-in (options page), so a user who never enables it never touches the
+// network at all.
 
 import {
   BRIDGE_DIAL_TIMEOUT_MS,
@@ -30,12 +32,14 @@ import { IS_CHROME, TARGET } from "./target.js";
 const BRIDGE_ALARM = "tabglutton-bridge-reconnect";
 
 /**
- * How often we re-dial while idle. 30s is Chrome's alarm floor for MV3 — but
- * only from Chrome 120; 116-119 clamp every extension alarm to a minute, which
- * is longer than the BRIDGE_CONNECT_WAIT_MS an agent's first call will wait, so
+ * The alarm cadence — the guaranteed wake, and the only reconnect path that
+ * survives page suspension (pending timers, including the idle probe loop
+ * below, do not). 30s is Chrome's alarm floor for MV3 — but only from Chrome
+ * 120; 116-119 clamp every extension alarm to a minute, which is longer than
+ * the BRIDGE_CONNECT_WAIT_MS an agent's first call will wait, so
  * `minimum_chrome_version` is 120 (see build.ts). Firefox honours 30s exactly
- * (measured on 153 — it fires on the half minute), so a sidecar started
- * mid-session is picked up within one period.
+ * (measured on 153 — it fires on the half minute), so even a suspended page
+ * picks a sidecar up within one period.
  */
 const RECONNECT_PERIOD_MINUTES = 0.5;
 
@@ -118,6 +122,48 @@ const KEEPALIVE_LINGER_MS = 5 * 60_000;
 const PROBE_TIMEOUT_MS = 2_000;
 const PROBE_MISSES_BEFORE_DIALLING_BLIND = 4;
 
+/**
+ * How often to re-probe while the page is awake and the bridge is idle. This is
+ * what closes the session-start race: discovery used to be strictly
+ * alarm-cadenced, and one 30s period against BRIDGE_CONNECT_WAIT_MS left an
+ * agent's first call a few seconds of margin — which alarm jitter and the wake
+ * cost of `init()` at ~1000 tabs regularly ate, producing "first call fails,
+ * retry succeeds". A probe is a plain HTTP fetch: it does not feed Gecko's
+ * `FailDelayManager` (only failed *WebSocket* connects do — see
+ * PROBE_TIMEOUT_MS), and a refused loopback connect resolves in microseconds,
+ * so asking every few seconds costs nothing that matters and dials nothing
+ * until a server actually answers.
+ *
+ * Two deliberate limits. The loop is best-effort: its timer dies with page
+ * suspension (on either engine), so the alarm remains the guaranteed wake and
+ * the degraded case is exactly the old cadence. And a miss here never counts
+ * toward PROBE_MISSES_BEFORE_DIALLING_BLIND — only ticks from outside the
+ * loop do (the alarm, a page wake, `sync()`, a fast retry), with a counting
+ * tick that lands mid-probe carried over rather than dropped. Blind dials are
+ * failed WebSocket connects, the one thing that *does* feed the reconnect
+ * penalty; inheriting this loop's cadence would fire one every ~12s and
+ * rebuild the very ceiling the probe exists to avoid, so the escape valve
+ * keeps its tick-paced schedule — ~2 minutes when only the alarm is ticking.
+ *
+ * The miss counter is deliberately instance-only, and it must stay that way.
+ * It was made durable once (`storage.session`, so the valve would fire
+ * "reliably" across suspensions) and reverted the same session: with every
+ * wake's probe miss accumulating, the valve fired often enough that its
+ * failed connects rebuilt a near-ceiling penalty inside ~15 minutes —
+ * observed live as `bridge socket open after 48129ms` against a sidecar
+ * answering HTTP in microseconds. (The same browser was later caught failing
+ * socket creation browser-wide — its own Push service logging
+ * `NS_ERROR_SOCKET_CREATE_FAILED` — so the counter may not own that 48s
+ * alone; see BRIDGE.md. Either way the mechanism stands: blind dials are the
+ * only thing we control that feeds the penalty.) Suspension resetting the
+ * count is not a reliability bug in the valve; it is what keeps blind dials
+ * rare. The valve
+ * still fires where it can help: a page held awake by real use counts to
+ * four inside ~2 minutes, and active use is the only world where escaping a
+ * blocked `fetch` matters anyway.
+ */
+const IDLE_PROBE_MS = 3_000;
+
 export type BridgeStatus = "disabled" | "idle" | "connecting" | "connected";
 
 export interface BridgeClientDeps {
@@ -153,8 +199,13 @@ export class BridgeClient {
   private awaitingPong = false;
   /** A probe is in flight; `phase` is still "closed", so ticks need their own guard. */
   private probing = false;
-  /** Consecutive probes that found nothing — see PROBE_MISSES_BEFORE_DIALLING_BLIND. */
+  /** Counted probe misses. Deliberately dies with the page — an ephemeral
+   * count is what keeps blind dials rare; see the valve notes at IDLE_PROBE_MS. */
   private probeMisses = 0;
+  /** The idle probe loop's pending timer — see IDLE_PROBE_MS. */
+  private idleProbeTimer: ReturnType<typeof setTimeout> | null = null;
+  /** A counting tick landed while a probe was in flight; the probe consumes it. */
+  private countedTickPending = false;
   private label = IS_CHROME ? "Chrome" : "Firefox";
   /** Whether `start()` has run, i.e. whether the settings we read are real ones. */
   private started = false;
@@ -222,6 +273,13 @@ export class BridgeClient {
 
   /** Re-evaluate after a settings change: connect, disconnect, or re-dial. */
   sync(): void {
+    // Same race as the alarm listener in the constructor: a storage change can
+    // wake a cold page and land here before `start()` has seeded
+    // `lastBridgeConfig`, at which point *any* change — a dedup scope, a clip
+    // folder — compares against "" and reads as a deliberate bridge change,
+    // earning the unprobed dial reserved for one. Dropping the call costs
+    // nothing: init always ends in `start()`, which seeds and dials.
+    if (!this.started) return;
     void this.syncAlarm();
     const settings = this.deps.getSettings();
     // `background.ts` calls this whenever *any* setting changes, so most of the
@@ -280,17 +338,36 @@ export class BridgeClient {
       this.disable();
       return;
     }
-    if (this.phase !== "closed" || this.probing) return;
+    if (this.phase !== "closed") return;
+    if (this.probing) {
+      // A counting tick that lands inside an in-flight idle probe must not
+      // just vanish: its miss would have advanced the blind-dial counter. That
+      // matters in exactly the world the escape valve exists for — a blocked
+      // `fetch` that *hangs* to PROBE_TIMEOUT_MS rather than rejecting gives
+      // the loop a duty cycle high enough to swallow ticks routinely, and
+      // dropping them would stretch the valve's pacing non-deterministically.
+      this.countedTickPending = true;
+      return;
+    }
     if (force) {
       this.probeMisses = 0;
       this.connect(settings);
       return;
     }
-    void this.probeThenConnect(settings);
+    void this.probeThenConnect(settings, true);
   }
 
-  /** Open a socket only once something has answered the port — see PROBE_TIMEOUT_MS. */
-  private async probeThenConnect(settings: Settings): Promise<void> {
+  /**
+   * Open a socket only once something has answered the port — see
+   * PROBE_TIMEOUT_MS. `countsTowardBlindDial` is true for alarm/sync/retry
+   * ticks and false for the idle probe loop, which must stay incapable of
+   * triggering a blind dial — see IDLE_PROBE_MS for why that split is
+   * load-bearing.
+   */
+  private async probeThenConnect(
+    settings: Settings,
+    countsTowardBlindDial: boolean,
+  ): Promise<void> {
     this.probing = true;
     let answered = false;
     try {
@@ -299,10 +376,18 @@ export class BridgeClient {
       this.probing = false;
     }
     if (!answered) {
+      // Nothing there, which costs nothing to keep asking about: every miss
+      // re-arms the loop, so the loop lives exactly as long as the port is
+      // empty and the page is awake, and stops itself the moment either ends.
+      this.scheduleIdleProbe();
+      const counts = countsTowardBlindDial || this.countedTickPending;
+      this.countedTickPending = false;
+      if (!counts) return;
       this.probeMisses += 1;
       if (this.probeMisses < PROBE_MISSES_BEFORE_DIALLING_BLIND) return;
       console.debug(`[tabglutton] bridge probe found nothing ${this.probeMisses}x; dialling blind`);
     }
+    this.countedTickPending = false;
     this.probeMisses = 0;
     // Re-read rather than trusting the captured settings: the probe is an await,
     // and a settings change or a socket opened by a fast retry can land inside
@@ -321,10 +406,17 @@ export class BridgeClient {
    */
   private disable(): void {
     this.stopKeepalive();
+    this.clearIdleProbe();
     this.teardown();
   }
 
   private connect(settings: Settings): void {
+    // An idle-probe timer armed by an earlier miss must not survive into the
+    // dial: if this dial fails fast, that stale timer would re-probe a port
+    // that answers and re-dial it ~3s later — the exact hammer the
+    // probe-miss-only arming rule exists to prevent. From here on, scheduling
+    // belongs to the alarm (and, after a lost connection, the fast retries).
+    this.clearIdleProbe();
     let socket: WebSocket;
     try {
       socket = new WebSocket(this.socketUrl(settings));
@@ -425,7 +517,7 @@ export class BridgeClient {
         // such thing as a connection nobody wants. Waiting for a request instead
         // left the gap that actually bit — connect, sit idle, get suspended out
         // from under the socket before the agent's first call, and answer that
-        // call with "no browser is connected" after a 35s wait for a redial.
+        // call with "no browser is connected" after the full connect wait.
         this.armKeepalive();
         console.log("[tabglutton] bridge connected as", msg.connectionId);
         return;
@@ -567,6 +659,32 @@ export class BridgeClient {
       this.fastRetries += 1;
       this.tick();
     }, FAST_RETRY_MS);
+  }
+
+  /**
+   * Re-arm the idle probe loop — see IDLE_PROBE_MS. Only ever armed from a
+   * probe miss, and `connect()` clears any timer still pending from an
+   * earlier miss, so a port that answers hands scheduling back to the alarm:
+   * a server that is present but failing the handshake gets re-approached
+   * every 30s, not every 3s.
+   */
+  private scheduleIdleProbe(): void {
+    if (this.idleProbeTimer !== null) return;
+    if (!this.isConfigured(this.deps.getSettings())) return;
+    this.idleProbeTimer = setTimeout(() => {
+      this.idleProbeTimer = null;
+      if (this.phase !== "closed" || this.probing) return;
+      // Re-read, as everywhere: 3s is plenty of time for the options page to
+      // have switched the bridge off or regenerated the token.
+      const settings = this.deps.getSettings();
+      if (!this.isConfigured(settings)) return;
+      void this.probeThenConnect(settings, false);
+    }, IDLE_PROBE_MS);
+  }
+
+  private clearIdleProbe(): void {
+    if (this.idleProbeTimer !== null) clearTimeout(this.idleProbeTimer);
+    this.idleProbeTimer = null;
   }
 
   /** Drop the socket and report whatever the settings now imply — idle if the

@@ -6,6 +6,7 @@
 // against a nonce the other side chose before any method is served.
 
 import {
+  BRIDGE_CONNECT_WAIT_MS,
   BRIDGE_HANDSHAKE_TIMEOUT_MS,
   BRIDGE_HEARTBEAT_MS,
   BRIDGE_PROTO,
@@ -65,14 +66,6 @@ export interface HubOptions {
   /** Overridable so tests need not wait out the real deadline. */
   handshakeTimeoutMs?: number;
 }
-
-/**
- * How long a peer's `connections` request may wait for a browser. The peer
- * inherits the hub's wait rather than running its own, so it must not be so long
- * that the peer's request timeout fires first and reports a timeout for what is
- * really "still waiting". Kept under BRIDGE_REQUEST_TIMEOUT_MS.
- */
-const PEER_CONNECT_WAIT_MS = 35_000;
 
 export class Hub {
   private readonly options: HubOptions;
@@ -397,9 +390,14 @@ export class Hub {
     msg: PeerRequestMessage,
   ): Promise<void> {
     try {
+      // A peer's `connections` inherits the hub's own first-call wait — the
+      // same number for both kinds of session, so losing the port election
+      // cannot shorten how long a first call will wait for a browser. The
+      // peer's outer RPC deadline sits strictly above this (see PEER_RPC_SLACK_MS
+      // in peer.ts), so waiting the full budget here cannot read as a dead hub.
       const result =
         msg.op === "connections"
-          ? await this.connectionsWithin(PEER_CONNECT_WAIT_MS)
+          ? await this.connectionsWithin(BRIDGE_CONNECT_WAIT_MS)
           : await this.requestFromPeer(msg);
       this.sendPeer(ws, { type: "peer-response", id: msg.id, result });
     } catch (err) {

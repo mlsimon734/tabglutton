@@ -60,13 +60,23 @@ export const BRIDGE_DIAL_TIMEOUT_MS = 120_000;
 
 /**
  * How long a tool call waits for a browser to dial in before giving up on one.
- * Must exceed the extension's reconnect period: its background page is
- * suspended whenever no agent is using the bridge, and it only redials when the
- * alarm wakes it, so a call can legitimately arrive up to one period before
- * there is any socket. Answering "no browser is connected" inside that window
- * reports a scheduling artefact as a missing browser.
+ * Must exceed the extension's reconnect period *with real margin*: its
+ * background page can be suspended when a session starts, and a suspended page
+ * only redials when the alarm wakes it, so a call can legitimately arrive a
+ * full period before there is any socket. Answering "no browser is connected"
+ * inside that window reports a scheduling artefact as a missing browser.
+ *
+ * 45s = one 30s alarm period plus the slop that sits on top of it, none of
+ * which is small at this project's scale: alarm delivery jitter, waking and
+ * re-running `init()` over ~1000 tabs on the page's single thread, then
+ * probe + dial + handshake. The previous 35s left 5s for all of that and lost
+ * the race often enough that "first call fails, immediate retry succeeds" was
+ * the observed session-start signature. The awake path does not need the
+ * margin at all — `IDLE_PROBE_MS` in bridge-client typically lands the
+ * connect within a few seconds — so the full wait is only ever served when
+ * the page really was suspended, or no browser is running.
  */
-export const BRIDGE_CONNECT_WAIT_MS = 35_000;
+export const BRIDGE_CONNECT_WAIT_MS = 45_000;
 
 export type BridgeBrowser = "firefox" | "chrome";
 

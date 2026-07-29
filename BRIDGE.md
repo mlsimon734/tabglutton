@@ -102,8 +102,11 @@ There is no user-visible application and no manual step per session:
    `.mcp.json` (or `claude mcp add`) in whatever project/agent runs triage.
 2. **Session start**: the agent harness spawns Gullet as an ordinary stdio MCP server.
    Gullet opens the loopback port.
-3. **Connect**: the extension's reconnect loop (alarm-driven, 30s cadence when idle)
-   finds the port and completes the token/origin handshake. Badge lights up.
+3. **Connect**: the extension's reconnect loop finds the port and completes the
+   token/origin handshake. Badge lights up. Discovery is a ~3s HTTP probe loop while
+   the background page is awake, with a 30s alarm as the backstop that survives page
+   suspension — probing is free where dialling is not (see the reconnect notes in
+   AGENTS.md), so a sidecar is found in seconds rather than within one alarm period.
 4. **Session end**: agent exits → Gullet exits → socket drops → extension goes back to
    idle dialing.
 
@@ -112,6 +115,14 @@ connection; no dock icon). The difference is we own both ends, so it works on Ze
 
 A long-running daemon mode (ambient curation without an active agent session, via native
 messaging or launchd) is explicitly deferred until session-scoped triage proves out.
+
+▸ **The daemon was weighed as a feature and deferred as one; it is coming back as a fix.**
+What the ambient-curation framing missed is that the daemon's lifetime is the answer to a
+reliability problem that polling cannot fully solve: because the hub dies with its agent
+session, every session start re-runs port discovery, and discovery-by-polling races the
+first call's connect wait. The probe loop above shrinks that race to a few seconds; a hub
+that outlives sessions removes it. See "Session-start connect latency" under Open
+questions for the sketch.
 
 ## Wire protocol
 
@@ -317,6 +328,102 @@ _proved_. Anything still unproven has moved to Open questions, where it gets rea
   - **Why it matters more than its frequency suggests.** It lands on the first call of a
     session and reads to an agent as a dead bridge — the exact failure mode the reconnect work
     was meant to eliminate — so it spends the credibility that work bought back.
+- **Session-start connect latency: mitigated by faster discovery; ended by a detached
+  hub.** The recurring "first connection window misses, the retry succeeds" was a race
+  between two ~30s timers: discovery was strictly alarm-cadenced (30s) while
+  `BRIDGE_CONNECT_WAIT_MS` was 35s, and the 5s margin was eaten by alarm jitter plus the
+  wake cost of `init()` at ~1000 tabs. Shipped mitigation: the extension re-probes every
+  3s while its page is awake — probing is plain HTTP, exempt from Gecko's
+  `FailDelayManager`, so the loop costs nothing and dials nothing until a server answers
+  — the alarm is demoted to the suspension backstop, and the wait is now 45s so even the
+  backstop path fits inside the first call. While the page is awake, session-start
+  connect drops from 0–30s to a few seconds — and the five-minute post-drop keepalive
+  linger makes back-to-back sessions the loop's strongest case; a page that did suspend
+  still pays up to one alarm period, which the 45s wait now covers. The wait is one
+  number for both kinds of session: a Gullet that loses the port election serves its
+  first call with the hub's own `BRIDGE_CONNECT_WAIT_MS`, and the peer's outer RPC
+  deadline sits strictly above the hub's inner budget (`PEER_RPC_SLACK_MS`) so a hub
+  still legitimately waiting can never read as a dead one.
+  - ▸ **A durable blind-dial counter shipped inside this mitigation and was reverted the
+    same session.** Persisting `probeMisses` in `storage.session` — so the blocked-`fetch`
+    escape valve would fire reliably across suspensions — inverted a load-bearing
+    accident: the instance counter dying with the page was precisely what kept blind
+    dials, the only input to Gecko's reconnect penalty, rare. Made durable, wake-time
+    misses accumulated and the valve fired often enough to rebuild a near-ceiling
+    `FailDelayManager` record in ~15 minutes; the first live session-start after the
+    change logged `bridge socket open after 48129ms` against a sidecar answering HTTP in
+    microseconds — the exact "stuck on Connecting…" the probe architecture exists to
+    prevent, manufactured by code meant to make startup fast. The valve keeps its
+    ephemeral counter; its unreliability under suspension is the design.
+  - ▸ **The browser itself intermittently fails to create sockets, which reopens the
+    attribution.** The build with the counter reverted showed the same ~5-minute
+    session-start discovery on the same day — and that browser's own console carries
+    recurring `PushServiceWebSocket: beginWSSetup: asyncOpen failed
+NS_ERROR_SOCKET_CREATE_FAILED` bursts: Firefox's Push service, no Tabglutton
+    involvement, unable to open a WebSocket at the OS socket layer. A bridge dial landing
+    inside such a burst fails instantly, and every one of those failures is a real failed
+    WebSocket connect — exactly what feeds `FailDelayManager` — while the HTTP probe can
+    keep succeeding off a pooled connection, so the extension keeps deciding to dial into
+    a wall. That would produce both observations without the counter: the 48s penalized
+    dial and multi-minute discovery on either build. Raw fd exhaustion is measured out
+    (1,409 fds against a 184,320 per-process cap at the time of check; ~430 sockets, most
+    of them QUIC/UDP one-per-origin at ~1000 tabs), so the burst mechanism — necko
+    internal socket limits, or transient `EMFILE`-class spikes — is not yet pinned. The
+    discriminating check when discovery is slow: open the Browser Console and look for
+    `NS_ERROR_SOCKET_CREATE_FAILED` lines clustering around the window. If they are
+    there, the machine, not the bridge, is the bottleneck — and it is one more reason
+    the detached hub below is the real fix, since a standing connection only has to win
+    a socket once, not once per session.
+  - ▸ **A controlled reproduction settled it: discovery is exonerated, the dial itself
+    hangs inside Gecko.** 2026-07-29, after 4+ hours of extension idle: Gullet bound the
+    port at 03:24:56.6Z and the extension dialled at 03:24:56.8Z — the probe loop found
+    the sidecar in **180ms**, exactly to spec. The dial then sat in CONNECTING for the
+    full 120s `BRIDGE_DIAL_TIMEOUT_MS`, twice consecutively, while an external `lsof`
+    watch on the port saw **no SYN ever reach TCP** — Firefox's own "can't establish a
+    connection" errors surfaced only after our abort. The third dial established TCP in
+    ~1.3s, but the WebSocket upgrade never completed: Gullet saw no connection, the
+    extension never reached `open`, and the socket was gone minutes later.
+    `FailDelayManager` cannot produce this shape — its ceiling is 60s and a hold ends in
+    a normal connect — so the earlier "socket open after 48129ms" and "after 33819ms"
+    reads as the mild form of the same thing, and the blockage sits deeper in necko
+    (per-host WebSocket admission serialization and socket-transport pressure are the
+    candidates), in a browser whose own Push service was failing with
+    `NS_ERROR_SOCKET_CREATE_FAILED` the same day at ~1,050 tabs. Everything we control
+    behaved correctly: probe found the port instantly, the dial deadline fired, the
+    retry kept the client live. A browser restart is the clearing action. A shorter
+    dial deadline (dials are probe-gated now, so an aborted dial against a live server
+    is cheap) is a candidate experiment, but it rests on this one run — and the run is
+    the strongest argument yet for the detached hub, which dials once per browser
+    session instead of once per agent session.
+  - **The structural fix is to make the connection predate the session.** Polling exists
+    only because the hub's lifetime is bound to the agent session that spawned it. The
+    hub/peer election already lets N sessions share one browser connection; the missing
+    piece is a hub that outlives them: the first Gullet that finds no listener spawns a
+    _detached_ hub and attaches to it as a peer, exactly as later sessions already do.
+    The extension then holds one long-lived socket (the 20s heartbeat already maintains
+    it) and session start becomes a peer attach — local, instant, no window at all.
+  - Lifecycle sketch: the detached hub self-exits after long idle (no peers for some
+    hours); version skew rides the hello (`proto` is already checked) — a newer peer
+    asks an older hub to retire and re-races the port, which binding already settles
+    atomically; token regeneration already drops live sockets, so revocation is
+    unchanged. Nothing about the trust boundary moves: same port, same token, same
+    origin check.
+  - The honest open problem is the **keepalive entitlement**. Today a live socket _is_
+    proof an agent session exists, which is what justifies holding the event page awake
+    (`KEEPALIVE_PING_MS`). A persistent hub breaks that proof: staying connected around
+    the clock means the page never suspends, spending wakeups on nobody. The likely
+    shape is the hub advertising whether any peer is attached, with the extension
+    holding the page awake only then — which keeps the instant-attach property (the hub
+    is always listening, so the probe loop reconnects in seconds even from a drop)
+    without pinning the browser for idle hours.
+  - What it settles for free: the event-page-lifetime question below becomes empirical —
+    a permanently connected extension either stays up or provably does not — and native
+    messaging remains the fallback if Firefox turns out to suspend the page out from
+    under a long-lived socket in practice, that being the one property native messaging
+    uniquely buys (see the ▸ note under "Why not native messaging").
+  - What it does _not_ fix: the first-`tabs_list` timeout above is post-connect and
+    orthogonal — a persistent connection may even surface it more often, since
+    connect-window failures will stop masking it.
 - **`tabs_load` on Chrome is unverified, and tab-id churn is exactly why.** A Chrome tab gets
   a new id when it is _discarded_; whether waking one churns the id a second time is unknown.
   If it does, the completion event names an id `ensureTabReady` is not watching, and the wait
@@ -333,6 +440,11 @@ _proved_. Anything still unproven has moved to Open questions, where it gets rea
 - Whether the idle reconnect loop keeps the Firefox event page from ever suspending. The
   cadence itself is confirmed (below); what is untested is the page's own lifetime, and
   whether a 30s alarm is worth the wakeups it costs when no sidecar will ever answer.
+  The answer now also sizes the idle probe loop: the loop's fetches reset no idle timer
+  on either engine (not a WebExtension API call, which is what Gecko counts; not an
+  event, which is what Chrome counts), but if the page never suspends in practice then
+  "while awake" means continuously, and an enabled bridge with no sidecar issues a
+  loopback probe every 3s — ~29k/day. Cheap, but a fact to own rather than discover.
 - Whether `tab_clip` batching needs throttling on the `obsidian://` handoff (Obsidian URI
   handling under burst load is untested beyond manual Devour rates).
 - ~~One port, many sessions.~~ **Resolved: hub mode.** The sidecar no longer assumes it owns

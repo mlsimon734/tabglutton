@@ -6,6 +6,7 @@
 // session should not care whether it happened to start first.
 
 import {
+  BRIDGE_CONNECT_WAIT_MS,
   BRIDGE_HANDSHAKE_TIMEOUT_MS,
   BRIDGE_PROTO,
   BRIDGE_REQUEST_TIMEOUT_MS,
@@ -24,6 +25,25 @@ interface Pending {
   resolve: (result: unknown) => void;
   reject: (err: unknown) => void;
   timer: ReturnType<typeof setTimeout>;
+}
+
+/**
+ * A peer RPC's deadline sits *outside* the hub's own budget for that operation,
+ * plus slack for a busy hub's event loop. The hub legitimately holds
+ * `connections` for up to BRIDGE_CONNECT_WAIT_MS waiting for a browser to dial
+ * in, and a `call` for up to BRIDGE_REQUEST_TIMEOUT_MS waiting for the browser
+ * to answer — an outer timer at exactly the inner number fires while the hub is
+ * still within its rights, converting "still waiting" into a spurious "Hub did
+ * not answer". This timer exists only to catch a hub that has genuinely gone
+ * silent; the inner deadlines are the real budget, and the hub's own timeout
+ * error is the more useful answer, so ours must always lose that race.
+ */
+const PEER_RPC_SLACK_MS = 5_000;
+
+function peerDeadlineMs(op: PeerRequestMessage["op"]): number {
+  return (
+    (op === "connections" ? BRIDGE_CONNECT_WAIT_MS : BRIDGE_REQUEST_TIMEOUT_MS) + PEER_RPC_SLACK_MS
+  );
 }
 
 /**
@@ -176,7 +196,7 @@ export class PeerClient {
       const timer = setTimeout(() => {
         this.pending.delete(id);
         reject(new BridgeRequestError("timeout", `Hub did not answer ${body.op}.`));
-      }, BRIDGE_REQUEST_TIMEOUT_MS);
+      }, peerDeadlineMs(body.op));
       this.pending.set(id, { resolve, reject, timer });
       try {
         socket.send(JSON.stringify({ type: "peer-request", id, ...body }));

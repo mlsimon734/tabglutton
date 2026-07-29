@@ -49,9 +49,11 @@ tools appear under that namespace, and the token is `TABGLUTTON_TOKEN`. `GULLET_
    ```
 
 3. **Start a session.** The agent spawns Gullet, Gullet opens the port, and the extension's
-   reconnect loop finds it within ~30 seconds. The toolbar badge shows a terracotta dot
-   while the connection is live. When the session ends, Gullet exits and the extension goes
-   back to idle dialling.
+   reconnect loop finds it — typically within a few seconds (it re-probes the port every 3s
+   while the browser's extension page is awake), worst case ~30 seconds (the alarm cadence,
+   when the page had suspended). The toolbar badge shows a terracotta dot while the
+   connection is live. When the session ends, Gullet exits and the extension goes back to
+   idle dialling.
 
 There is no app to launch and no per-session step. Multiple browsers can be connected at
 once — a Zen window and a Chrome profile, say — and each tool call picks one with the
@@ -115,15 +117,35 @@ than you have sessions — some MCP clients spawn more than one — which is har
 losing the race is not fatal.
 
 **"No browser is connected."** The bridge is off in Tabglutton's settings, no token has
-been generated, the ports do not match, or the browser has not re-dialled yet — the retry
-alarm runs on a 30s cadence, on Firefox too. The settings page shows live connection
-status.
+been generated, the ports do not match, or the browser has not re-dialled yet — a first
+call waits up to 45s for the browser's backstop alarm (30s cadence, on Firefox too) to
+fire and the dial to land, so this answer normally means configuration, not timing. The
+settings page shows live connection status.
+
+**Tool calls cancelled by the client.** A first call can legitimately hold for the 45s
+connect wait, and a slow method holds for its own 45s request budget after that — ~90s
+worst case for one tool call. Most MCP clients default to a 60s deadline (the MCP
+TypeScript SDK and Codex both do); give your client at least 100s or a slow-but-healthy
+call surfaces as a bare cancellation instead of an answer. Claude Code: `MCP_TOOL_TIMEOUT`
+(milliseconds). Codex: `tool_timeout_sec` per server — this repo's `.codex/config.toml`
+sets it to 120.
 
 **The browser dials but nothing reaches Gullet.** If the extension's console shows a
 WebSocket close code of **1015** and Gullet logs nothing at all, the extension CSP is
 upgrading `ws://` to `wss://` and Gullet is being handed a TLS ClientHello. `manifest.json`
 must declare `content_security_policy.extension_pages` explicitly — Firefox's MV3 default
 includes `upgrade-insecure-requests`, which does this to loopback WebSockets as well.
+
+**Discovery takes minutes instead of seconds.** If the extension only connects long after
+Gullet started — or not at all — inspect the extension's background console via
+`about:debugging#/runtime/this-firefox` → Tabglutton → _Inspect_ (its `[tabglutton]`
+lines do not appear in the Browser Console). `bridge dial timed out after 120000ms`
+repeating against a Gullet that answers `curl` instantly means the browser itself cannot
+complete a loopback WebSocket: verified live in a ~1,050-tab Zen where dials sat two full
+minutes without a SYN ever reaching the wire, while the Browser Console (Cmd-Shift-J)
+showed Firefox's own Push service failing with
+`PushServiceWebSocket … NS_ERROR_SOCKET_CREATE_FAILED`. The bridge is not misconfigured
+and no setting fixes it — restart the browser.
 
 **"Token mismatch."** `TABGLUTTON_TOKEN` and the token in Tabglutton's settings differ.
 Regenerating the token in settings invalidates any sidecar still holding the old one.
