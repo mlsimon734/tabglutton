@@ -237,7 +237,15 @@ function writeManifest(target: Target, dist: string): void {
       "48": "icons/icon-chomp-48.png",
       "128": "icons/icon-chomp-128.png",
     };
-    raw.minimum_chrome_version = "116";
+    // 120, not 116, because of `alarms`. Chrome clamps an extension alarm to a
+    // minimum granularity, and that minimum was one minute until 120 dropped it
+    // to 30s for MV3 (`alarms_api_constants.h`: kMV2ReleaseDelayMinimum vs
+    // kMV3ReleaseDelayMinimum). The bridge's reconnect alarm is the 30s one, and
+    // an agent's first tool call waits BRIDGE_CONNECT_WAIT_MS (35s) for a
+    // browser — so on 116-119 a sleeping worker would be woken a minute later
+    // and the call would already have answered "no browser is connected".
+    // Unpacked builds never reproduce it: kDevDelayMinimum is 1s.
+    raw.minimum_chrome_version = "120";
   }
   writeFileSync(`${dist}/manifest.json`, `${JSON.stringify(raw, null, 2)}\n`);
 }

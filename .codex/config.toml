@@ -1,0 +1,18 @@
+# Project-local Codex config. Applies to sessions started from this repo, the
+# same scoping .mcp.json gives Claude Code — no flag required.
+#
+# The token is NOT stored here. It is read at spawn time from the gitignored
+# .env, so this file carries no credential and is safe to commit.
+
+[mcp_servers.tabglutton]
+command = "bash"
+args = [
+  "-c",
+  "export TABGLUTTON_TOKEN=\"$(grep -m1 '^TABGLUTTON_TOKEN=' .env | cut -d= -f2-)\"; exec bun run ./gullet/gullet.ts",
+]
+startup_timeout_sec = 30
+# A first tool call can legitimately hold ~90s: up to 45s waiting for the
+# browser to dial in (BRIDGE_CONNECT_WAIT_MS) and up to 45s for the browser to
+# answer (BRIDGE_REQUEST_TIMEOUT_MS). Codex's default MCP deadline is 60s,
+# which cancels a slow-but-healthy call mid-answer. See gullet/README.md.
+tool_timeout_sec = 120

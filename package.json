@@ -1,6 +1,6 @@
 {
   "name": "tabglutton",
-  "version": "0.1.2.1",
+  "version": "0.1.3",
   "private": true,
   "description": "Devour duplicate tabs and save the keepers into Obsidian. For Zen Browser and Firefox.",
   "type": "module",
@@ -9,7 +9,9 @@
     "build:firefox": "bun build.ts --target=firefox",
     "build:chrome": "bun build.ts --target=chrome",
     "watch": "bunx tsc --watch --preserveWatchOutput",
-    "typecheck": "bunx tsc --noEmit -p tsconfig.test.json",
+    "typecheck": "bun run typecheck:ext && bun run typecheck:gullet",
+    "typecheck:ext": "bunx tsc --noEmit -p tsconfig.test.json",
+    "typecheck:gullet": "bunx tsc --noEmit -p gullet/tsconfig.json",
     "test": "bun test",
     "format": "bunx oxfmt .",
     "format:check": "bunx oxfmt --check .",

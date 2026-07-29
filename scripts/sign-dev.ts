@@ -9,14 +9,28 @@ const origPkgText = readFileSync("package.json", "utf8");
 const origManifestText = readFileSync("manifest.json", "utf8");
 const pkg = JSON.parse(origPkgText);
 const manifest = JSON.parse(origManifestText);
-const base: string = pkg.version;
+// Versions are major.minor.patch.build, and Firefox accepts at most four parts.
+// The 4th is the signed-test-build counter: it belongs in the artifact and its
+// tag, not in package.json. Slice to the release triple anyway — a 4-part
+// version has been committed before (v0.1.2.1), and appending to that would
+// produce a five-part version AMO rejects.
+const versionParts: string[] = pkg.version.split(".");
+const base = versionParts.slice(0, 3).join(".");
 
 const tags = spawnSync("git", ["tag", "--list", `v${base}.*`, "--sort=-v:refname"], {
   encoding: "utf8",
 });
 const lastTag = tags.stdout.split("\n").filter(Boolean)[0];
-const lastN = lastTag ? Number(lastTag.replace(`v${base}.`, "")) : 0;
-const next = (Number.isFinite(lastN) ? lastN : 0) + 1;
+const taggedN = lastTag ? Number(lastTag.slice(`v${base}.`.length)) : 0;
+// AMO requires versions to be unique and strictly increasing, and these tags are
+// local and unpushed — so never trust them alone. If package.json already
+// carries a build number, count from whichever is higher.
+const committedN = versionParts.length > 3 ? Number(versionParts[3]) : 0;
+const lastN = Math.max(
+  Number.isFinite(taggedN) ? taggedN : 0,
+  Number.isFinite(committedN) ? committedN : 0,
+);
+const next = lastN + 1;
 const dev = `${base}.${next}`;
 
 console.log(`Signing dev build v${dev} (base ${base})`);

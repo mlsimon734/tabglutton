@@ -1,3 +1,4 @@
+import { DEFAULT_BRIDGE_PORT } from "./bridge-protocol.js";
 import type { NormalizeOpts } from "./normalize.js";
 import { IS_CHROME } from "./target.js";
 
@@ -13,6 +14,17 @@ export interface Settings {
   clippingsBaseFolder: string;
   clipMode: ClipMode;
   onboardingComplete: boolean;
+  /** Agent bridge (see BRIDGE.md). Off until the user opts in on the options page. */
+  bridgeEnabled: boolean;
+  bridgePort: number;
+  /** Shared secret; also pasted into Gullet's env. Empty until first generated. */
+  bridgeToken: string;
+  /**
+   * Lets the bridge's `tabs_load` wake unloaded tabs. Separate from
+   * `bridgeEnabled` because it is the one bridge method that acts on a page
+   * rather than reading one, so enabling the bridge must not enable it too.
+   */
+  bridgeAllowTabLoad: boolean;
 }
 
 const DEFAULTS: Readonly<Settings> = Object.freeze({
@@ -25,6 +37,10 @@ const DEFAULTS: Readonly<Settings> = Object.freeze({
   clippingsBaseFolder: "Clippings",
   clipMode: "clipboard",
   onboardingComplete: false,
+  bridgeEnabled: false,
+  bridgePort: DEFAULT_BRIDGE_PORT,
+  bridgeToken: "",
+  bridgeAllowTabLoad: false,
 });
 
 export function defaults(): Settings {

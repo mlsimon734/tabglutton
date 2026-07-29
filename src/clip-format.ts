@@ -135,9 +135,46 @@ export function markdownForClip(payload: ClipPayload): string {
 export const CLIPBOARD_FALLBACK_CONTENT =
   "[Tabglutton] Clipboard handoff failed — re-run the clip.";
 
+/**
+ * Minimum gap between `obsidian://` launches. Both the popup's Devour and the
+ * bridge's `tab_clip` pace themselves by it, so it lives here rather than being
+ * a bare `200` in one file and a constant in the other.
+ */
+export const OBSIDIAN_HANDOFF_GAP_MS = 200;
+
 export interface ObsidianClipRequest {
   url: string;
   clipboard: string | null;
+  /** Vault-relative note path this request files under, without extension. */
+  file: string;
+}
+
+/** Vault-relative note path a clip will be filed under, without extension. */
+function clipFilePath(payload: ClipPayload, rule: SiteRule | null, baseFolder: string): string {
+  const base = normalizeBaseFolder(baseFolder);
+  return `${folderForRule(rule, base)}/${sanitizeFileName(payload.title || payload.url)}`;
+}
+
+/**
+ * The clip request actually handed to Obsidian: clipboard mode when the copy
+ * lands, legacy URI when it does not. Both the popup's Devour and the bridge's
+ * `tab_clip` go through here, so the fallback rule has exactly one owner.
+ * `copyToClipboard` is injected because this module stays free of browser APIs.
+ */
+export async function resolveClipRequest(
+  payload: ClipPayload,
+  vault: string,
+  content: string,
+  rule: SiteRule | null,
+  mode: ClipMode,
+  baseFolder: string,
+  copyToClipboard: (text: string) => Promise<boolean>,
+): Promise<ObsidianClipRequest> {
+  const request = obsidianClipRequest(payload, vault, content, rule, mode, baseFolder);
+  if (request.clipboard === null) return request;
+  if (await copyToClipboard(request.clipboard)) return request;
+  // The URI carries the note itself — bigger, but it does not need the clipboard.
+  return obsidianClipRequest(payload, vault, content, rule, "legacy-uri", baseFolder);
 }
 
 export function obsidianClipRequest(
@@ -148,14 +185,13 @@ export function obsidianClipRequest(
   mode: ClipMode,
   baseFolder: string = DEFAULT_CLIPPER_PATH,
 ): ObsidianClipRequest {
-  const base = normalizeBaseFolder(baseFolder);
-  const file = `${folderForRule(rule, base)}/${sanitizeFileName(payload.title || payload.url)}`;
+  const file = clipFilePath(payload, rule, baseFolder);
   let url = `obsidian://new?file=${encodeURIComponent(file)}`;
   if (vault) url += `&vault=${encodeURIComponent(vault)}`;
   if (mode === "clipboard") {
     url += `&clipboard&content=${encodeURIComponent(CLIPBOARD_FALLBACK_CONTENT)}`;
-    return { url, clipboard: content };
+    return { url, clipboard: content, file };
   }
   url += `&content=${encodeURIComponent(content)}`;
-  return { url, clipboard: null };
+  return { url, clipboard: null, file };
 }

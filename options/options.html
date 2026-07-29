@@ -143,6 +143,125 @@
         </div>
       </section>
 
+      <section>
+        <h2 class="section-title">Agent bridge</h2>
+        <p class="section-intro">
+          Lets a coding agent (Claude Code, Codex, any MCP client) see your open tabs and triage
+          them — read a page, file it into Obsidian, close it, undo the close. Nothing else: no
+          clicking, no typing, and no opening pages you did not open yourself. Runs over a loopback
+          socket that only a local process holding the token below can use.
+        </p>
+
+        <div class="setting">
+          <div class="setting-text">
+            <strong>Enable the bridge</strong>
+            <small>
+              While on, Tabglutton looks for a running
+              <a
+                href="https://github.com/mlsimon734/zen-map-reduce/tree/main/gullet"
+                target="_blank"
+                rel="noopener noreferrer"
+                >Gullet</a
+              >
+              sidecar every 30 seconds. When none is running, nothing happens.
+            </small>
+          </div>
+          <div class="setting-control">
+            <label class="switch">
+              <input type="checkbox" id="bridgeEnabled" />
+              <span class="switch-track" aria-hidden="true">
+                <span class="switch-thumb"></span>
+              </span>
+            </label>
+          </div>
+        </div>
+
+        <div class="setting">
+          <div class="setting-text">
+            <strong>Let agents load unloaded tabs</strong>
+            <small>
+              A tab your browser has unloaded to save memory has no page left to read. With this on,
+              an agent can reload one so it becomes readable — the only thing the bridge ever does
+              <em>to</em> a page rather than with it. It can only reload tabs you already opened,
+              never open a new address, and a few load at a time so a triage run does not undo what
+              unloading saved.
+            </small>
+          </div>
+          <div class="setting-control">
+            <label class="switch">
+              <input type="checkbox" id="bridgeAllowTabLoad" />
+              <span class="switch-track" aria-hidden="true">
+                <span class="switch-thumb"></span>
+              </span>
+            </label>
+          </div>
+        </div>
+
+        <div class="setting">
+          <div class="setting-text">
+            <strong>Connection</strong>
+            <small>Live status of the socket between this browser and the sidecar.</small>
+          </div>
+          <div class="setting-control">
+            <span id="bridgeStatus" class="pill" data-state="disabled" role="status">Off</span>
+          </div>
+        </div>
+
+        <div class="setting block">
+          <div class="setting-text">
+            <strong>Access token</strong>
+            <small>
+              Shared secret proving the sidecar is yours. It is never sent over the socket — both
+              sides prove they know it. Copy it into Gullet's environment; regenerating it
+              disconnects any sidecar still using the old one.
+            </small>
+          </div>
+          <div class="setting-control">
+            <div class="field-row">
+              <!-- Masked by default: Copy does not need it visible, and this page
+                   is one a user may well have open while screen-sharing. -->
+              <input type="password" id="bridgeToken" readonly placeholder="No token yet" />
+              <button type="button" id="bridgeTokenReveal" class="mini-button" aria-pressed="false">
+                Show
+              </button>
+              <button type="button" id="bridgeTokenCopy" class="mini-button">Copy</button>
+              <button type="button" id="bridgeTokenGenerate" class="mini-button">Generate</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="setting block">
+          <div class="setting-text">
+            <strong>Port</strong>
+            <small>
+              Loopback port the sidecar listens on. Change it only if something else already uses
+              <code>4588</code>; Gullet needs the same value via <code>--port</code>.
+            </small>
+          </div>
+          <div class="setting-control">
+            <!-- Bounds mirror isBridgePort() in src/bridge-protocol.ts; HTML cannot
+                 import, and parsePort() re-checks on save, so this is a hint only. -->
+            <input type="number" id="bridgePort" min="1024" max="65535" placeholder="4588" />
+          </div>
+        </div>
+
+        <div class="setting block">
+          <div class="setting-text">
+            <strong>Agent setup</strong>
+            <small>
+              Add Gullet to your agent's MCP config, then start a session — the badge shows a dot
+              when the connection is live.
+            </small>
+          </div>
+          <div class="setting-control">
+            <pre id="bridgeSnippet" class="snippet"><code></code></pre>
+            <button type="button" id="bridgeSnippetCopy" class="mini-button self-start">
+              Copy config
+            </button>
+          </div>
+        </div>
+      </section>
+
       <p class="rerun-row">
         <a id="rerunOnboarding" href="#">Re-run setup walkthrough</a>
       </p>

@@ -4,12 +4,17 @@
 // in build.ts). Importing the bare "webextension-polyfill" specifier here would
 // break the Firefox background, which tsc emits unbundled — the bare specifier
 // is unresolvable in a Firefox module service worker and aborts registration.
+import { BridgeClient, type BridgeStatus } from "./bridge-client.js";
+import { BridgeMethodRunner } from "./bridge-methods.js";
+import { getBrowserInfoOnce } from "./browser-info.js";
 import {
   markdownForClip,
-  obsidianClipRequest,
+  OBSIDIAN_HANDOFF_GAP_MS,
+  resolveClipRequest,
   type ClipPayload,
   type ObsidianClipRequest,
 } from "./clip-format.js";
+import { delay } from "./serialize.js";
 import { pickRule } from "./site-rules.js";
 import { groupDuplicates, pickKeeper, type Tab } from "./dedup.js";
 import {
@@ -34,6 +39,7 @@ export type ReopenTabsMessage = {
   records: ClosedTabRecord[];
 };
 export type OpenCockpitMessage = { type: "open-cockpit" };
+export type GetBridgeStatusMessage = { type: "get-bridge-status" };
 export type IncomingMessage =
   | GetScopedTabsMessage
   | ClipSelectedTabsMessage
@@ -42,7 +48,18 @@ export type IncomingMessage =
   | CloseTabsMessage
   | FocusTabMessage
   | ReopenTabsMessage
-  | OpenCockpitMessage;
+  | OpenCockpitMessage
+  | GetBridgeStatusMessage;
+
+export interface GetBridgeStatusResponse {
+  status: BridgeStatus;
+}
+
+/** Pushed to the options page on every transition, so it never has to poll. */
+export interface BridgeStatusChangedMessage {
+  type: "bridge-status-changed";
+  status: BridgeStatus;
+}
 
 export type ClipFailureReason = "extract-failed" | "trigger-failed";
 
@@ -111,6 +128,9 @@ interface ClipCurrentResultMessage extends ClipCurrentResponse {
 }
 
 let settings: Settings = defaults();
+// Only the connected/not-connected split reaches the badge, so that is all we
+// mirror; `bridge.status` stays the source of truth for anyone who asks.
+let bridgeConnected = false;
 const pendingClips = new Map<
   string,
   {
@@ -118,6 +138,35 @@ const pendingClips = new Map<
     timeout: ReturnType<typeof setTimeout>;
   }
 >();
+
+// Agent bridge (BRIDGE.md). The runner owns the tab/undo surface; everything
+// that touches a page is handed down from here, so the bridge cannot reach any
+// capability the popup does not already have.
+const bridgeRunner = new BridgeMethodRunner({
+  getSettings: () => settings,
+  extract: (tabId) => clipTab(tabId, { wake: false }),
+  load: ensureTabReady,
+  openObsidianUrl,
+  copyToClipboardViaTab,
+});
+
+const bridge = new BridgeClient({
+  getSettings: () => settings,
+  run: (method, params) => bridgeRunner.run(method, params),
+  onStatusChange: (status) => {
+    // Nobody may be listening — an options page that is closed rejects, and
+    // that is the normal case, not an error.
+    const msg: BridgeStatusChangedMessage = { type: "bridge-status-changed", status };
+    void browser.runtime.sendMessage(msg).catch(() => {});
+    // A failed dial cycles idle → connecting → idle every 30s. Repainting on
+    // each would re-query and re-dedup every tab twice a minute to draw the
+    // same pixels, so only an actual connect/disconnect gets through.
+    const connected = status === "connected";
+    if (connected === bridgeConnected) return;
+    bridgeConnected = connected;
+    void refreshBadge();
+  },
+});
 
 function tabInScope(tab: Tab): boolean {
   if (!tab || !tab.url) return false;
@@ -139,11 +188,17 @@ async function refreshBadge(tabsHint?: Tab[]): Promise<void> {
   const groups = groupDuplicates(tabs, opts);
   const dupCount = groups.reduce((n, g) => n + (g.tabs.length - 1), 0);
   try {
-    await browser.action.setBadgeText({
-      text: dupCount > 0 ? String(dupCount) : "",
-    });
+    // The duplicate count is the badge's primary job. A live agent connection
+    // only claims the badge when there is nothing to report, as a terracotta
+    // dot — accent means "state indicator" in DESIGN.md, never decoration.
     if (dupCount > 0) {
+      await browser.action.setBadgeText({ text: String(dupCount) });
       await browser.action.setBadgeBackgroundColor({ color: "#ef4444" });
+    } else if (bridgeConnected) {
+      await browser.action.setBadgeText({ text: "•" });
+      await browser.action.setBadgeBackgroundColor({ color: "#7a4a2c" });
+    } else {
+      await browser.action.setBadgeText({ text: "" });
     }
   } catch (err) {
     console.warn("[tabglutton] badge update failed", err);
@@ -154,7 +209,7 @@ async function probeHeuristic(): Promise<void> {
   // Zen-specific heuristic; Chrome has no workspaces and no getBrowserInfo.
   if (IS_CHROME) return;
   try {
-    const info = await browser.runtime.getBrowserInfo?.();
+    const info = await getBrowserInfoOnce();
     const isZen = info?.name?.toLowerCase().includes("zen") ?? false;
     if (!isZen) {
       if (settings.heuristicWarning) {
@@ -163,11 +218,10 @@ async function probeHeuristic(): Promise<void> {
       }
       return;
     }
-    const allInWindow = await browser.tabs.query({ currentWindow: true });
-    const visibleInWindow = await browser.tabs.query({
-      currentWindow: true,
-      hidden: false,
-    });
+    const [allInWindow, visibleInWindow] = await Promise.all([
+      browser.tabs.query({ currentWindow: true }),
+      browser.tabs.query({ currentWindow: true, hidden: false }),
+    ]);
     const heuristicLooksBroken =
       allInWindow.length === visibleInWindow.length && allInWindow.length > 0;
     console.log(
@@ -197,24 +251,58 @@ function onTabUpdated(listener: Parameters<typeof browser.tabs.onUpdated.addList
   }
 }
 
+/**
+ * Trailing-edge coalesce for the tab-event listeners, which fire once *per tab*.
+ * A bridge triage run closes a batch of ~180 in one call and `undo_close`
+ * recreates them just as fast; without this each tab would kick off its own
+ * `tabs.query` + full duplicate grouping to land on a single badge number.
+ */
+let badgeTimer: ReturnType<typeof setTimeout> | undefined;
+function queueBadgeRefresh(): void {
+  if (badgeTimer) clearTimeout(badgeTimer);
+  badgeTimer = setTimeout(() => {
+    badgeTimer = undefined;
+    void refreshBadge();
+  }, 250);
+}
+
 onTabUpdated((_tabId, changeInfo) => {
   if (changeInfo.status === "complete") {
-    void refreshBadge();
+    queueBadgeRefresh();
   }
 });
 
-browser.tabs.onRemoved.addListener(() => {
-  void refreshBadge();
-});
+browser.tabs.onRemoved.addListener(queueBadgeRefresh);
 
-browser.tabs.onCreated.addListener(() => {
-  void refreshBadge();
-});
+browser.tabs.onCreated.addListener(queueBadgeRefresh);
 
-browser.storage.onChanged.addListener(async (_changes, area) => {
+// storage.local has tenants that are not settings (the undo log today, more
+// later). Match positively on what a setting *is*, so a new non-setting key
+// cannot silently start triggering reloads and badge repaints. DEFAULTS is
+// frozen, so this set is fixed for the module's lifetime.
+const SETTING_KEYS = new Set(Object.keys(defaults()));
+
+// The subset the duplicate-count badge is actually computed from. The bridge's
+// own contribution to the badge arrives via onStatusChange, not through here.
+const BADGE_SETTING_KEYS = ["stripFragment", "extraStripParams", "scope", "heuristicWarning"];
+
+browser.storage.onChanged.addListener(async (changes, area) => {
   if (area !== "local") return;
+  if (!Object.keys(changes).some((key) => SETTING_KEYS.has(key))) return;
   settings = await loadSettings();
-  await refreshBadge();
+  bridge.sync();
+  // Repainting the badge means a tabs.query plus a full duplicate grouping —
+  // ~1000 URL normalizations at this project's scale — so it runs only when a
+  // badge input truly changed. Presence alone is not that: Firefox reports
+  // every key a write names, and the options page saves the whole object, so a
+  // bridge toggle would regroup every tab for a number that cannot move.
+  const badgeAffected = BADGE_SETTING_KEYS.some((key) => {
+    const change = changes[key];
+    return (
+      change !== undefined && JSON.stringify(change.oldValue) !== JSON.stringify(change.newValue)
+    );
+  });
+  if (badgeAffected) await refreshBadge();
 });
 
 const SAFE_FAVICON_SCHEMES = new Set([
@@ -307,15 +395,17 @@ async function resolveTargetTab(tabId?: number): Promise<Tab | null> {
 // discarded state with no live document — scripting.executeScript fails on
 // those. Reload via tabs.reload(); tabs.update({ discarded: false }) is
 // inconsistent across Firefox versions.
+//
+// The completion listener is attached before the tab is inspected rather than
+// after. `tabs.get` is an IPC round trip, and a tab that reaches "complete"
+// during it would otherwise fire into a listener that does not exist yet and
+// then sit until the timeout — cheap when one clip pays it, expensive now that
+// `tabs_load` runs this over a batch. Nothing is read back after the reload for
+// the mirror-image reason: `tabs.reload` resolves before the navigation starts,
+// so a status read there still reports the pre-reload "complete".
 async function ensureTabReady(tabId: number, timeoutMs: number): Promise<void> {
-  const tab = await browser.tabs.get(tabId);
-  if (!tab.discarded && tab.status === "complete") return;
-
-  if (tab.discarded) {
-    await browser.tabs.reload(tabId);
-  }
-
-  await new Promise<void>((resolve, reject) => {
+  let cleanup = (): void => {};
+  const settled = new Promise<void>((resolve, reject) => {
     const listener = (updatedTabId: number, changeInfo: { status?: string }): void => {
       if (updatedTabId !== tabId) return;
       if (changeInfo.status !== "complete") return;
@@ -326,25 +416,54 @@ async function ensureTabReady(tabId: number, timeoutMs: number): Promise<void> {
       cleanup();
       reject(new Error(`Tab did not finish loading within ${timeoutMs}ms`));
     }, timeoutMs);
-    function cleanup(): void {
+    cleanup = (): void => {
       clearTimeout(timer);
       browser.tabs.onUpdated.removeListener(listener);
-    }
+    };
     onTabUpdated(listener);
   });
+
+  try {
+    const tab = await browser.tabs.get(tabId);
+    if (!tab.discarded && tab.status === "complete") {
+      // Cleared, so `settled` simply never resolves — nothing awaits it here.
+      cleanup();
+      return;
+    }
+    if (tab.discarded) await browser.tabs.reload(tabId);
+  } catch (err) {
+    cleanup();
+    throw err;
+  }
+  await settled;
 }
 
-async function clipTab(tabId?: number): Promise<ClipCurrentResponse> {
+interface ClipTabOptions {
+  /**
+   * Reload a discarded tab before extracting. True for user-initiated clips;
+   * the agent bridge passes false, because waking a tab on the agent's behalf is
+   * its own opt-in act there — the `tabs_load` method, which the user has to
+   * enable — and must never happen as a side effect of a read (see BRIDGE.md).
+   */
+  wake: boolean;
+}
+
+async function clipTab(
+  tabId?: number,
+  { wake }: ClipTabOptions = { wake: true },
+): Promise<ClipCurrentResponse> {
   const tab = await resolveTargetTab(tabId);
   if (!tab?.id) return { ok: false, error: "Tab not found." };
   if (!tab.url?.startsWith("http://") && !tab.url?.startsWith("https://")) {
     return { ok: false, error: "Only http and https pages can be clipped." };
   }
 
-  try {
-    await ensureTabReady(tab.id, 15000);
-  } catch (err) {
-    return { ok: false, error: errorMessage(err) };
+  if (wake) {
+    try {
+      await ensureTabReady(tab.id, 15000);
+    } catch (err) {
+      return { ok: false, error: errorMessage(err) };
+    }
   }
 
   const requestId = crypto.randomUUID();
@@ -368,10 +487,6 @@ async function clipTab(tabId?: number): Promise<ClipCurrentResponse> {
     }
     return { ok: false, error: errorMessage(err) };
   }
-}
-
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 // Runs inside the source tab's content-script world. With `clipboardWrite`
@@ -512,32 +627,25 @@ async function clipSelectedTabs(tabIds: number[]): Promise<ClipSelectedTabsRespo
       try {
         const rule = pickRule(res.payload.url);
         const content = markdownForClip(res.payload);
-        req = obsidianClipRequest(
+        req = await resolveClipRequest(
           res.payload,
           vault,
           content,
           rule,
           settings.clipMode,
           settings.clippingsBaseFolder,
+          async (text) => {
+            const copied = await copyToClipboardViaTab(tabId, text);
+            if (!copied) {
+              console.warn(
+                "[tabglutton] clipboard write failed for tab",
+                tabId,
+                "— falling back to legacy URI",
+              );
+            }
+            return copied;
+          },
         );
-        if (req.clipboard !== null) {
-          const copied = await copyToClipboardViaTab(tabId, req.clipboard);
-          if (!copied) {
-            console.warn(
-              "[tabglutton] clipboard write failed for tab",
-              tabId,
-              "— falling back to legacy URI",
-            );
-            req = obsidianClipRequest(
-              res.payload,
-              vault,
-              content,
-              rule,
-              "legacy-uri",
-              settings.clippingsBaseFolder,
-            );
-          }
-        }
       } catch (err) {
         const m = metaOf(tabId);
         failures.push({
@@ -565,7 +673,7 @@ async function clipSelectedTabs(tabIds: number[]): Promise<ClipSelectedTabsRespo
         continue;
       }
 
-      await delay(200);
+      await delay(OBSIDIAN_HANDOFF_GAP_MS);
       try {
         await browser.tabs.remove(tabId);
       } catch (err) {
@@ -663,6 +771,10 @@ browser.runtime.onMessage.addListener(async (rawMsg: unknown): Promise<unknown> 
       await openCockpit();
       return { ok: true };
     }
+    case "get-bridge-status": {
+      const response: GetBridgeStatusResponse = { status: bridge.status };
+      return response;
+    }
   }
   return undefined;
 });
@@ -706,7 +818,28 @@ browser.runtime.onInstalled.addListener(async (details) => {
 
 void (async function init() {
   settings = await loadSettings();
+  // Dial before the tab-heavy work below, not after. This is an event page: the
+  // browser re-runs init on every wake, including the wakes the reconnect alarm
+  // causes, so anything ahead of `start()` is paid again on every single
+  // reconnect attempt. `probeHeuristic` costs two `tabs.query` calls and
+  // `refreshBadge` a third plus a full duplicate-grouping pass — cheap on a
+  // normal window, seconds on the thousand-tab backlogs the bridge exists for,
+  // and every one of those seconds is time an agent is told no browser is
+  // connected. `start()` only *initiates* the dial, so the handshake completes
+  // while the badge work runs.
+  await bridge.start();
   await probeHeuristic();
   await refreshBadge();
-  console.log("[tabglutton] ready", settings);
+  console.log("[tabglutton] ready", loggableSettings(settings), "bridge:", bridge.status);
 })();
+
+/**
+ * Settings minus the bridge token. That token is the whole of the bridge's
+ * authentication — anything holding it can list, read, clip, and close every tab
+ * — and this line runs on every wake of an event page, so leaving it in prints
+ * the credential continuously into a console whose contents get pasted wholesale
+ * into bug reports and agent sessions.
+ */
+function loggableSettings(current: Settings): Record<string, unknown> {
+  return { ...current, bridgeToken: current.bridgeToken ? "<set>" : "" };
+}

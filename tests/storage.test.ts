@@ -1,6 +1,7 @@
 // Tests cover the pure helpers in storage.ts only.
 // loadSettings/saveSettings require browser.storage.local and are out of scope.
 import { describe, test, expect } from "bun:test";
+import { DEFAULT_BRIDGE_PORT } from "../src/bridge-protocol.js";
 import { defaults, normalizeOptsFrom, type Settings } from "../src/storage.js";
 import { IS_CHROME } from "../src/target.js";
 
@@ -16,11 +17,26 @@ describe("defaults()", () => {
       clippingsBaseFolder: "Clippings",
       clipMode: "clipboard",
       onboardingComplete: false,
+      bridgeEnabled: false,
+      bridgePort: DEFAULT_BRIDGE_PORT,
+      bridgeToken: "",
+      bridgeAllowTabLoad: false,
     });
   });
 
   test("onboardingComplete defaults to false (first-run flow gate)", () => {
     expect(defaults().onboardingComplete).toBe(false);
+  });
+
+  test("the agent bridge is off until the user opts in", () => {
+    expect(defaults().bridgeEnabled).toBe(false);
+    expect(defaults().bridgeToken).toBe("");
+  });
+
+  // Its own opt-in, not a consequence of enabling the bridge: loading is the one
+  // bridge method that acts on a page rather than reading one.
+  test("letting agents load tabs stays off even once the bridge is on", () => {
+    expect(defaults().bridgeAllowTabLoad).toBe(false);
   });
 
   test("mutating the result does not affect subsequent calls (extraStripParams is cloned)", () => {
@@ -48,6 +64,10 @@ describe("normalizeOptsFrom()", () => {
       clippingsBaseFolder: "Inbox",
       clipMode: "clipboard",
       onboardingComplete: true,
+      bridgeEnabled: false,
+      bridgePort: DEFAULT_BRIDGE_PORT,
+      bridgeToken: "",
+      bridgeAllowTabLoad: false,
     };
     expect(normalizeOptsFrom(settings)).toEqual({
       stripFragment: false,

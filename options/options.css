@@ -234,6 +234,99 @@ code {
   border-radius: var(--radius-1);
 }
 
+/* ---------- agent bridge ---------- */
+
+.field-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+}
+
+/* Both types: the token field toggles between text and password. */
+.field-row input[type="text"],
+.field-row input[type="password"] {
+  font-family: var(--font-mono);
+  font-size: var(--fs-small);
+}
+
+.mini-button {
+  font: inherit;
+  font-size: var(--fs-small);
+  font-weight: 500;
+  color: var(--ink-soft);
+  background: var(--paper-raised);
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--radius-2);
+  padding: 7px 12px;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    border-color var(--duration-fast) var(--easing-soft),
+    background var(--duration-fast) var(--easing-soft),
+    color var(--duration-fast) var(--easing-soft);
+}
+
+.mini-button:hover {
+  border-color: var(--accent-ring);
+  color: var(--accent);
+}
+
+.mini-button:active {
+  background: var(--hover-strong);
+}
+
+.mini-button:focus-visible {
+  outline: 0;
+  border-color: var(--accent-ring);
+  box-shadow: 0 0 0 3px var(--accent-ring);
+}
+
+.mini-button.self-start {
+  align-self: flex-start;
+  margin-top: var(--space-2);
+}
+
+/* Connection state. Accent means "live"; everything else stays quiet ink. */
+.pill {
+  font-size: var(--fs-small);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+  background: var(--hover-strong);
+  border-radius: var(--radius-pill);
+  padding: 3px 10px;
+  white-space: nowrap;
+}
+
+.pill[data-state="connected"] {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.pill[data-state="connecting"] {
+  color: var(--ink-soft);
+}
+
+.snippet {
+  margin: 0;
+  padding: var(--space-3);
+  background: var(--hover);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-2);
+  overflow-x: auto;
+}
+
+.snippet code {
+  display: block;
+  padding: 0;
+  background: none;
+  font-size: var(--fs-tiny);
+  line-height: 1.6;
+  white-space: pre;
+  color: var(--ink-soft);
+}
+
 /* ---------- toggle switch ---------- */
 
 .switch {
