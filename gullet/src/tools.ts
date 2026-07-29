@@ -225,10 +225,11 @@ async function route(
     // Read-only and id-free, so fanning out over every browser is safe and
     // saves the agent a round trip to discover what is connected.
     const targets = selectAll(summaries, target);
-    // Settled, not all: one browser timing out must not throw away the listing
-    // another already returned. A half-answer the agent can see the shape of
-    // beats no answer, and with two browsers attached the healthy one is usually
-    // the one being triaged anyway.
+    // Each request carries its own catch, so this Promise.all can never reject:
+    // one browser timing out must not throw away the listing another already
+    // returned. A half-answer the agent can see the shape of beats no answer,
+    // and with two browsers attached the healthy one is usually the one being
+    // triaged anyway.
     const perBrowser = await Promise.all(
       targets.map(async (conn) => {
         try {

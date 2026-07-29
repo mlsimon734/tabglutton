@@ -9,6 +9,7 @@
 // stray console.log would corrupt the stream and break the session.
 
 import { asRecord as asRecordOrNull, errorMessage } from "../../src/bridge-protocol.js";
+import { createTaskQueue } from "../../src/serialize.js";
 
 export const MCP_LATEST_PROTOCOL = "2025-06-18";
 const MCP_SUPPORTED_PROTOCOLS = [MCP_LATEST_PROTOCOL, "2025-03-26", "2024-11-05"];
@@ -158,14 +159,18 @@ export async function serveStdio(
   const handle = createRpcHandler(options);
   const decoder = new TextDecoder();
   const inFlight = new Set<Promise<void>>();
-  let writes: Promise<unknown> = Promise.resolve();
+  // The same one-at-a-time queue that guards the undo log; here it is the
+  // explicit write ordering the module comment above demands.
+  const writeQueue = createTaskQueue();
   let buffer = "";
 
-  const send = (line: string): Promise<void> => {
-    const next = writes.then(() => transport.write(line));
-    writes = next.catch((err) => console.error("[gullet] stdout write failed", err));
-    return next;
-  };
+  const send = (line: string): Promise<void> =>
+    writeQueue(() =>
+      transport.write(line).catch((err) => {
+        console.error("[gullet] stdout write failed", err);
+        throw err;
+      }),
+    );
 
   const start = (line: string): void => {
     // Caught here, not left to `allSettled`: a write that fails rejects as soon
@@ -194,7 +199,8 @@ export async function serveStdio(
   // Safe to iterate live: tasks remove themselves in a microtask, and
   // `allSettled` collects the set synchronously.
   await Promise.allSettled(inFlight);
-  await writes.catch(() => {});
+  // An empty task resolves only after every write queued before it settled.
+  await writeQueue(async () => {}).catch(() => {});
 }
 
 function stdioTransport(): McpTransport {

@@ -58,8 +58,7 @@ export function selectOne(
   target?: string,
 ): ConnectionSummary {
   const matched = selectAll(summaries, target);
-  const only = matched[0];
-  if (matched.length > 1 || only === undefined) {
+  if (matched.length > 1) {
     throw new BridgeRequestError(
       "ambiguous-target",
       target === undefined
@@ -67,5 +66,6 @@ export function selectOne(
         : `"${target}" matches more than one connection: ${describe(matched)}.`,
     );
   }
-  return only;
+  // selectAll throws on zero matches, so exactly one remains.
+  return matched[0];
 }

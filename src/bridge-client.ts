@@ -26,6 +26,7 @@ import {
   type HelloMessage,
   type ResponseMessage,
 } from "./bridge-protocol.js";
+import { getBrowserInfoOnce } from "./browser-info.js";
 import type { Settings } from "./storage.js";
 import { IS_CHROME, TARGET } from "./target.js";
 
@@ -756,10 +757,5 @@ async function portAnswers(port: number): Promise<boolean> {
 // connection lists as Firefox until Zen exposes something better.
 async function resolveLabel(): Promise<string> {
   if (IS_CHROME) return "Chrome";
-  try {
-    const info = await browser.runtime.getBrowserInfo?.();
-    return info?.name ?? "Firefox";
-  } catch {
-    return "Firefox";
-  }
+  return (await getBrowserInfoOnce())?.name ?? "Firefox";
 }

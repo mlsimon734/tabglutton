@@ -33,7 +33,7 @@ export function parseConfig(
   let token: string | undefined = env.TABGLUTTON_TOKEN ?? env.GULLET_TOKEN;
 
   for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i] as string;
+    const arg = argv[i];
     const [flag, inline] = splitFlag(arg);
     switch (flag) {
       case "--port":

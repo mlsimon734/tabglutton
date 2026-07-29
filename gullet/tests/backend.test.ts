@@ -30,7 +30,9 @@ function freePort(): number {
 }
 
 async function supervisor(port: number): Promise<Supervisor> {
-  const s = track(new Supervisor({ port, token: TOKEN }));
+  // Zero connect wait: every expectation below either has a browser already
+  // attached (instant regardless) or asserts the empty list.
+  const s = track(new Supervisor({ port, token: TOKEN, connectWaitMs: 0 }));
   await s.start();
   return s;
 }
@@ -45,6 +47,7 @@ async function watchedSupervisor(
     new Supervisor({
       port,
       token: TOKEN,
+      connectWaitMs: 0,
       onRoleChange: (role) => {
         current = role;
         for (let i = waiters.length - 1; i >= 0; i--) {
@@ -75,7 +78,7 @@ function fakeBrowser(port: number, answer: unknown): Promise<WebSocket> {
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(`ws://127.0.0.1:${port}/`, {
       headers: { Origin: "moz-extension://test" },
-    } as unknown as string[]);
+    });
     const nonce = randomNonce();
     ws.addEventListener("message", async (event) => {
       const msg = JSON.parse(String(event.data));
@@ -105,7 +108,7 @@ describe("hub/peer election", () => {
   test("the first sidecar binds the port and serves as the hub", async () => {
     const port = freePort();
     const first = await supervisor(port);
-    expect(await first.connections(0)).toEqual([]);
+    expect(await first.connections()).toEqual([]);
   });
 
   test("a second sidecar attaches instead of dying, and sees the hub's browser", async () => {
@@ -116,7 +119,7 @@ describe("hub/peer election", () => {
 
     // The peer has no socket to the browser at all — this can only have come
     // through the hub.
-    const seen = await peer.connections(1_000);
+    const seen = await peer.connections();
     expect(seen).toHaveLength(1);
     expect(seen[0]?.label).toBe("Zen");
     browser.close();
@@ -128,7 +131,7 @@ describe("hub/peer election", () => {
     const peer = await supervisor(port);
     const browser = await fakeBrowser(port, { tabs: [{ id: 7 }] });
 
-    const [conn] = await peer.connections(1_000);
+    const [conn] = await peer.connections();
     const result = await peer.request(conn?.connectionId ?? "", "tabs_list", {});
     expect(result).toEqual({ tabs: [{ id: 7 }] });
     browser.close();
@@ -140,7 +143,7 @@ describe("hub/peer election", () => {
     const browser = await fakeBrowser(port, null);
     // Every one of them can see the browser, which is the whole requirement:
     // opening a second agent session must not break the first.
-    for (const s of all) expect(await s.connections(1_000)).toHaveLength(1);
+    for (const s of all) expect(await s.connections()).toHaveLength(1);
     browser.close();
   });
 
@@ -158,7 +161,7 @@ describe("hub/peer election", () => {
     // promoted peer really did bind it — the session that outlived the original
     // hub keeps working instead of being stranded.
     const browser = await fakeBrowser(port, null);
-    expect(await peer.connections(2_000)).toHaveLength(1);
+    expect(await peer.connections()).toHaveLength(1);
     browser.close();
   });
 
@@ -183,7 +186,9 @@ describe("hub/peer election", () => {
     const stranger = track(new Hub({ port, token: "some-other-token" }));
     stranger.listen();
 
-    const sup = track(new Supervisor({ port, token: TOKEN, startTimeoutMs: 300 }));
+    const sup = track(
+      new Supervisor({ port, token: TOKEN, startTimeoutMs: 300, connectWaitMs: 0 }),
+    );
     await expect(sup.start()).rejects.toThrow();
     stranger.stop();
 
@@ -193,7 +198,7 @@ describe("hub/peer election", () => {
       await new Promise((r) => setTimeout(r, 100));
     }
     expect(sup.fault()).toBeNull();
-    expect(await sup.connections(0)).toEqual([]);
+    expect(await sup.connections()).toEqual([]);
   }, 10_000);
 
   test("an attached peer is not offered to tools as a browser", async () => {
@@ -202,6 +207,6 @@ describe("hub/peer election", () => {
     await supervisor(port);
     // Two sidecars, no browser: a peer must never be mistaken for a target,
     // or tab calls would be routed at another sidecar.
-    expect(await hub.connections(0)).toEqual([]);
+    expect(await hub.connections()).toEqual([]);
   });
 });

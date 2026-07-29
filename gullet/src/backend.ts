@@ -7,13 +7,19 @@
 // wins and the rest attach to it. The MCP half above never sees any of this — it
 // holds a BridgeBackend and the role underneath swaps without it noticing.
 
-import { errorMessage, type BridgeError, type BridgeMethod } from "../../src/bridge-protocol.js";
+import {
+  BRIDGE_CONNECT_WAIT_MS,
+  errorMessage,
+  type BridgeError,
+  type BridgeMethod,
+} from "../../src/bridge-protocol.js";
+import { delay } from "../../src/serialize.js";
 import { Hub } from "./hub.js";
 import { PeerClient } from "./peer.js";
 import type { ConnectionSummary } from "./select.js";
 
 export interface BridgeBackend {
-  connections(timeoutMs: number): Promise<ConnectionSummary[]>;
+  connections(): Promise<ConnectionSummary[]>;
   request(connectionId: string, method: BridgeMethod, params: unknown): Promise<unknown>;
   /** Why nothing can be served right now, or null. Re-read on every call. */
   fault(): BridgeError | null;
@@ -59,6 +65,8 @@ export interface SupervisorOptions {
   onRoleChange?: (role: BackendRole) => void;
   /** Overrides ELECTION_START_TIMEOUT_MS. Exists so the give-up path is testable. */
   startTimeoutMs?: number;
+  /** Overrides BRIDGE_CONNECT_WAIT_MS. Exists so tests need not wait out the window. */
+  connectWaitMs?: number;
 }
 
 export class Supervisor implements BridgeBackend {
@@ -177,11 +185,14 @@ export class Supervisor implements BridgeBackend {
     this.options.onRoleChange?.(role);
   }
 
-  async connections(timeoutMs: number): Promise<ConnectionSummary[]> {
+  // Both roles wait the same first-call window: a peer inherits it inside the
+  // hub it is attached to, a hub applies it here. No caller gets a knob — the
+  // wait lives at the layer that owns it, so the roles cannot diverge.
+  async connections(): Promise<ConnectionSummary[]> {
     await this.settling;
-    // A peer inherits the hub's own wait, so it passes no timeout of its own.
     if (this.peer) return this.peer.connections();
-    return this.hub ? this.hub.connectionsWithin(timeoutMs) : [];
+    if (!this.hub) return [];
+    return this.hub.connectionsWithin(this.options.connectWaitMs ?? BRIDGE_CONNECT_WAIT_MS);
   }
 
   async request(connectionId: string, method: BridgeMethod, params: unknown): Promise<unknown> {
@@ -198,8 +209,4 @@ export class Supervisor implements BridgeBackend {
     this.peer = null;
     this.hub = null;
   }
-}
-
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }

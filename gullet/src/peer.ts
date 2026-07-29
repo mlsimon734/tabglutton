@@ -46,21 +46,6 @@ function peerDeadlineMs(op: PeerRequestMessage["op"]): number {
   );
 }
 
-/**
- * Bun's `WebSocket` takes request headers as a second argument; the DOM lib this
- * file is typechecked against declares that slot as the subprotocol list, so the
- * two disagree and only one of them is true at runtime. Narrowed to the one
- * option we pass and asserted once, here, rather than laundering the call site
- * through `unknown`.
- */
-interface BunWebSocketOptions {
-  headers?: Record<string, string>;
-}
-const BunWebSocket = WebSocket as unknown as new (
-  url: string,
-  options?: BunWebSocketOptions,
-) => WebSocket;
-
 export interface PeerOptions {
   port: number;
   token: string;
@@ -101,7 +86,7 @@ export class PeerClient {
 
       let socket: WebSocket;
       try {
-        socket = new BunWebSocket(`ws://127.0.0.1:${this.options.port}/`, {
+        socket = new WebSocket(`ws://127.0.0.1:${this.options.port}/`, {
           // The hub only upgrades extension origins — the check that keeps a web
           // page from opening this socket. A peer is not a page and cannot be
           // one, so it presents an extension origin to pass the same gate.
@@ -212,21 +197,27 @@ export class PeerClient {
     if (this.socket?.readyState === WebSocket.OPEN) this.socket.send(JSON.stringify(msg));
   }
 
+  /** Nothing in flight may outlive the connection — both exit paths funnel here. */
+  private rejectPending(message: string): void {
+    for (const waiting of this.pending.values()) {
+      clearTimeout(waiting.timer);
+      waiting.reject(new BridgeRequestError("no-connection", message));
+    }
+    this.pending.clear();
+  }
+
   private onClose(): void {
     if (this.lost) return;
     this.lost = true;
-    for (const waiting of this.pending.values()) {
-      clearTimeout(waiting.timer);
-      waiting.reject(new BridgeRequestError("no-connection", "The hub sidecar went away."));
-    }
-    this.pending.clear();
+    this.rejectPending("The hub sidecar went away.");
     this.options.onLost();
   }
 
+  // Sets `lost` before closing so the socket's close event cannot reach
+  // onClose's onLost() and start a re-election during a deliberate shutdown.
   stop(): void {
     this.lost = true;
-    for (const waiting of this.pending.values()) clearTimeout(waiting.timer);
-    this.pending.clear();
+    this.rejectPending("This sidecar is shutting down.");
     this.socket?.close();
     this.socket = null;
   }

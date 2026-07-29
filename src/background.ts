@@ -6,14 +6,15 @@
 // is unresolvable in a Firefox module service worker and aborts registration.
 import { BridgeClient, type BridgeStatus } from "./bridge-client.js";
 import { BridgeMethodRunner } from "./bridge-methods.js";
+import { getBrowserInfoOnce } from "./browser-info.js";
 import {
-  delay,
   markdownForClip,
   OBSIDIAN_HANDOFF_GAP_MS,
   resolveClipRequest,
   type ClipPayload,
   type ObsidianClipRequest,
 } from "./clip-format.js";
+import { delay } from "./serialize.js";
 import { pickRule } from "./site-rules.js";
 import { groupDuplicates, pickKeeper, type Tab } from "./dedup.js";
 import {
@@ -208,7 +209,7 @@ async function probeHeuristic(): Promise<void> {
   // Zen-specific heuristic; Chrome has no workspaces and no getBrowserInfo.
   if (IS_CHROME) return;
   try {
-    const info = await browser.runtime.getBrowserInfo?.();
+    const info = await getBrowserInfoOnce();
     const isZen = info?.name?.toLowerCase().includes("zen") ?? false;
     if (!isZen) {
       if (settings.heuristicWarning) {
@@ -217,11 +218,10 @@ async function probeHeuristic(): Promise<void> {
       }
       return;
     }
-    const allInWindow = await browser.tabs.query({ currentWindow: true });
-    const visibleInWindow = await browser.tabs.query({
-      currentWindow: true,
-      hidden: false,
-    });
+    const [allInWindow, visibleInWindow] = await Promise.all([
+      browser.tabs.query({ currentWindow: true }),
+      browser.tabs.query({ currentWindow: true, hidden: false }),
+    ]);
     const heuristicLooksBroken =
       allInWindow.length === visibleInWindow.length && allInWindow.length > 0;
     console.log(
@@ -276,16 +276,33 @@ browser.tabs.onRemoved.addListener(queueBadgeRefresh);
 
 browser.tabs.onCreated.addListener(queueBadgeRefresh);
 
+// storage.local has tenants that are not settings (the undo log today, more
+// later). Match positively on what a setting *is*, so a new non-setting key
+// cannot silently start triggering reloads and badge repaints. DEFAULTS is
+// frozen, so this set is fixed for the module's lifetime.
+const SETTING_KEYS = new Set(Object.keys(defaults()));
+
+// The subset the duplicate-count badge is actually computed from. The bridge's
+// own contribution to the badge arrives via onStatusChange, not through here.
+const BADGE_SETTING_KEYS = ["stripFragment", "extraStripParams", "scope", "heuristicWarning"];
+
 browser.storage.onChanged.addListener(async (changes, area) => {
   if (area !== "local") return;
-  // storage.local has tenants that are not settings (the undo log today, more
-  // later). Match positively on what a setting *is*, so a new non-setting key
-  // cannot silently start triggering reloads and badge repaints.
-  const settingKeys = new Set(Object.keys(defaults()));
-  if (!Object.keys(changes).some((key) => settingKeys.has(key))) return;
+  if (!Object.keys(changes).some((key) => SETTING_KEYS.has(key))) return;
   settings = await loadSettings();
   bridge.sync();
-  await refreshBadge();
+  // Repainting the badge means a tabs.query plus a full duplicate grouping —
+  // ~1000 URL normalizations at this project's scale — so it runs only when a
+  // badge input truly changed. Presence alone is not that: Firefox reports
+  // every key a write names, and the options page saves the whole object, so a
+  // bridge toggle would regroup every tab for a number that cannot move.
+  const badgeAffected = BADGE_SETTING_KEYS.some((key) => {
+    const change = changes[key];
+    return (
+      change !== undefined && JSON.stringify(change.oldValue) !== JSON.stringify(change.newValue)
+    );
+  });
+  if (badgeAffected) await refreshBadge();
 });
 
 const SAFE_FAVICON_SCHEMES = new Set([

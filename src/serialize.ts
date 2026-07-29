@@ -38,3 +38,10 @@ export function createTaskQueue(): TaskQueue {
     return next;
   };
 }
+
+/** Here rather than beside its callers because both halves import it — the
+ * Obsidian handoff pacing in the extension, the election loop in the sidecar —
+ * and this module is the one they already share. */
+export function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}

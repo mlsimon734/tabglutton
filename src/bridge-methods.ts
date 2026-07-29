@@ -7,12 +7,7 @@
 // scripting beyond the existing Defuddle clipper, and every close is logged
 // before it happens.
 
-import {
-  delay,
-  markdownForClip,
-  OBSIDIAN_HANDOFF_GAP_MS,
-  resolveClipRequest,
-} from "./clip-format.js";
+import { markdownForClip, OBSIDIAN_HANDOFF_GAP_MS, resolveClipRequest } from "./clip-format.js";
 import type { ClipPayload } from "./clip-format.js";
 import {
   BridgeRequestError,
@@ -36,7 +31,7 @@ import {
   type TabsLoadResult,
   type UndoCloseResult,
 } from "./bridge-protocol.js";
-import { createTaskQueue } from "./serialize.js";
+import { createTaskQueue, delay } from "./serialize.js";
 import { pickRule } from "./site-rules.js";
 import type { Settings } from "./storage.js";
 import { IS_CHROME } from "./target.js";
@@ -59,9 +54,23 @@ import {
 const STALE_ID_HINT =
   "It may have been closed, or unloaded and given a new id (Chrome does this when it discards a tab). Re-run tabs_list for current ids.";
 
-/** The only way to raise "no such tab id", so the hint above cannot be forgotten. */
+/** The single place the hint is attached — throwing and per-tab paths alike. */
+function missingTabReason(message: string): string {
+  return `${message} ${STALE_ID_HINT}`;
+}
+
+/** The only way to raise "no such tab id" as a whole-call failure. */
 function failMissingTab(message: string): never {
-  fail("not-found", `${message} ${STALE_ID_HINT}`);
+  fail("not-found", missingTabReason(message));
+}
+
+/** The browser's answer to "does this id still resolve?", failure swallowed. */
+async function tryGetTab(tabId: number): Promise<browser.tabs.Tab | null> {
+  try {
+    return await browser.tabs.get(tabId);
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -70,11 +79,7 @@ function failMissingTab(message: string): never {
  * deliberately not one of these — the note is already filed by then.
  */
 async function getTabOrFail(tabId: number): Promise<browser.tabs.Tab> {
-  try {
-    return await browser.tabs.get(tabId);
-  } catch {
-    failMissingTab(`No tab with id ${tabId}.`);
-  }
+  return (await tryGetTab(tabId)) ?? failMissingTab(`No tab with id ${tabId}.`);
 }
 
 export interface BridgeExtractResult {
@@ -213,14 +218,6 @@ async function writeUndoLog(log: UndoBatch[]): Promise<void> {
  */
 const withUndoLog = createTaskQueue();
 
-/**
- * The windows that exist at the moment an undo runs, indexed for restore
- * decisions. A recorded window id is not proof of anything on its own: the undo
- * log survives a browser restart, after which ids start over and the id we
- * stored may belong to a different window — possibly one of the other privacy
- * context. So placement is only trusted when a live window with that id shares
- * the tab's context.
- */
 /** Where a fallback restore should land, and whether getting there already placed it. */
 interface WindowHome {
   windowId: number;
@@ -234,6 +231,14 @@ interface WindowHome {
   seeded: boolean;
 }
 
+/**
+ * The windows that exist at the moment an undo runs, indexed for restore
+ * decisions. A recorded window id is not proof of anything on its own: the undo
+ * log survives a browser restart, after which ids start over and the id we
+ * stored may belong to a different window — possibly one of the other privacy
+ * context. So placement is only trusted when a live window with that id shares
+ * the tab's context.
+ */
 class LiveWindows {
   private readonly contexts = new Map<number, boolean>();
   private readonly preferred = new Map<boolean, number>();
@@ -350,6 +355,11 @@ async function reconcileBatch(batchId: string, closed: readonly ClosedTabEntry[]
   });
 }
 
+/** Whether the browser still knows this id — the only honest answer to "did it close?". */
+async function tabExists(tabId: number): Promise<boolean> {
+  return (await tryGetTab(tabId)) !== null;
+}
+
 /**
  * Close tabs, and report which ids are actually gone afterwards.
  *
@@ -370,16 +380,6 @@ async function reconcileBatch(batchId: string, closed: readonly ClosedTabEntry[]
  * entry survives in the log. Keeping an entry too many costs a duplicate tab on
  * undo; losing one costs a tab.
  */
-/** Whether the browser still knows this id — the only honest answer to "did it close?". */
-async function tabExists(tabId: number): Promise<boolean> {
-  try {
-    await browser.tabs.get(tabId);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 async function removeTabs(ids: readonly number[]): Promise<Set<number>> {
   try {
     await browser.tabs.remove([...ids]);
@@ -388,10 +388,16 @@ async function removeTabs(ids: readonly number[]): Promise<Set<number>> {
     console.warn("[tabglutton] bridge batch close rejected; closing one at a time", err);
   }
   const removed = await Promise.allSettled(ids.map((id) => browser.tabs.remove(id)));
-  const alive = await Promise.allSettled(ids.map((id) => browser.tabs.get(id)));
-  return new Set(
-    ids.filter((_, i) => removed[i]?.status === "fulfilled" || alive[i]?.status === "rejected"),
-  );
+  // A fulfilled retry is already an answer; only the rejected ones are worth an
+  // existence check, which at triage scale skips one tabs.get IPC per tab that
+  // plainly closed. The union is unchanged: fulfilled implies gone either way.
+  const gone = new Set(ids.filter((_, i) => removed[i]?.status === "fulfilled"));
+  const unsure = ids.filter((id) => !gone.has(id));
+  const alive = await Promise.allSettled(unsure.map((id) => browser.tabs.get(id)));
+  unsure.forEach((id, i) => {
+    if (alive[i]?.status === "rejected") gone.add(id);
+  });
+  return gone;
 }
 
 export class BridgeMethodRunner {
@@ -488,11 +494,9 @@ export class BridgeMethodRunner {
    * cannot be loaded must not take the other nineteen down with it.
    */
   private async loadOne(tabId: number, timeoutMs: number): Promise<TabLoadOutcome> {
-    let tab: browser.tabs.Tab;
-    try {
-      tab = await browser.tabs.get(tabId);
-    } catch {
-      return { tabId, status: "failed", reason: `No tab with id ${tabId}. ${STALE_ID_HINT}` };
+    const tab = await tryGetTab(tabId);
+    if (!tab) {
+      return { tabId, status: "failed", reason: missingTabReason(`No tab with id ${tabId}.`) };
     }
     const url = tabUrl(tab) ?? "";
     if (!isHttpUrl(url)) {
@@ -522,11 +526,9 @@ export class BridgeMethodRunner {
     url: string,
     waitError: string,
   ): Promise<TabLoadOutcome> {
-    let tab: browser.tabs.Tab;
-    try {
-      tab = await browser.tabs.get(tabId);
-    } catch {
-      return { tabId, status: "failed", url, reason: `${waitError}. ${STALE_ID_HINT}` };
+    const tab = await tryGetTab(tabId);
+    if (!tab) {
+      return { tabId, status: "failed", url, reason: missingTabReason(`${waitError}.`) };
     }
     if (!tab.discarded && tab.status === "complete") return { tabId, status: "ready", url };
     // Pending, not failed: the reload is usually still running and the tab is

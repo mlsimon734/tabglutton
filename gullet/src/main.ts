@@ -1,11 +1,7 @@
 // Wires the two halves together: MCP on stdio facing the agent, WebSocket hub
 // on loopback facing the browsers.
 
-import {
-  BRIDGE_CONNECT_WAIT_MS,
-  errorMessage,
-  type BridgeError,
-} from "../../src/bridge-protocol.js";
+import { errorMessage, type BridgeError } from "../../src/bridge-protocol.js";
 import { Supervisor } from "./backend.js";
 import { ConfigError, parseConfig, USAGE } from "./config.js";
 import { serveStdio } from "./mcp.js";
@@ -77,7 +73,8 @@ export async function main(
     instructions: GULLET_INSTRUCTIONS,
     tools: GULLET_TOOLS,
     call: createToolCaller({
-      connections: () => backend.connections(BRIDGE_CONNECT_WAIT_MS),
+      // The first-call wait lives inside the backend, identically for both roles.
+      connections: () => backend.connections(),
       request: (connectionId, method, params) => backend.request(connectionId, method, params),
       // A port we never bound is the more proximate problem, and fixing the
       // token would not make this process serve anything either way.

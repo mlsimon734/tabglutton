@@ -42,11 +42,6 @@ interface SocketData {
   handshakeTimer?: ReturnType<typeof setTimeout>;
 }
 
-/** Sidecar attached to this hub, proxying its MCP session through us. */
-interface Peer {
-  socket: Bun.ServerWebSocket<SocketData>;
-}
-
 interface PendingRequest {
   resolve: (result: unknown) => void;
   reject: (err: unknown) => void;
@@ -62,7 +57,6 @@ interface Connection extends ConnectionSummary {
 export interface HubOptions {
   port: number;
   token: string;
-  onConnectionsChanged?: (summaries: ConnectionSummary[]) => void;
   /** Overridable so tests need not wait out the real deadline. */
   handshakeTimeoutMs?: number;
 }
@@ -70,9 +64,9 @@ export interface HubOptions {
 export class Hub {
   private readonly options: HubOptions;
   private readonly connections = new Map<string, Connection>();
-  /** Attached sidecars, keyed like connections but deliberately kept apart: a
-   * peer is never a target for a bridge method, only a source of them. */
-  private readonly peers = new Map<string, Peer>();
+  /** Attached sidecar sockets, keyed like connections but deliberately kept
+   * apart: a peer is never a target for a bridge method, only a source of them. */
+  private readonly peers = new Map<string, Bun.ServerWebSocket<SocketData>>();
   private server: Bun.Server<SocketData> | null = null;
   private heartbeat: ReturnType<typeof setInterval> | null = null;
   private readonly connectWaiters = new Set<() => void>();
@@ -125,7 +119,7 @@ export class Hub {
     this.connections.clear();
     // Dropping these is how attached sidecars learn the hub is gone and start
     // re-electing one of themselves; nothing else tells them.
-    for (const peer of this.peers.values()) peer.socket.close();
+    for (const peer of this.peers.values()) peer.close();
     this.peers.clear();
     this.server?.stop(true);
     this.server = null;
@@ -304,7 +298,7 @@ export class Hub {
     if (msg.role === "peer") {
       // A peer has proved the token, which is the whole check: it is another
       // Gullet on this machine, and it gets exactly what our own MCP half gets.
-      this.peers.set(ws.data.connectionId, { socket: ws });
+      this.peers.set(ws.data.connectionId, ws);
       this.send(ws, {
         type: "hello-ack",
         proto: BRIDGE_PROTO,
@@ -337,7 +331,6 @@ export class Hub {
     // not a browser we can serve, so releasing waiters on `open` would hand
     // them an empty list and waste the wait.
     this.releaseConnectWaiters();
-    this.options.onConnectionsChanged?.(this.summaries());
   }
 
   private rejectHandshake(
@@ -361,7 +354,6 @@ export class Hub {
     this.connections.delete(conn.connectionId);
     this.rejectPending(conn, `${conn.label} disconnected mid-request.`);
     console.error(`[gullet] ${conn.label} disconnected (${conn.connectionId})`);
-    this.options.onConnectionsChanged?.(this.summaries());
   }
 
   // Guards against half-open sockets the OS has not torn down yet: a browser
@@ -399,9 +391,9 @@ export class Hub {
         msg.op === "connections"
           ? await this.connectionsWithin(BRIDGE_CONNECT_WAIT_MS)
           : await this.requestFromPeer(msg);
-      this.sendPeer(ws, { type: "peer-response", id: msg.id, result });
+      this.send(ws, { type: "peer-response", id: msg.id, result });
     } catch (err) {
-      this.sendPeer(ws, { type: "peer-response", id: msg.id, error: toBridgeError(err) });
+      this.send(ws, { type: "peer-response", id: msg.id, error: toBridgeError(err) });
     }
   }
 
@@ -414,12 +406,10 @@ export class Hub {
     return this.request(msg.connectionId, msg.method, msg.params);
   }
 
-  private send(ws: Bun.ServerWebSocket<SocketData>, msg: ServerMessage): void {
-    if (ws.readyState !== WebSocket.OPEN) return;
-    ws.send(JSON.stringify(msg));
-  }
-
-  private sendPeer(ws: Bun.ServerWebSocket<SocketData>, msg: PeerResponseMessage): void {
+  private send(
+    ws: Bun.ServerWebSocket<SocketData>,
+    msg: ServerMessage | PeerResponseMessage,
+  ): void {
     if (ws.readyState !== WebSocket.OPEN) return;
     ws.send(JSON.stringify(msg));
   }
