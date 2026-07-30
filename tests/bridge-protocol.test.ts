@@ -20,7 +20,7 @@ import {
 
 describe("constants", () => {
   test("port and proto are the documented values", () => {
-    expect(DEFAULT_BRIDGE_PORT).toBe(4588);
+    expect(DEFAULT_BRIDGE_PORT).toBe(4589);
     expect(BRIDGE_PROTO).toBe(1);
   });
 });

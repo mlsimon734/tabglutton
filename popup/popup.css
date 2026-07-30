@@ -64,14 +64,12 @@ header {
 .title {
   margin: 0;
   font-family: var(--font-display);
+  font-feature-settings: normal;
   font-size: var(--fs-display);
   font-weight: 500;
-  letter-spacing: -0.012em;
+  letter-spacing: var(--track-display);
   line-height: 1;
   color: var(--ink);
-  font-variation-settings:
-    "opsz" 30,
-    "SOFT" 50;
 }
 
 .title-spacer {
@@ -400,11 +398,10 @@ main::-webkit-scrollbar-thumb {
 
 .empty p:first-child {
   font-family: var(--font-display);
+  font-feature-settings: normal;
   font-size: var(--fs-lead);
   font-weight: 500;
-  font-variation-settings:
-    "opsz" 20,
-    "SOFT" 60;
+  letter-spacing: var(--track-lead);
   color: var(--ink);
 }
 
@@ -443,11 +440,12 @@ body.initial-load .group {
   }
 }
 
+/* Left padding matches `.tab` so header rule and checkboxes share one left edge. */
 .group-header {
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  padding: 0 2px 4px;
+  padding: 0 8px 4px 6px;
   border-bottom: 1px solid var(--hairline);
   margin-bottom: 2px;
 }
@@ -458,7 +456,7 @@ body.initial-load .group {
   font-size: var(--fs-tiny);
   font-weight: 500;
   line-height: 1;
-  letter-spacing: 0.1em;
+  letter-spacing: var(--track-label);
   text-transform: uppercase;
   color: var(--muted);
   white-space: nowrap;
@@ -551,11 +549,9 @@ body.initial-load .group {
   border-radius: 50%;
   color: var(--muted);
   font-family: var(--font-display);
+  font-feature-settings: normal;
   font-size: 10px;
-  font-weight: 500;
-  font-variation-settings:
-    "opsz" 9,
-    "SOFT" 70;
+  font-weight: 600;
   line-height: 1;
 }
 

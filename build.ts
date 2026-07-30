@@ -141,6 +141,11 @@ async function buildOne(target: Target): Promise<void> {
 
   mkdirSync(`${DIST}/THIRD_PARTY_LICENSES`, { recursive: true });
   cpSync("node_modules/defuddle/LICENSE", `${DIST}/THIRD_PARTY_LICENSES/defuddle-LICENSE.txt`);
+  // Vollkorn and Geist ship as woff2 inside the bundle; the OFL requires their
+  // licence to travel with them. Checked in under licenses/ because neither font
+  // comes from node_modules.
+  cpSync("licenses/Vollkorn-OFL.txt", `${DIST}/THIRD_PARTY_LICENSES/Vollkorn-OFL.txt`);
+  cpSync("licenses/Geist-OFL.txt", `${DIST}/THIRD_PARTY_LICENSES/Geist-OFL.txt`);
 
   if (target === "chrome") {
     mkdirSync(`${DIST}/vendor`, { recursive: true });

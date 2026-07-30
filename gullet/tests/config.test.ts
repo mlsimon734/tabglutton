@@ -58,9 +58,9 @@ describe("parseConfig()", () => {
 
   test("rejects a port that is only partly a number", () => {
     // `parseInt` keeps the digits it managed to read and discards the rest, so
-    // each of these used to bind 4588 — a port the user never asked for, while
+    // each of these used to bind 4589 — a port the user never asked for, while
     // every browser dialling the one they did ask for is refused.
-    for (const raw of ["4588oops", "4588.5", "4588 4589", "0x4588", "+4588"]) {
+    for (const raw of ["4589oops", "4589.5", "4589 4590", "0x4589", "+4589"]) {
       expect(() => parseConfig(["--port", raw], {})).toThrow(ConfigError);
       expect(() => parseConfig([], { TABGLUTTON_PORT: raw })).toThrow(ConfigError);
     }

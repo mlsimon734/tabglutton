@@ -171,12 +171,28 @@ bridgeTokenGenerate.addEventListener("click", () => {
 
 // The token stays masked unless asked for. Copy works either way, so revealing
 // it is only ever needed to eyeball one against a config file.
+//
+// The eye governs the config snippet below as well, not just this field. Masking
+// the field while rendering the same secret in full a few hundred pixels lower
+// protected nothing: this page gets screenshotted into bug reports and pasted
+// into agent sessions, and the snippet is the part people capture.
 bridgeTokenReveal.addEventListener("click", () => {
-  const reveal = bridgeToken.type === "password";
-  bridgeToken.type = reveal ? "text" : "password";
-  bridgeTokenReveal.textContent = reveal ? "Hide" : "Show";
-  bridgeTokenReveal.setAttribute("aria-pressed", String(reveal));
+  setTokenRevealed(bridgeToken.type === "password");
 });
+
+function tokenRevealed(): boolean {
+  return bridgeToken.type === "text";
+}
+
+function setTokenRevealed(reveal: boolean): void {
+  bridgeToken.type = reveal ? "text" : "password";
+  bridgeTokenReveal.setAttribute("aria-pressed", String(reveal));
+  const label = reveal ? "Hide token" : "Reveal token";
+  bridgeTokenReveal.setAttribute("aria-label", label);
+  bridgeTokenReveal.title = label;
+  bridgeTokenReveal.classList.toggle("revealed", reveal);
+  updateBridgeSnippet();
+}
 
 bridgeTokenCopy.addEventListener("click", () => {
   if (!bridgeToken.value) {
@@ -187,7 +203,7 @@ bridgeTokenCopy.addEventListener("click", () => {
 });
 
 bridgeSnippetCopy.addEventListener("click", () => {
-  void copyText(bridgeSnippetText(), "Config copied");
+  void copyText(bridgeSnippetText(false), "Config copied");
 });
 
 async function copyText(text: string, okMessage: string): Promise<void> {
@@ -200,9 +216,15 @@ async function copyText(text: string, okMessage: string): Promise<void> {
   }
 }
 
-function bridgeSnippetText(): string {
+/**
+ * @param masked render the token as dots rather than the secret itself. The
+ * displayed snippet is masked unless the eye is open; "Copy config" always
+ * passes `false`, so the clipboard gets a config that actually works.
+ */
+function bridgeSnippetText(masked: boolean): string {
   const port = parsePort(bridgePort.value);
-  const token = bridgeToken.value || "<generate a token above>";
+  const real = bridgeToken.value || "<generate a token above>";
+  const token = masked && bridgeToken.value ? "•".repeat(24) : real;
   // Named "tabglutton" rather than "gullet": this key becomes the tool
   // namespace the agent sees, and users know the product by one name.
   return JSON.stringify(
@@ -222,7 +244,7 @@ function bridgeSnippetText(): string {
 
 function updateBridgeSnippet(): void {
   const code = bridgeSnippet.querySelector("code");
-  if (code) code.textContent = bridgeSnippetText();
+  if (code) code.textContent = bridgeSnippetText(!tokenRevealed());
 }
 
 const BRIDGE_STATUS_LABELS: Record<BridgeStatus, string> = {
@@ -230,6 +252,10 @@ const BRIDGE_STATUS_LABELS: Record<BridgeStatus, string> = {
   idle: "Waiting for a sidecar",
   connecting: "Connecting…",
   connected: "Connected",
+  // Names the port because that is the whole content of the fix, and this
+  // otherwise presents as "Waiting for a sidecar" forever with a sidecar that
+  // is running perfectly well a few lines above.
+  "port-conflict": "Port in use by another program",
 };
 
 function renderBridgeStatus(status: BridgeStatus): void {

@@ -147,8 +147,26 @@ function applyTargetCopy(): void {
   if (chromeStep3) chromeStep3.hidden = false;
 }
 
+/** Same inline-SVG fetch the popup, cockpit and options headers use. */
+async function loadLogoMark(): Promise<void> {
+  const logoMark = document.getElementById("logo-mark");
+  if (!logoMark) return;
+  try {
+    const res = await fetch(browser.runtime.getURL("icons/logo-mark.svg"));
+    if (!res.ok) return;
+    const doc = new DOMParser().parseFromString(await res.text(), "image/svg+xml");
+    const svg = doc.documentElement;
+    if (svg && svg.nodeName.toLowerCase() === "svg") {
+      logoMark.replaceChildren(document.importNode(svg, true));
+    }
+  } catch (err) {
+    console.warn("[tabglutton] logo load failed", err);
+  }
+}
+
 async function init(): Promise<void> {
   applyTargetCopy();
+  void loadLogoMark();
   const settings = await loadSettings();
   vaultInput.value = settings.obsidianVault;
   updateVaultWarning();

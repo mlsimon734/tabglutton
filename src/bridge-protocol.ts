@@ -7,7 +7,56 @@
 // newline framing is needed on top of it.
 
 export const BRIDGE_PROTO = 1;
-export const DEFAULT_BRIDGE_PORT = 4588; // GLUT on a phone keypad
+
+/**
+ * Chosen by elimination rather than by liking the number (2026-07-29). Three
+ * axes have to be clear at once, and most of this neighbourhood fails one:
+ *
+ * 1. **IANA.** 4589/tcp is unassigned. From 4590 up is a dense block of 3GPP2
+ *    registrations (`rid`, `l3t-at-an`, the `ias-*` family), so this is the top
+ *    of a real gap, not a hole waiting to be filled. `nmap-services` has no
+ *    4589/tcp entry, and GRC's database documents no application or malware.
+ * 2. **Browser blocklists.** Neither Chromium's `kRestrictedPorts`
+ *    (`net/base/port_util.cc`) nor Gecko's `gBadPortList`
+ *    (`netwerk/base/nsIOService.cpp`) contains it. A blocked port would fail
+ *    the probe outright with no useful error, so this one is worth rechecking
+ *    if the port ever moves.
+ * 3. **Developer convention**, which is what actually bites on loopback and
+ *    which no registry covers. Measured as GitHub code-search frequency for
+ *    `localhost:<port>`: the floor across 4574-4589 is 250-600 hits, while a
+ *    real convention is orders of magnitude above it (3000 is 1.6M, 8080 590k,
+ *    5173 574k, 4200 149k, 4321 28k, 4444 10k, 4567 7k). No 458x port is a
+ *    convention.
+ *
+ * Frequency alone hides single tools, though, and that is what moved this off
+ * its original 4588: those hits were dominated by **floci-gcp**, a local GCP
+ * emulator (166 stars, May 2026, active) whose sole service port is 4588.
+ * 4589's comparable count is an incoherent long tail with nothing defaulting
+ * to it.
+ *
+ * Do not "fix" a future collision by shifting a few ports down. Legacy
+ * LocalStack allocated **4567-4587 contiguously**, one port per AWS service
+ * (4584 is Step Functions, hence the LocalStack demos that surface when you
+ * search it), plus 4592/4593/4597. 4588 and 4589 are the two ports above that
+ * block, which is why they were free — everything below is busier, not quieter.
+ */
+export const DEFAULT_BRIDGE_PORT = 4589;
+
+/**
+ * Marker Gullet returns on any non-upgrade request, so a probe can tell "the
+ * sidecar is here" from "something else owns this port". Both are HTTP
+ * responses and used to be indistinguishable, which is the whole problem: see
+ * `probePort` in bridge-client for what dialling a stranger costs.
+ *
+ * Sent as both a header and a body prefix. The header is what the probe reads;
+ * the body is the fallback for any context where response headers come back
+ * filtered, and doubles as the human answer for someone who loads the port in
+ * a tab. Neither is a disclosure: Gullet sets no CORS headers, so a web page
+ * cannot read either one, and a local process could already tell a listener is
+ * here by connecting to it.
+ */
+export const BRIDGE_PROBE_HEADER = "x-tabglutton-bridge";
+export const BRIDGE_PROBE_MARKER = "tabglutton-bridge";
 
 /**
  * A port the sidecar could actually listen on: below 1024 needs root to bind

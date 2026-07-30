@@ -373,14 +373,16 @@ function renderInspector(): void {
   const tab = focusedTab();
   const vault = state.settings?.obsidianVault.trim() ?? "";
 
+  // The pane only exists when it has something to say. With a vault set and no tab
+  // focused it held nothing but a restatement of the footer's keyboard legend, and
+  // reserved ~40% of the window to do it — the queue takes that width instead.
+  document.body.classList.toggle("inspecting", !vault || tab !== null);
+
   if (!vault) {
     inspectorEl.append(renderInspectorSetup());
     return;
   }
-  if (!tab) {
-    inspectorEl.append(renderInspectorEmpty());
-    return;
-  }
+  if (!tab) return;
   inspectorEl.append(renderInspectorPreview(tab, vault));
 }
 
@@ -424,37 +426,6 @@ function makePinIcon(): SVGSVGElement {
   );
   svg.append(line, path);
   return svg;
-}
-
-function hintKey(text: string): HTMLElement {
-  const span = document.createElement("span");
-  span.className = "hint-key";
-  span.textContent = text;
-  return span;
-}
-
-function renderInspectorEmpty(): HTMLElement {
-  const div = document.createElement("div");
-  div.className = "inspector-empty";
-
-  const p1 = document.createElement("p");
-  p1.textContent = "Click a tab in the queue to preview where it will be filed.";
-
-  const p2 = document.createElement("p");
-  p2.style.marginTop = "12px";
-  p2.append(
-    "Navigate with ",
-    hintKey("j"),
-    hintKey("k"),
-    ", toggle with ",
-    hintKey("space"),
-    ", devour with ",
-    hintKey("d"),
-    ".",
-  );
-
-  div.append(p1, p2);
-  return div;
 }
 
 function renderInspectorSetup(): HTMLElement {

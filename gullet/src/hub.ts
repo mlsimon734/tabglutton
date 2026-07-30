@@ -9,6 +9,8 @@ import {
   BRIDGE_CONNECT_WAIT_MS,
   BRIDGE_HANDSHAKE_TIMEOUT_MS,
   BRIDGE_HEARTBEAT_MS,
+  BRIDGE_PROBE_HEADER,
+  BRIDGE_PROBE_MARKER,
   BRIDGE_PROTO,
   BRIDGE_REQUEST_TIMEOUT_MS,
   BridgeRequestError,
@@ -33,6 +35,22 @@ const EXTENSION_ORIGIN_PREFIXES = ["moz-extension://", "chrome-extension://"];
 export function isExtensionOrigin(origin: string | null): boolean {
   if (!origin) return false;
   return EXTENSION_ORIGIN_PREFIXES.some((prefix) => origin.startsWith(prefix));
+}
+
+/**
+ * Every non-upgrade reply says who answered. Without it the extension's probe
+ * could tell "a server responded" but not "*Gullet* responded", and a stranger
+ * on this port was indistinguishable from the sidecar.
+ *
+ * Deliberately no `Access-Control-Allow-Origin`: the marker is for the
+ * extension, which reads it under `host_permissions`, and a web page must stay
+ * unable to read either the header or the body.
+ */
+export function identifyingResponse(message: string, status: number): Response {
+  return new Response(`${BRIDGE_PROBE_MARKER}\n${message}\n`, {
+    status,
+    headers: { [BRIDGE_PROBE_HEADER]: String(BRIDGE_PROTO) },
+  });
 }
 
 interface SocketData {
@@ -82,20 +100,24 @@ export class Hub {
       port: this.options.port,
       fetch: (req, server) => {
         // The realistic attacker is a hostile page inside the user's browser
-        // opening ws://127.0.0.1:4588. Pages cannot forge an extension Origin.
+        // opening ws://127.0.0.1:4589. Pages cannot forge an extension Origin.
         const origin = req.headers.get("origin");
         if (!isExtensionOrigin(origin)) {
-          // Logged, not silent: an extension that cannot connect looks exactly
-          // like one that never tried, and that is miserable to debug.
-          console.error(`[gullet] refused upgrade from origin ${origin ?? "(none)"}`);
-          return new Response("Forbidden", { status: 403 });
+          // A GET with no Origin at all is the extension's own probe (or a
+          // curl), not an attempt at anything — logging it at error every
+          // IDLE_PROBE_MS would bury the case worth seeing, which is a real
+          // foreign origin. Both still get refused; only the volume differs.
+          if (origin !== null) {
+            console.error(`[gullet] refused upgrade from origin ${origin}`);
+          }
+          return identifyingResponse("Forbidden", 403);
         }
         const data: SocketData = {
           connectionId: `conn-${this.nextId++}`,
           serverNonce: randomNonce(),
         };
         if (server.upgrade(req, { data })) return undefined;
-        return new Response("Gullet expects a WebSocket upgrade.", { status: 426 });
+        return identifyingResponse("Gullet expects a WebSocket upgrade.", 426);
       },
       websocket: {
         open: (ws) => this.onOpen(ws),

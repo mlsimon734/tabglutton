@@ -1,12 +1,13 @@
 /* Tabglutton design tokens. Shared by popup, devour cockpit, options. */
 
+/* Vollkorn is a text serif: one `wght` axis (400–900), no optical-size axis.
+   Sizes are tuned with tracking in each sheet, not with `opsz`. */
 @font-face {
-  font-family: "Fraunces";
+  font-family: "Vollkorn";
   font-style: normal;
-  font-weight: 100 900;
+  font-weight: 400 900;
   font-display: swap;
-  src: url("./fonts/Fraunces.woff2") format("woff2");
-  font-variation-settings: "opsz" 14;
+  src: url("./fonts/Vollkorn.woff2") format("woff2");
 }
 
 @font-face {
@@ -48,7 +49,7 @@
   --success-soft: rgba(79, 106, 58, 0.12);
 
   /* Type system */
-  --font-display: "Fraunces", "Iowan Old Style", "Hoefler Text", Georgia, serif;
+  --font-display: "Vollkorn", "Iowan Old Style", "Hoefler Text", Georgia, serif;
   --font-ui:
     "Geist", -apple-system, "SF Pro Text", system-ui, "Segoe UI Variable", "Segoe UI", sans-serif;
   --font-mono:
@@ -62,6 +63,14 @@
   --fs-lead: 15px;
   --fs-display: 20px;
   --fs-hero: 28px;
+
+  /* Tracking. One value for every uppercase micro-label, so the six of them across
+     popup / cockpit / options stop each picking their own. Display tracking tightens
+     as size grows — the job `opsz` used to do. */
+  --track-label: 0.1em;
+  --track-lead: -0.003em;
+  --track-display: -0.008em;
+  --track-hero: -0.014em;
 
   /* Spacing */
   --space-1: 4px;
@@ -155,6 +164,26 @@ body {
 ::selection {
   background: var(--accent-soft);
   color: var(--ink);
+}
+
+/* Display type. `font-feature-settings` is reset because the body sets Geist's
+   ss01/ss03/cv11 — Vollkorn has its own ss01/ss03 meaning something else entirely,
+   and inheriting them silently substitutes glyphs in the wordmark. */
+.u-display {
+  font-family: var(--font-display);
+  font-feature-settings: normal;
+  font-weight: 500;
+  color: var(--ink);
+}
+
+/* The one uppercase micro-label. */
+.u-label {
+  font-family: var(--font-ui);
+  font-size: var(--fs-micro);
+  font-weight: 500;
+  letter-spacing: var(--track-label);
+  text-transform: uppercase;
+  color: var(--muted);
 }
 
 @media (prefers-reduced-motion: reduce) {

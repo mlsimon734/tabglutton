@@ -3,6 +3,8 @@
 
 import { describe, test, expect, afterEach } from "bun:test";
 import {
+  BRIDGE_PROBE_HEADER,
+  BRIDGE_PROBE_MARKER,
   BRIDGE_PROTO,
   BridgeRequestError,
   deriveProof,
@@ -127,6 +129,47 @@ describe("upgrade gate", () => {
       headers: { Origin: EXTENSION_ORIGIN },
     });
     expect(res.status).toBe(426);
+  });
+});
+
+// The probe's whole job is telling "Gullet is here" from "a stranger owns this
+// port". Both are refusals with an HTTP status, so the status cannot carry it —
+// only the marker can, and it has to survive on both refusal paths.
+describe("probe identification", () => {
+  test("the 403 a probe actually receives identifies Gullet", async () => {
+    const started = startHub();
+    // No Origin: exactly what the extension's background fetch sends.
+    const res = await fetch(`http://127.0.0.1:${started.port}/`);
+    expect(res.status).toBe(403);
+    expect(res.headers.get(BRIDGE_PROBE_HEADER)).toBe(String(BRIDGE_PROTO));
+    expect((await res.text()).startsWith(BRIDGE_PROBE_MARKER)).toBe(true);
+  });
+
+  test("the 426 path identifies Gullet too", async () => {
+    const started = startHub();
+    const res = await fetch(`http://127.0.0.1:${started.port}/`, {
+      headers: { Origin: EXTENSION_ORIGIN },
+    });
+    expect(res.headers.get(BRIDGE_PROBE_HEADER)).toBe(String(BRIDGE_PROTO));
+    expect((await res.text()).startsWith(BRIDGE_PROBE_MARKER)).toBe(true);
+  });
+
+  test("the marker is the body's prefix, so a bounded read finds it", async () => {
+    // bridge-client reads only the first chunk — a stranger may answer with
+    // megabytes — so a marker buried later in the body would never be seen.
+    const started = startHub();
+    const res = await fetch(`http://127.0.0.1:${started.port}/`);
+    const head = (await res.text()).slice(0, 128);
+    expect(head.startsWith(BRIDGE_PROBE_MARKER)).toBe(true);
+  });
+
+  test("no CORS header is offered, so a web page still cannot read the marker", async () => {
+    const started = startHub();
+    const res = await fetch(`http://127.0.0.1:${started.port}/`, {
+      headers: { Origin: "https://evil.example" },
+    });
+    expect(res.headers.get("access-control-allow-origin")).toBeNull();
+    expect(res.headers.get("access-control-expose-headers")).toBeNull();
   });
 });
 

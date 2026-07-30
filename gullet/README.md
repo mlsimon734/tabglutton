@@ -9,7 +9,7 @@ Architecture, trust boundary, and phasing live in [`../BRIDGE.md`](../BRIDGE.md)
 is the setup guide.
 
 ```
-Claude Code ──MCP (stdio)──► Gullet ──WebSocket (127.0.0.1:4588)──► Zen / Firefox / Chrome
+Claude Code ──MCP (stdio)──► Gullet ──WebSocket (127.0.0.1:4589)──► Zen / Firefox / Chrome
 ```
 
 Zero dependencies: it runs on Bun's built-ins alone, so there is nothing to install beyond
@@ -35,7 +35,7 @@ tools appear under that namespace, and the token is `TABGLUTTON_TOKEN`. `GULLET_
      "mcpServers": {
        "tabglutton": {
          "command": "bun",
-         "args": ["run", "/path/to/tabglutton/gullet/gullet.ts", "--port", "4588"],
+         "args": ["run", "/path/to/tabglutton/gullet/gullet.ts", "--port", "4589"],
          "env": { "TABGLUTTON_TOKEN": "<token from the settings page>" }
        }
      }
@@ -63,7 +63,7 @@ once — a Zen window and a Chrome profile, say — and each tool call picks one
 
 | Flag      | Env                | Default | Notes                                                                              |
 | --------- | ------------------ | ------- | ---------------------------------------------------------------------------------- |
-| `--port`  | `TABGLUTTON_PORT`  | `4588`  | Must match the port in Tabglutton's settings.                                      |
+| `--port`  | `TABGLUTTON_PORT`  | `4589`  | Must match the port in Tabglutton's settings.                                      |
 | `--token` | `TABGLUTTON_TOKEN` | —       | Required. Prefer the env var: process arguments are readable by other local users. |
 
 Diagnostics go to **stderr**; stdout is the MCP transport and carries nothing else.
@@ -150,7 +150,7 @@ and no setting fixes it — restart the browser.
 **"Token mismatch."** `TABGLUTTON_TOKEN` and the token in Tabglutton's settings differ.
 Regenerating the token in settings invalidates any sidecar still holding the old one.
 
-**"could not listen on 127.0.0.1:4588"** Another Gullet — usually from a second agent
+**"could not listen on 127.0.0.1:4589"** Another Gullet — usually from a second agent
 session — already holds the port. One sidecar can serve several browsers, but two sidecars
 cannot share a port; give the second one a different `--port` and match it in settings.
 
@@ -164,7 +164,7 @@ TABGLUTTON_TOKEN=<token> bun run gullet/gullet.ts
 Then poke the socket directly:
 
 ```sh
-bunx wscat -c ws://127.0.0.1:4588 -H 'Origin: moz-extension://test'
+bunx wscat -c ws://127.0.0.1:4589 -H 'Origin: moz-extension://test'
 ```
 
 You should get a `challenge` frame back. Without the `Origin` header the upgrade is

@@ -50,32 +50,18 @@ body {
 }
 
 .header-text {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
   min-width: 0;
 }
 
 .title {
   font-family: var(--font-display);
+  font-feature-settings: normal;
   font-size: var(--fs-hero);
   font-weight: 500;
-  letter-spacing: -0.014em;
+  letter-spacing: var(--track-hero);
   line-height: 1;
   margin: 0;
   color: var(--ink);
-  font-variation-settings:
-    "opsz" 36,
-    "SOFT" 50;
-}
-
-.subtitle {
-  margin: 0;
-  color: var(--muted);
-  font-size: var(--fs-tiny);
-  font-weight: 500;
-  letter-spacing: 0.16em;
-  text-transform: uppercase;
 }
 
 .status {
@@ -83,7 +69,7 @@ body {
   font-family: var(--font-mono);
   font-size: var(--fs-micro);
   font-weight: 500;
-  letter-spacing: 0.06em;
+  letter-spacing: var(--track-label);
   text-transform: uppercase;
   color: var(--success);
   background: var(--success-soft);
@@ -114,14 +100,12 @@ section:last-of-type {
 
 .section-title {
   font-family: var(--font-display);
+  font-feature-settings: normal;
   font-size: var(--fs-lead);
   font-weight: 500;
-  letter-spacing: -0.005em;
+  letter-spacing: var(--track-lead);
   color: var(--ink);
   margin: 0 0 var(--space-4);
-  font-variation-settings:
-    "opsz" 18,
-    "SOFT" 60;
 }
 
 .section-intro {
@@ -187,8 +171,13 @@ section:last-of-type {
 
 /* ---------- inputs ---------- */
 
+/* `password` is here because the token field starts masked. Without it the one
+   field on this page that is secret by default was the one field rendering with
+   browser-default chrome, and clicking the eye snapped it into the design
+   system. */
 input[type="text"],
-input[type="number"] {
+input[type="number"],
+input[type="password"] {
   font: inherit;
   font-size: var(--fs-body);
   color: inherit;
@@ -205,7 +194,8 @@ input[type="number"] {
 }
 
 input[type="text"]:focus,
-input[type="number"]:focus {
+input[type="number"]:focus,
+input[type="password"]:focus {
   border-color: var(--accent-ring);
   background: var(--paper);
   box-shadow: 0 0 0 3px var(--accent-ring);
@@ -287,6 +277,77 @@ code {
   margin-top: var(--space-2);
 }
 
+/* The token field and its reveal are one control. The button overlays the
+   input's right edge instead of following it in the row, which is where every
+   password field puts it — as a button in the row it read as a third action
+   next to Copy and Generate rather than as something belonging to the token. */
+.input-affix {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+}
+
+/* Clears the button, so a long token scrolls beneath the eye rather than
+   behind it. */
+.input-affix input {
+  padding-right: 36px;
+}
+
+.affix-button {
+  position: absolute;
+  top: 50%;
+  right: 5px;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  color: var(--muted);
+  background: none;
+  border: 0;
+  border-radius: var(--radius-1);
+  cursor: pointer;
+  transition:
+    color var(--duration-fast) var(--easing-soft),
+    background var(--duration-fast) var(--easing-soft);
+}
+
+.affix-button:hover {
+  color: var(--accent);
+  background: var(--hover-strong);
+}
+
+/* Inset, because the button sits on the field's own border — an outset ring
+   would draw outside the input it belongs to. */
+.affix-button:focus-visible {
+  outline: 0;
+  color: var(--accent);
+  box-shadow: inset 0 0 0 2px var(--accent-ring);
+}
+
+.affix-button svg {
+  display: block;
+}
+
+/* Shut eye until revealed, then swap. Only one is ever in the box. */
+.affix-button .eye-open {
+  display: none;
+}
+
+.affix-button.revealed .eye-open {
+  display: block;
+}
+
+.affix-button.revealed .eye-shut {
+  display: none;
+}
+
+.affix-button.revealed {
+  color: var(--accent);
+}
+
 /* Connection state. Accent means "live"; everything else stays quiet ink. */
 .pill {
   font-size: var(--fs-small);
@@ -306,6 +367,14 @@ code {
 
 .pill[data-state="connecting"] {
   color: var(--ink-soft);
+}
+
+/* The one status that is a fault rather than a stage, so it is the one that
+   gets to look like one. Every other state resolves by waiting; this one never
+   does until the user changes the port. */
+.pill[data-state="port-conflict"] {
+  color: var(--danger);
+  background: var(--danger-soft);
 }
 
 .snippet {

@@ -13,6 +13,8 @@ import {
   BRIDGE_DIAL_TIMEOUT_MS,
   BRIDGE_HANDSHAKE_TIMEOUT_MS,
   BRIDGE_HEARTBEAT_MS,
+  BRIDGE_PROBE_HEADER,
+  BRIDGE_PROBE_MARKER,
   BRIDGE_PROTO,
   deriveProof,
   isBridgeMethod,
@@ -165,7 +167,7 @@ const PROBE_MISSES_BEFORE_DIALLING_BLIND = 4;
  */
 const IDLE_PROBE_MS = 3_000;
 
-export type BridgeStatus = "disabled" | "idle" | "connecting" | "connected";
+export type BridgeStatus = "disabled" | "idle" | "connecting" | "connected" | "port-conflict";
 
 export interface BridgeClientDeps {
   getSettings: () => Settings;
@@ -207,6 +209,8 @@ export class BridgeClient {
   private idleProbeTimer: ReturnType<typeof setTimeout> | null = null;
   /** A counting tick landed while a probe was in flight; the probe consumes it. */
   private countedTickPending = false;
+  /** Latched by the probe when a stranger holds the port; see setPortConflict. */
+  private portConflict = false;
   private label = IS_CHROME ? "Chrome" : "Firefox";
   /** Whether `start()` has run, i.e. whether the settings we read are real ones. */
   private started = false;
@@ -315,8 +319,28 @@ export class BridgeClient {
   get status(): BridgeStatus {
     if (!this.isConfigured(this.deps.getSettings())) return "disabled";
     if (this.phase === "open") return "connected";
-    if (this.phase === "closed") return "idle";
+    // Ranked above "idle" because it is the one state with a cause the user can
+    // act on. "Idle" says "no sidecar yet, keep waiting", which is the wrong
+    // advice when the truth is that another program holds the port.
+    if (this.phase === "closed") return this.portConflict ? "port-conflict" : "idle";
     return "connecting";
+  }
+
+  /**
+   * Latched from the probe rather than derived, because the evidence is gone by
+   * the time anyone asks: `status` is a getter with no port to inspect.
+   */
+  private setPortConflict(conflict: boolean): void {
+    if (this.portConflict === conflict) return;
+    this.portConflict = conflict;
+    if (conflict) {
+      console.warn(
+        `[tabglutton] port ${this.deps.getSettings().bridgePort} answers, but not as Gullet — ` +
+          `another program is using it. Not dialling. Change the port in Tabglutton's ` +
+          `settings and pass the same --port to Gullet.`,
+      );
+    }
+    this.deps.onStatusChange(this.status);
   }
 
   private isConfigured(settings: Settings): boolean {
@@ -370,13 +394,30 @@ export class BridgeClient {
     countsTowardBlindDial: boolean,
   ): Promise<void> {
     this.probing = true;
-    let answered = false;
+    let result: ProbeResult = "silent";
     try {
-      answered = await portAnswers(settings.bridgePort);
+      result = await probePort(settings.bridgePort);
     } finally {
       this.probing = false;
     }
-    if (!answered) {
+    if (result === "foreign") {
+      // Someone else owns the port. Do not dial: the socket cannot succeed, and
+      // a failed WebSocket connect is the one thing that feeds Gecko's
+      // FailDelayManager — so dialling here would build the reconnect penalty
+      // this probe exists to avoid, while also handing an unidentified local
+      // listener our identity and a chosen-nonce proof for free.
+      //
+      // Deliberately not counted as a miss either. The blind-dial valve is for
+      // *uncertainty* — a fetch we could not make — and this is the opposite:
+      // positive evidence that dialling is pointless. Counting it would rebuild
+      // the same pathology, just four ticks later.
+      this.countedTickPending = false;
+      this.setPortConflict(true);
+      this.scheduleIdleProbe();
+      return;
+    }
+    this.setPortConflict(false);
+    if (result === "silent") {
       // Nothing there, which costs nothing to keep asking about: every miss
       // re-arms the loop, so the loop lives exactly as long as the port is
       // empty and the page is awake, and stops itself the moment either ends.
@@ -719,6 +760,11 @@ export class BridgeClient {
 
   private setPhase(phase: Phase): void {
     this.phase = phase;
+    // A socket that opened disproves the latch outright, and nothing else here
+    // would clear it promptly: a settings change dials via the force path
+    // without probing, so a user who fixes the port would stay flagged until
+    // the next alarm and then read "port in use" the moment they disconnect.
+    if (phase === "open") this.portConflict = false;
     this.deps.onStatusChange(this.status);
   }
 }
@@ -732,22 +778,54 @@ function bridgeConfigKey(settings: Settings): string {
 }
 
 /**
- * Whether anything at all answers HTTP on the port — see PROBE_TIMEOUT_MS for
- * why we ask this before opening a socket. Every failure mode (refused, blocked,
- * timed out) reads the same as "nobody there", which is the honest answer: we
- * cannot tell them apart from here, and the caller treats a run of them as a
- * reason to dial anyway rather than as proof.
+ * What is on the port — see PROBE_TIMEOUT_MS for why we ask before opening a
+ * socket. Three answers, not two, and the third is the one that matters:
+ *
+ * - `"gullet"`   the sidecar identified itself. Dial.
+ * - `"silent"`   refused, blocked, or timed out. Every such failure reads the
+ *                same from here, which is the honest answer: we cannot tell
+ *                "no sidecar" from "our fetch was blocked", so the caller
+ *                treats a run of them as a reason to dial anyway, not proof.
+ * - `"foreign"`  something answered and it is not Gullet. This used to be
+ *                folded into "yes, something is there", and dialling on it is
+ *                the worst of the three outcomes — see the call site.
  */
-async function portAnswers(port: number): Promise<boolean> {
+type ProbeResult = "gullet" | "silent" | "foreign";
+
+async function probePort(port: number): Promise<ProbeResult> {
   try {
-    await fetch(`http://127.0.0.1:${port}/`, {
+    const res = await fetch(`http://127.0.0.1:${port}/`, {
       method: "GET",
       cache: "no-store",
       signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
     });
-    return true;
+    if (res.headers.get(BRIDGE_PROBE_HEADER) !== null) return "gullet";
+    // Header first, body as the fallback. The background page reads both freely
+    // under `host_permissions`, but a header that came back filtered would
+    // otherwise read as "a stranger owns the port" and stop us dialling a
+    // perfectly good sidecar — a wrong answer that never self-corrects.
+    return (await bodyStartsWithMarker(res)) ? "gullet" : "foreign";
+  } catch {
+    return "silent";
+  }
+}
+
+/**
+ * First chunk only. A stranger on this port owes us nothing — it may answer
+ * with megabytes, or stream forever — and we only ever need the opening bytes.
+ */
+async function bodyStartsWithMarker(res: Response): Promise<boolean> {
+  const reader = res.body?.getReader();
+  if (!reader) return false;
+  try {
+    const { value } = await reader.read();
+    if (!value) return false;
+    const head = new TextDecoder().decode(value.slice(0, 128));
+    return head.startsWith(BRIDGE_PROBE_MARKER);
   } catch {
     return false;
+  } finally {
+    void reader.cancel();
   }
 }
 

@@ -52,7 +52,7 @@ export function parseConfig(
 
 /**
  * A trailing `--port` or `--token` with nothing after it. Rejected rather than
- * defaulted: silently falling back to port 4588 or an empty token turns a typo
+ * defaulted: silently falling back to port 4589 or an empty token turns a typo
  * into a sidecar that starts, binds the wrong thing, and refuses every browser
  * with an error naming neither.
  */
@@ -70,8 +70,8 @@ function parsePort(raw: string | undefined): number {
   const value = raw?.trim() ?? "";
   if (value === "") return DEFAULT_BRIDGE_PORT;
   // The whole string or nothing. `Number.parseInt` stops at the first character
-  // it does not like and keeps what it has, so `4588oops` and `4588.5` both read
-  // as 4588 — a typo would bind a port the user never named, and then every
+  // it does not like and keeps what it has, so `4589oops` and `4589.5` both read
+  // as 4589 — a typo would bind a port the user never named, and then every
   // browser that dials the port they *did* name is refused by a sidecar whose
   // error message mentions neither.
   const port = /^\d+$/.test(value) ? Number(value) : Number.NaN;
