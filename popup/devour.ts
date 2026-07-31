@@ -911,11 +911,14 @@ async function loadLogoMark(): Promise<void> {
   }
 }
 
-browser.runtime.onMessage.addListener(async (raw: unknown) => {
+// Keep this listener synchronous. An async listener returns a Promise for every
+// message, including messages it does not handle, which can claim the response
+// before the background page answers requests such as `get-scoped-tabs`.
+browser.runtime.onMessage.addListener((raw: unknown): void => {
   if (!raw || typeof raw !== "object") return;
   const msg = raw as { type?: string; completed?: number; total?: number };
   if (msg.type === "refresh-cockpit") {
-    await refresh();
+    void refresh();
   } else if (
     msg.type === "clip-progress" &&
     typeof msg.completed === "number" &&
