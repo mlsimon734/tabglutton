@@ -1,14 +1,14 @@
 import { describe, test, expect } from "bun:test";
-import { DEFAULT_BRIDGE_PORT } from "../../src/bridge-protocol.js";
 import { ConfigError, parseConfig } from "../src/config.js";
 
 describe("parseConfig()", () => {
-  test("defaults to the documented port and no token", () => {
-    expect(parseConfig([], {})).toEqual({ port: DEFAULT_BRIDGE_PORT, token: "" });
+  test("defaults to automatic discovery and no token", () => {
+    expect(parseConfig([], {})).toEqual({ portMode: "auto", token: "" });
   });
 
   test("reads the token and port from the environment", () => {
     expect(parseConfig([], { GULLET_TOKEN: "abc", GULLET_PORT: "5000" })).toEqual({
+      portMode: "fixed",
       port: 5000,
       token: "abc",
     });
@@ -16,6 +16,7 @@ describe("parseConfig()", () => {
 
   test("accepts TABGLUTTON_* as the primary spelling", () => {
     expect(parseConfig([], { TABGLUTTON_TOKEN: "abc", TABGLUTTON_PORT: "5000" })).toEqual({
+      portMode: "fixed",
       port: 5000,
       token: "abc",
     });
@@ -28,7 +29,7 @@ describe("parseConfig()", () => {
       TABGLUTTON_PORT: "5002",
       GULLET_PORT: "5000",
     });
-    expect(config).toEqual({ port: 5002, token: "new" });
+    expect(config).toEqual({ portMode: "fixed", port: 5002, token: "new" });
   });
 
   test("flags override the environment", () => {
@@ -36,11 +37,15 @@ describe("parseConfig()", () => {
       GULLET_PORT: "5000",
       GULLET_TOKEN: "env",
     });
-    expect(config).toEqual({ port: 5001, token: "flag" });
+    expect(config).toEqual({ portMode: "fixed", port: 5001, token: "flag" });
   });
 
   test("accepts --flag=value form", () => {
-    expect(parseConfig(["--port=5002", "--token=xyz"], {})).toEqual({ port: 5002, token: "xyz" });
+    expect(parseConfig(["--port=5002", "--token=xyz"], {})).toEqual({
+      portMode: "fixed",
+      port: 5002,
+      token: "xyz",
+    });
   });
 
   test("trims surrounding whitespace off a pasted token", () => {
@@ -66,8 +71,13 @@ describe("parseConfig()", () => {
     }
   });
 
-  test("falls back to the default for an empty port value", () => {
-    expect(parseConfig([], { GULLET_PORT: "" }).port).toBe(DEFAULT_BRIDGE_PORT);
+  test("uses automatic discovery for an empty or explicit auto port", () => {
+    expect(parseConfig([], { GULLET_PORT: "" })).toEqual({ portMode: "auto", token: "" });
+    expect(parseConfig(["--port", "auto"], {})).toEqual({ portMode: "auto", token: "" });
+    expect(parseConfig([], { TABGLUTTON_PORT: "auto" })).toEqual({
+      portMode: "auto",
+      token: "",
+    });
   });
 
   test("rejects unknown arguments with usage text", () => {

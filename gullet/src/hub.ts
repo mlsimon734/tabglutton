@@ -10,7 +10,7 @@ import {
   BRIDGE_HANDSHAKE_TIMEOUT_MS,
   BRIDGE_HEARTBEAT_MS,
   BRIDGE_PROBE_HEADER,
-  BRIDGE_PROBE_MARKER,
+  BRIDGE_PROBE_BODY_PREFIX,
   BRIDGE_PROTO,
   BRIDGE_REQUEST_TIMEOUT_MS,
   BridgeRequestError,
@@ -47,7 +47,7 @@ export function isExtensionOrigin(origin: string | null): boolean {
  * unable to read either the header or the body.
  */
 export function identifyingResponse(message: string, status: number): Response {
-  return new Response(`${BRIDGE_PROBE_MARKER}\n${message}\n`, {
+  return new Response(`${BRIDGE_PROBE_BODY_PREFIX}\n${message}\n`, {
     status,
     headers: { [BRIDGE_PROBE_HEADER]: String(BRIDGE_PROTO) },
   });

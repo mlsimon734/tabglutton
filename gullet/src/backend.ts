@@ -9,9 +9,14 @@
 
 import {
   BRIDGE_CONNECT_WAIT_MS,
+  BRIDGE_PORT_CANDIDATES,
+  BRIDGE_PROBE_HEADER,
+  classifyBridgeProbe,
   errorMessage,
+  isBridgePort,
   type BridgeError,
   type BridgeMethod,
+  type BridgeProbeIdentity,
 } from "../../src/bridge-protocol.js";
 import { delay } from "../../src/serialize.js";
 import { Hub } from "./hub.js";
@@ -55,11 +60,15 @@ const ELECTION_RETRY_MAX_MS = 5_000;
  * re-read on every tool call, so a port that frees up later heals in place.
  */
 const ELECTION_START_TIMEOUT_MS = 4_000;
+const DISCOVERY_PROBE_TIMEOUT_MS = 500;
 
 export type BackendRole = "hub" | "peer" | "electing";
 
 export interface SupervisorOptions {
-  port: number;
+  /** Present only for an explicit fixed-port configuration. */
+  port?: number;
+  /** Automatic candidates; injectable so socket tests use ephemeral ports. */
+  candidates?: readonly number[];
   token: string;
   /** Surfaced in logs only; the MCP half is deliberately unaware of the role. */
   onRoleChange?: (role: BackendRole) => void;
@@ -73,20 +82,23 @@ export class Supervisor implements BridgeBackend {
   private readonly options: SupervisorOptions;
   private hub: Hub | null = null;
   private peer: PeerClient | null = null;
+  private activePort: number | null = null;
   private role: BackendRole = "electing";
   private stopped = false;
   /** Resolves when the current election settles; awaited by calls that arrive mid-swap. */
   private settling: Promise<void> = Promise.resolve();
   /**
-   * Set by an election round that got nowhere, cleared by one that settles.
-   * Published rather than merely logged so that calls arriving during an
-   * election with nothing to settle into are answered instead of parked on
-   * `settling` forever.
+   * Set while election is in progress or a round got nowhere, cleared by one
+   * that settles. Published rather than merely logged so calls arriving after
+   * start's bounded wait are answered instead of parked on `settling` forever.
    */
   private electionFault: BridgeError | null = null;
 
   constructor(options: SupervisorOptions) {
     this.options = options;
+    if (this.candidatePorts().length === 0) {
+      throw new Error("Gullet needs at least one valid bridge port candidate.");
+    }
   }
 
   /**
@@ -103,7 +115,8 @@ export class Supervisor implements BridgeBackend {
     if (settled) return;
     throw new Error(
       this.electionFault?.message ??
-        `Nothing bound or answered on 127.0.0.1:${this.options.port} within ${budget}ms.`,
+        `No Tabglutton bridge candidate settled within ${budget}ms ` +
+          `(tried 127.0.0.1:${this.candidatePorts().join(", ")}).`,
     );
   }
 
@@ -114,51 +127,95 @@ export class Supervisor implements BridgeBackend {
   private async elect(): Promise<void> {
     let gap = ELECTION_RETRY_MS;
     for (let attempt = 0; !this.stopped; attempt++) {
-      // Binding is the election: the OS decides, and it decides atomically, so
-      // there is no window in which two processes both believe they are the hub.
-      const hub = new Hub({ port: this.options.port, token: this.options.token });
-      try {
-        hub.listen();
-        this.hub = hub;
-        this.peer = null;
-        this.settle("hub");
-        return;
-      } catch {
-        hub.stop();
+      const ports = this.candidatePorts();
+      const observations = new Map<number, string>();
+      // Deliberately *not* published while the round is merely in progress. A
+      // round in flight is what `settling` already expresses, and `fault()` is
+      // checked by every tool call *before* it awaits `settling` — so a fault
+      // set here would fail every call landing inside a routine re-election
+      // (the hub sidecar exiting, which happens constantly) instead of letting
+      // it wait out the handover. Only a round that got nowhere publishes.
+
+      // Discovery precedes every bind. Otherwise an earlier port becoming free
+      // would split this token realm away from its already-running later hub.
+      for (const port of ports) {
+        if (this.stopped) return;
+        if (await this.tryExistingHub(port, observations)) return;
       }
 
-      const peer = new PeerClient({
-        port: this.options.port,
-        token: this.options.token,
-        onLost: () => this.reelect(),
-      });
-      try {
-        await peer.connect();
-        this.peer = peer;
-        this.hub = null;
-        this.settle("peer");
-        return;
-      } catch (err) {
-        peer.stop();
-        // Neither worked: someone holds the port but is not answering yet, or
-        // has just dropped it. Both resolve themselves within a round or two —
-        // and what does not is a port held by something that will never
-        // authenticate at all, which no number of rounds improves. So the reason
-        // is published for callers as well as logged, and the gap widens.
-        if (attempt === 0) {
-          console.error(`[gullet] no hub to attach to yet (${errorMessage(err)}); retrying`);
+      for (const port of ports) {
+        if (this.stopped) return;
+        // Binding is still the atomic election. The only new rule is that a
+        // loser re-checks the exact port it lost before considering the next.
+        const hub = new Hub({ port, token: this.options.token });
+        try {
+          hub.listen();
+          this.hub = hub;
+          this.peer = null;
+          this.activePort = port;
+          this.settle("hub");
+          return;
+        } catch {
+          hub.stop();
+          observations.set(port, "occupied");
         }
-        this.electionFault = {
-          code: "unsupported",
-          message:
-            `Could not reach the Tabglutton bridge on 127.0.0.1:${this.options.port}: ` +
-            `${errorMessage(err)}. Nothing could bind the port or attach to whatever holds it. ` +
-            `Check that no other service is using it, and that TABGLUTTON_TOKEN matches the token ` +
-            `in Tabglutton's settings.`,
-        };
-        await delay(gap);
-        gap = Math.min(gap * 2, ELECTION_RETRY_MAX_MS);
+        if (await this.tryExistingHub(port, observations)) return;
       }
+
+      const summary = ports
+        .map((port) => `${port} ${observations.get(port) ?? "unavailable"}`)
+        .join(", ");
+      if (attempt === 0)
+        console.error(`[gullet] no compatible candidate yet (${summary}); retrying`);
+      this.electionFault = {
+        code: "unsupported",
+        message:
+          `Could not establish the Tabglutton bridge on any candidate (${summary}). ` +
+          `${this.options.port === undefined ? "Automatic" : "Fixed-port"} mode will keep ` +
+          `retrying; check for other services, incompatible Gullet versions, or sidecars ` +
+          `using a different TABGLUTTON_TOKEN.`,
+      };
+      await delay(gap);
+      gap = Math.min(gap * 2, ELECTION_RETRY_MAX_MS);
+    }
+  }
+
+  private candidatePorts(): number[] {
+    const source =
+      this.options.port === undefined
+        ? (this.options.candidates ?? BRIDGE_PORT_CANDIDATES)
+        : [this.options.port];
+    return [...new Set(source)].filter(isBridgePort);
+  }
+
+  /** Probe first; only a marked, protocol-compatible endpoint receives a proof. */
+  private async tryExistingHub(port: number, observations: Map<number, string>): Promise<boolean> {
+    const identity = await probeCandidate(port);
+    if (identity !== "compatible") {
+      observations.set(port, identity);
+      return false;
+    }
+
+    const peer = new PeerClient({
+      port,
+      token: this.options.token,
+      onLost: () => this.reelect(),
+    });
+    try {
+      await peer.connect();
+      if (this.stopped) {
+        peer.stop();
+        return false;
+      }
+      this.peer = peer;
+      this.hub = null;
+      this.activePort = port;
+      this.settle("peer");
+      return true;
+    } catch (err) {
+      peer.stop();
+      observations.set(port, `different realm or unavailable (${errorMessage(err)})`);
+      return false;
     }
   }
 
@@ -173,6 +230,7 @@ export class Supervisor implements BridgeBackend {
     if (this.stopped || this.role !== "peer") return;
     console.error("[gullet] hub sidecar went away; re-electing");
     this.peer = null;
+    this.activePort = null;
     this.setRole("electing");
     this.settling = this.elect();
     void this.settling.catch((err) => console.error(`[gullet] re-election failed: ${err}`));
@@ -180,8 +238,12 @@ export class Supervisor implements BridgeBackend {
 
   private setRole(role: BackendRole): void {
     this.role = role;
-    if (role === "hub") console.error("[gullet] serving as hub (owns the browser connection)");
-    if (role === "peer") console.error("[gullet] attached to an existing hub sidecar");
+    if (role === "hub") {
+      console.error(`[gullet] serving as hub on 127.0.0.1:${this.activePort}`);
+    }
+    if (role === "peer") {
+      console.error(`[gullet] attached to the hub on 127.0.0.1:${this.activePort}`);
+    }
     this.options.onRoleChange?.(role);
   }
 
@@ -208,5 +270,40 @@ export class Supervisor implements BridgeBackend {
     this.hub?.stop();
     this.peer = null;
     this.hub = null;
+    this.activePort = null;
+  }
+}
+
+type CandidateProbe = BridgeProbeIdentity | "silent";
+
+async function probeCandidate(port: number): Promise<CandidateProbe> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), DISCOVERY_PROBE_TIMEOUT_MS);
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/`, { signal: controller.signal });
+    const header = response.headers.get(BRIDGE_PROBE_HEADER);
+    if (header !== null) {
+      // Nothing reads the body on this path, and an unconsumed one holds its
+      // pooled connection open — every 400ms-5s, per candidate, while a round
+      // keeps failing.
+      void response.body?.cancel();
+      return classifyBridgeProbe(header, "");
+    }
+    return classifyBridgeProbe(null, await responseHead(response));
+  } catch {
+    return "silent";
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function responseHead(response: Response): Promise<string> {
+  const reader = response.body?.getReader();
+  if (!reader) return "";
+  try {
+    const { value } = await reader.read();
+    return value ? new TextDecoder().decode(value.slice(0, 128)) : "";
+  } finally {
+    void reader.cancel();
   }
 }

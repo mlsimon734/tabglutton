@@ -2,7 +2,12 @@ import type { BridgeStatusChangedMessage, GetBridgeStatusResponse } from "../src
 import type { BridgeStatus } from "../src/bridge-client.js";
 import { DEFAULT_BRIDGE_PORT, generateToken, isBridgePort } from "../src/bridge-protocol.js";
 import { BRIDGE_ORIGINS, requestOrigins } from "../src/permissions.js";
-import type { ClipMode, ScopeMode, Settings } from "../src/storage.js";
+import {
+  loadSettings,
+  type BridgePortMode,
+  type ClipMode,
+  type ScopeMode,
+} from "../src/storage.js";
 import { IS_CHROME } from "../src/target.js";
 import { vaultWarningFor } from "../src/vault-warning.js";
 
@@ -26,6 +31,10 @@ const optionsInTabRadios = document.querySelectorAll<HTMLInputElement>(
 const statusEl = document.getElementById("status") as HTMLParagraphElement;
 const bridgeEnabled = document.getElementById("bridgeEnabled") as HTMLInputElement;
 const bridgeAllowTabLoad = document.getElementById("bridgeAllowTabLoad") as HTMLInputElement;
+const bridgePortModeRadios = document.querySelectorAll<HTMLInputElement>(
+  'input[name="bridgePortMode"]',
+);
+const bridgeFixedPort = document.getElementById("bridgeFixedPort") as HTMLDivElement;
 const bridgePort = document.getElementById("bridgePort") as HTMLInputElement;
 const bridgeToken = document.getElementById("bridgeToken") as HTMLInputElement;
 const bridgeTokenCopy = document.getElementById("bridgeTokenCopy") as HTMLButtonElement;
@@ -34,33 +43,6 @@ const bridgeTokenGenerate = document.getElementById("bridgeTokenGenerate") as HT
 const bridgeStatusEl = document.getElementById("bridgeStatus") as HTMLSpanElement;
 const bridgeSnippet = document.getElementById("bridgeSnippet") as HTMLPreElement;
 const bridgeSnippetCopy = document.getElementById("bridgeSnippetCopy") as HTMLButtonElement;
-
-const DEFAULTS: Pick<
-  Settings,
-  | "stripFragment"
-  | "extraStripParams"
-  | "scope"
-  | "obsidianVault"
-  | "clippingsBaseFolder"
-  | "clipMode"
-  | "optionsInTab"
-  | "bridgeEnabled"
-  | "bridgePort"
-  | "bridgeToken"
-  | "bridgeAllowTabLoad"
-> = {
-  stripFragment: true,
-  extraStripParams: [],
-  scope: FALLBACK_SCOPE,
-  obsidianVault: "",
-  clippingsBaseFolder: "",
-  clipMode: "clipboard",
-  optionsInTab: true,
-  bridgeEnabled: false,
-  bridgePort: DEFAULT_BRIDGE_PORT,
-  bridgeToken: "",
-  bridgeAllowTabLoad: false,
-};
 
 function parseParams(text: string): string[] {
   return text
@@ -79,8 +61,7 @@ function parseParams(text: string): string[] {
 let loaded = false;
 
 async function load(): Promise<void> {
-  const stored = (await browser.storage.local.get(Object.keys(DEFAULTS))) as Partial<Settings>;
-  const settings = { ...DEFAULTS, ...stored };
+  const settings = await loadSettings();
   stripFragment.checked = settings.stripFragment;
   extraStripParams.value = (settings.extraStripParams ?? []).join(", ");
   obsidianVault.value = settings.obsidianVault;
@@ -97,9 +78,13 @@ async function load(): Promise<void> {
   }
   bridgeEnabled.checked = settings.bridgeEnabled;
   bridgeAllowTabLoad.checked = settings.bridgeAllowTabLoad;
+  for (const radio of bridgePortModeRadios) {
+    radio.checked = radio.value === settings.bridgePortMode;
+  }
   bridgePort.value = String(settings.bridgePort);
   bridgeToken.value = settings.bridgeToken;
-  updateBridgeSnippet();
+  // Repaints the snippet itself, so no separate updateBridgeSnippet() here.
+  updateBridgePortMode();
   if (IS_CHROME) {
     // Chrome has no tab.hidden / workspaces, so the scope choice is fixed.
     const scopeBlock = scopeRadios[0]?.closest(".setting.block") as HTMLElement | null;
@@ -128,6 +113,7 @@ async function save(): Promise<void> {
   const scope: ScopeMode = (checked?.value as ScopeMode) ?? FALLBACK_SCOPE;
   const checkedClipMode = [...clipModeRadios].find((r) => r.checked);
   const clipMode: ClipMode = (checkedClipMode?.value as ClipMode) ?? "clipboard";
+  const bridgePortMode = selectedBridgePortMode();
   await browser.storage.local.set({
     stripFragment: stripFragment.checked,
     extraStripParams: parseParams(extraStripParams.value),
@@ -138,6 +124,7 @@ async function save(): Promise<void> {
     optionsInTab: [...optionsInTabRadios].find((r) => r.checked)?.value !== "embedded",
     bridgeEnabled: bridgeEnabled.checked,
     bridgeAllowTabLoad: bridgeAllowTabLoad.checked,
+    bridgePortMode,
     bridgePort: parsePort(bridgePort.value),
     // Only ever written when we have one. The field is readonly and Generate is
     // the sole way to set it, so an empty value means "not populated", never
@@ -150,8 +137,21 @@ async function save(): Promise<void> {
 
 function parsePort(raw: string): number {
   // Fall back rather than persist a value the sidecar could never listen on.
-  const port = Number.parseInt(raw, 10);
+  const value = raw.trim();
+  const port = /^\d+$/.test(value) ? Number(value) : Number.NaN;
   return isBridgePort(port) ? port : DEFAULT_BRIDGE_PORT;
+}
+
+function selectedBridgePortMode(): BridgePortMode {
+  const selected = [...bridgePortModeRadios].find((radio) => radio.checked)?.value;
+  return selected === "fixed" ? "fixed" : "auto";
+}
+
+function updateBridgePortMode(): void {
+  const fixed = selectedBridgePortMode() === "fixed";
+  bridgeFixedPort.hidden = !fixed;
+  bridgePort.disabled = !fixed;
+  updateBridgeSnippet();
 }
 
 /** Text inputs save on a trailing edge, so a save is not issued per keystroke. */
@@ -194,6 +194,13 @@ obsidianVault.addEventListener("input", () => {
 clippingsBaseFolder.addEventListener("input", queueSave);
 
 // ---------- agent bridge ----------
+
+for (const radio of bridgePortModeRadios) {
+  radio.addEventListener("change", () => {
+    updateBridgePortMode();
+    void save();
+  });
+}
 
 bridgePort.addEventListener("input", () => {
   updateBridgeSnippet();
@@ -269,7 +276,11 @@ function bridgeSnippetText(masked: boolean): string {
       mcpServers: {
         tabglutton: {
           command: "bun",
-          args: ["run", "/path/to/tabglutton/gullet/gullet.ts", "--port", String(port)],
+          args: [
+            "run",
+            "/path/to/tabglutton/gullet/gullet.ts",
+            ...(selectedBridgePortMode() === "fixed" ? ["--port", String(port)] : []),
+          ],
           env: { TABGLUTTON_TOKEN: token },
         },
       },
@@ -299,18 +310,28 @@ const BRIDGE_STATUS_LABELS: Record<BridgeStatus, string> = {
   "needs-access": "Needs access — switch off and on to allow",
 };
 
-function renderBridgeStatus(status: BridgeStatus): void {
-  bridgeStatusEl.textContent = BRIDGE_STATUS_LABELS[status];
+function renderBridgeStatus(status: BridgeStatus, port?: number): void {
+  if (status === "connected" && port !== undefined) {
+    bridgeStatusEl.textContent = `Connected on ${port}`;
+  } else if (status === "idle" && selectedBridgePortMode() === "auto") {
+    bridgeStatusEl.textContent = "No compatible sidecar found";
+  } else {
+    bridgeStatusEl.textContent = BRIDGE_STATUS_LABELS[status];
+  }
   bridgeStatusEl.dataset.state = status;
 }
 
 async function refreshBridgeStatus(): Promise<void> {
   let status: BridgeStatus = "disabled";
+  let port: number | undefined;
   try {
     const res = (await browser.runtime.sendMessage({ type: "get-bridge-status" })) as
       | GetBridgeStatusResponse
       | undefined;
-    if (res) status = res.status;
+    if (res) {
+      status = res.status;
+      port = res.port;
+    }
   } catch {
     // Background asleep or restarting; infer from the settings we rendered
     // rather than showing an error the user cannot act on. This mirrors
@@ -319,14 +340,16 @@ async function refreshBridgeStatus(): Promise<void> {
     // no token and is therefore not dialling at all.
     status = bridgeEnabled.checked && bridgeToken.value ? "idle" : "disabled";
   }
-  renderBridgeStatus(status);
+  renderBridgeStatus(status, port);
 }
 
 // The background pushes every transition, so this page never polls — on Chrome
 // MV3 a poll would keep the service worker awake for as long as it is open.
 browser.runtime.onMessage.addListener((raw: unknown) => {
   const msg = raw as Partial<BridgeStatusChangedMessage> | null;
-  if (msg?.type === "bridge-status-changed" && msg.status) renderBridgeStatus(msg.status);
+  if (msg?.type === "bridge-status-changed" && msg.status) {
+    renderBridgeStatus(msg.status, msg.port);
+  }
 });
 // Resync on return to the tab, in case a push landed while it was hidden.
 document.addEventListener("visibilitychange", () => {

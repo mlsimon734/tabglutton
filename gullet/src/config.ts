@@ -1,20 +1,18 @@
 // CLI/env parsing for the sidecar. Pure so the precedence rules are testable.
 
-import { DEFAULT_BRIDGE_PORT, isBridgePort } from "../../src/bridge-protocol.js";
+import { isBridgePort } from "../../src/bridge-protocol.js";
 
-export interface GulletConfig {
-  port: number;
-  /** Empty means "not configured" — the MCP server still starts and says so. */
-  token: string;
-}
+export type GulletConfig =
+  | { portMode: "auto"; token: string }
+  | { portMode: "fixed"; port: number; token: string };
 
 export class ConfigError extends Error {}
 
 export const USAGE = `gullet — Tabglutton's agent bridge sidecar
 
-  bun run gullet/gullet.ts [--port <1024-65535>] [--token <token>]
+  bun run gullet/gullet.ts [--port <auto|1024-65535>] [--token <token>]
 
-  --port   loopback port to listen on (default ${DEFAULT_BRIDGE_PORT}, env TABGLUTTON_PORT)
+  --port   automatic discovery by default, or a fixed loopback port (env TABGLUTTON_PORT)
   --token  shared token from Tabglutton's options page (env TABGLUTTON_TOKEN)
 
 GULLET_PORT / GULLET_TOKEN are accepted as aliases — users know this as
@@ -47,14 +45,18 @@ export function parseConfig(
     }
   }
 
-  return { port: parsePort(port), token: (token ?? "").trim() };
+  const selection = parsePort(port);
+  const cleanToken = (token ?? "").trim();
+  return selection === "auto"
+    ? { portMode: "auto", token: cleanToken }
+    : { portMode: "fixed", port: selection, token: cleanToken };
 }
 
 /**
  * A trailing `--port` or `--token` with nothing after it. Rejected rather than
- * defaulted: silently falling back to port 4589 or an empty token turns a typo
- * into a sidecar that starts, binds the wrong thing, and refuses every browser
- * with an error naming neither.
+ * defaulted: silently changing a requested fixed port into automatic mode (or
+ * a token into empty) turns a typo into a sidecar serving somewhere the user
+ * never named, with an error naming neither.
  */
 function requireValue(flag: string, value: string | undefined): string {
   if (value === undefined) throw new ConfigError(`${flag} needs a value.\n\n${USAGE}`);
@@ -66,9 +68,9 @@ function splitFlag(arg: string): [string, string | undefined] {
   return eq === -1 ? [arg, undefined] : [arg.slice(0, eq), arg.slice(eq + 1)];
 }
 
-function parsePort(raw: string | undefined): number {
+function parsePort(raw: string | undefined): "auto" | number {
   const value = raw?.trim() ?? "";
-  if (value === "") return DEFAULT_BRIDGE_PORT;
+  if (value === "" || value === "auto") return "auto";
   // The whole string or nothing. `Number.parseInt` stops at the first character
   // it does not like and keeps what it has, so `4589oops` and `4589.5` both read
   // as 4589 — a typo would bind a port the user never named, and then every

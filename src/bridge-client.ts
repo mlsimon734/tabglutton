@@ -13,14 +13,16 @@ import {
   BRIDGE_DIAL_TIMEOUT_MS,
   BRIDGE_HANDSHAKE_TIMEOUT_MS,
   BRIDGE_HEARTBEAT_MS,
+  BRIDGE_PORT_CANDIDATES,
   BRIDGE_PROBE_HEADER,
-  BRIDGE_PROBE_MARKER,
   BRIDGE_PROTO,
+  classifyBridgeProbe,
   deriveProof,
   isBridgeMethod,
   parseMessage,
   proofsMatch,
   randomNonce,
+  orderedBridgePortCandidates,
   toBridgeError,
   BridgeRequestError,
   type BridgeMethod,
@@ -30,7 +32,7 @@ import {
 } from "./bridge-protocol.js";
 import { getBrowserInfoOnce } from "./browser-info.js";
 import { BRIDGE_ORIGINS, hasOrigins } from "./permissions.js";
-import type { Settings } from "./storage.js";
+import { loadBridgeLastPort, saveBridgeLastPort, type Settings } from "./storage.js";
 import { IS_CHROME, TARGET } from "./target.js";
 
 const BRIDGE_ALARM = "tabglutton-bridge-reconnect";
@@ -180,7 +182,7 @@ export interface BridgeClientDeps {
   getSettings: () => Settings;
   /** Only ever called with a method that passed `isBridgeMethod`. */
   run: (method: BridgeMethod, params: unknown) => Promise<unknown>;
-  onStatusChange: (status: BridgeStatus) => void;
+  onStatusChange: (status: BridgeStatus, port?: number) => void;
 }
 
 // "connecting" covers the handshake too — no caller distinguishes the two, and
@@ -193,6 +195,12 @@ export class BridgeClient {
   private phase: Phase = "closed";
   /** Token this socket authenticated with. Regenerating it must revoke the socket. */
   private socketToken = "";
+  /** Selected independently from Settings in automatic mode. */
+  private socketPort: number | null = null;
+  /** Successful automatic endpoint, persisted separately from user settings. */
+  private lastPort: number | undefined;
+  /** Next automatic candidate to probe; advanced once per probe. */
+  private candidateCursor = 0;
   private clientNonce = "";
   private heartbeat: ReturnType<typeof setInterval> | null = null;
   private handshakeTimer: ReturnType<typeof setTimeout> | null = null;
@@ -252,7 +260,7 @@ export class BridgeClient {
    */
   async start(): Promise<void> {
     this.started = true;
-    this.label = await resolveLabel();
+    [this.label, this.lastPort] = await Promise.all([resolveLabel(), loadBridgeLastPort()]);
     // Seeded here so the first `sync()` of this page's life compares against
     // what we actually dialled, rather than reading every key as new.
     this.lastBridgeConfig = bridgeConfigKey(this.deps.getSettings());
@@ -312,13 +320,17 @@ export class BridgeClient {
     }
     // A deliberate bridge change — most often enabling it or generating a token
     // — earns a fresh burst rather than inheriting whatever the last wake left.
-    if (changed) this.fastRetries = 0;
+    if (changed) {
+      this.fastRetries = 0;
+      this.candidateCursor = 0;
+    }
     // Port or token changed under an open socket — drop it and redial clean.
     // The token half matters most: regenerating it is how a user revokes a
     // sidecar, and a live socket that keeps serving requests would let the
     // revoked token retain read/clip/close access for the rest of the session.
-    const stale =
-      this.socket?.url !== this.socketUrl(settings) || this.socketToken !== settings.bridgeToken;
+    const selectedPortStillValid =
+      this.socketPort !== null && this.portsFor(settings).includes(this.socketPort);
+    const stale = !selectedPortStillValid || this.socketToken !== settings.bridgeToken;
     if (this.phase !== "closed" && stale) {
       this.teardown();
     }
@@ -335,9 +347,14 @@ export class BridgeClient {
     // it no probe ran, so any latched conflict is evidence from before.
     if (this.phase === "closed") {
       if (this.hostAccessDenied) return "needs-access";
-      return this.portConflict ? "port-conflict" : "idle";
+      const fixedConflict = this.deps.getSettings().bridgePortMode === "fixed" && this.portConflict;
+      return fixedConflict ? "port-conflict" : "idle";
     }
     return "connecting";
+  }
+
+  get connectedPort(): number | undefined {
+    return this.phase === "open" ? (this.socketPort ?? undefined) : undefined;
   }
 
   /**
@@ -364,21 +381,9 @@ export class BridgeClient {
             "Gullet. Re-enable the bridge in Tabglutton's settings to be asked for it.",
         );
       }
-      this.deps.onStatusChange(this.status);
+      this.deps.onStatusChange(this.status, this.connectedPort);
     }
     return granted;
-  }
-
-  /** The force path's equivalent of probeThenConnect: no probe, same gate. */
-  private async connectWithAccess(): Promise<void> {
-    if (!(await this.hasHostAccess())) {
-      this.scheduleIdleProbe();
-      return;
-    }
-    // Re-read, as everywhere: the check above is an await.
-    const current = this.deps.getSettings();
-    if (this.phase !== "closed" || !this.isConfigured(current)) return;
-    this.connect(current);
   }
 
   /**
@@ -386,6 +391,9 @@ export class BridgeClient {
    * the time anyone asks: `status` is a getter with no port to inspect.
    */
   private setPortConflict(conflict: boolean): void {
+    // A foreign automatic candidate is merely skipped; only fixed mode leaves
+    // the user with a port they must change themselves.
+    if (this.deps.getSettings().bridgePortMode === "auto") conflict = false;
     if (this.portConflict === conflict) return;
     this.portConflict = conflict;
     if (conflict) {
@@ -395,22 +403,29 @@ export class BridgeClient {
           `settings and pass the same --port to Gullet.`,
       );
     }
-    this.deps.onStatusChange(this.status);
+    this.deps.onStatusChange(this.status, this.connectedPort);
   }
 
   private isConfigured(settings: Settings): boolean {
     return settings.bridgeEnabled && settings.bridgeToken.length > 0;
   }
 
-  private socketUrl(settings: Settings): string {
-    return `ws://127.0.0.1:${settings.bridgePort}/`;
+  private portsFor(settings: Settings): number[] {
+    return settings.bridgePortMode === "fixed"
+      ? [settings.bridgePort]
+      : orderedBridgePortCandidates(this.lastPort);
+  }
+
+  private nextPort(settings: Settings): number {
+    const ports = this.portsFor(settings);
+    const port = ports[this.candidateCursor % ports.length] ?? settings.bridgePort;
+    this.candidateCursor = (this.candidateCursor + 1) % ports.length;
+    return port;
   }
 
   /**
-   * @param force skip the probe and dial regardless. For deliberate user actions
-   * only: someone who has just switched the bridge on is watching for it to do
-   * something, and one failed connect costs a few hundred milliseconds of
-   * penalty rather than the ceiling — it is the *repetition* that is expensive.
+   * A deliberate settings change restarts the candidate order, but still probes
+   * first. Automatic mode must never turn one user action into N blind dials.
    */
   private tick(force = false): void {
     const settings = this.deps.getSettings();
@@ -429,11 +444,11 @@ export class BridgeClient {
       this.countedTickPending = true;
       return;
     }
-    if (force) {
-      this.probeMisses = 0;
-      void this.connectWithAccess();
-      return;
-    }
+    // Restart the rotation, but do *not* reset `probeMisses`. That reset made
+    // sense only while `force` also dialled unprobed: it now merely pushes the
+    // blind-dial valve further away, and the valve is the sole escape for an
+    // install whose loopback `fetch` is blocked and so reads "silent" forever.
+    if (force) this.candidateCursor = 0;
     void this.probeThenConnect(settings, true);
   }
 
@@ -448,6 +463,7 @@ export class BridgeClient {
     settings: Settings,
     countsTowardBlindDial: boolean,
   ): Promise<void> {
+    const port = this.nextPort(settings);
     this.probing = true;
     let result: ProbeResult = "silent";
     try {
@@ -459,11 +475,16 @@ export class BridgeClient {
         this.scheduleIdleProbe();
         return;
       }
-      result = await probePort(settings.bridgePort);
+      result = await probePort(port);
     } finally {
       this.probing = false;
     }
-    if (result === "foreign") {
+    // Only the informative outcomes. "Silent" is the steady state of the 3s
+    // idle rotation, and logging it would emit a line every three seconds for
+    // as long as no sidecar exists — into a console whose contents get pasted
+    // wholesale into bug reports.
+    if (result !== "silent") console.debug(`[tabglutton] bridge probe ${port}: ${result}`);
+    if (result === "foreign" || result === "incompatible") {
       // Someone else owns the port. Do not dial: the socket cannot succeed, and
       // a failed WebSocket connect is the one thing that feeds Gecko's
       // FailDelayManager — so dialling here would build the reconnect penalty
@@ -500,7 +521,10 @@ export class BridgeClient {
     // use a stale port.
     const current = this.deps.getSettings();
     if (this.phase !== "closed" || !this.isConfigured(current)) return;
-    this.connect(current);
+    // The selected port must still belong to the current configuration. A mode
+    // or fixed-port change may have landed during the probe.
+    if (!this.portsFor(current).includes(port)) return;
+    this.connect(current, port);
   }
 
   /**
@@ -515,7 +539,7 @@ export class BridgeClient {
     this.teardown();
   }
 
-  private connect(settings: Settings): void {
+  private connect(settings: Settings, port: number): void {
     // An idle-probe timer armed by an earlier miss must not survive into the
     // dial: if this dial fails fast, that stale timer would re-probe a port
     // that answers and re-dial it ~3s later — the exact hammer the
@@ -524,15 +548,17 @@ export class BridgeClient {
     this.clearIdleProbe();
     let socket: WebSocket;
     try {
-      socket = new WebSocket(this.socketUrl(settings));
+      socket = new WebSocket(`ws://127.0.0.1:${port}/`);
     } catch (err) {
       // Constructor threw, so no close/error event will arrive to route us
       // through teardown(). Nothing to retry into either — this never reached a
       // connection — so the alarm picks it up on its own schedule.
       console.warn("[tabglutton] bridge dial failed", err);
+      if (settings.bridgePortMode === "auto") this.scheduleIdleProbe();
       return;
     }
     this.socket = socket;
+    this.socketPort = port;
     // Pinned for the life of the socket: the handshake proves *this* token, and
     // `sync()` compares against it to decide whether the socket is still valid.
     this.socketToken = settings.bridgeToken;
@@ -616,6 +642,18 @@ export class BridgeClient {
         this.clearFastRetry();
         this.setPhase("open");
         this.startHeartbeat(socket);
+        const settings = this.deps.getSettings();
+        if (
+          settings.bridgePortMode === "auto" &&
+          this.socketPort !== null &&
+          BRIDGE_PORT_CANDIDATES.some((port) => port === this.socketPort)
+        ) {
+          this.candidateCursor = 0;
+          if (this.lastPort !== this.socketPort) {
+            this.lastPort = this.socketPort;
+            void saveBridgeLastPort(this.socketPort);
+          }
+        }
         // On connect, not on first request. A connected sidecar is *itself* the
         // proof that someone is using this: Gullet is spawned by an agent
         // harness and lives exactly as long as the session does, so there is no
@@ -767,11 +805,10 @@ export class BridgeClient {
   }
 
   /**
-   * Re-arm the idle probe loop — see IDLE_PROBE_MS. Only ever armed from a
-   * probe miss, and `connect()` clears any timer still pending from an
-   * earlier miss, so a port that answers hands scheduling back to the alarm:
-   * a server that is present but failing the handshake gets re-approached
-   * every 30s, not every 3s.
+   * Re-arm the idle discovery loop — see IDLE_PROBE_MS. Silent, foreign, and
+   * incompatible candidates all advance here. A marked endpoint that fails
+   * authentication also resumes here in automatic mode, because it may simply
+   * belong to another token realm; fixed mode leaves that retry to the alarm.
    */
   private scheduleIdleProbe(): void {
     if (this.idleProbeTimer !== null) return;
@@ -804,6 +841,7 @@ export class BridgeClient {
     const socket = this.socket;
     this.socket = null;
     this.socketToken = "";
+    this.socketPort = null;
     this.phase = "closed";
     if (socket && socket.readyState <= WebSocket.OPEN) {
       try {
@@ -812,48 +850,54 @@ export class BridgeClient {
         // Already closing; nothing to do.
       }
     }
-    this.deps.onStatusChange(this.status);
+    this.deps.onStatusChange(this.status, this.connectedPort);
     // Every failed dial and every dropped connection lands here, but only the
     // second earns an immediate retry — see FAST_RETRY_MS. A dial that never
     // landed waits for the alarm instead, so we stop bidding up the browser's
     // own reconnect delay. No-ops once the bridge is switched off, or once this
     // wake's budget is spent.
+    const settings = this.deps.getSettings();
     if (wasConnected) this.scheduleFastRetry();
+    else if (settings.bridgePortMode === "auto" && this.isConfigured(settings)) {
+      // A marked endpoint can belong to another token realm. That is not a
+      // global failure: continue the automatic rotation without fast-retrying
+      // the same WebSocket endpoint.
+      this.scheduleIdleProbe();
+    }
   }
 
   private setPhase(phase: Phase): void {
     this.phase = phase;
-    // A socket that opened disproves the latch outright, and nothing else here
-    // would clear it promptly: a settings change dials via the force path
-    // without probing, so a user who fixes the port would stay flagged until
-    // the next alarm and then read "port in use" the moment they disconnect.
+    // A socket that opened disproves the fixed-port latch outright.
     if (phase === "open") this.portConflict = false;
-    this.deps.onStatusChange(this.status);
+    this.deps.onStatusChange(this.status, this.connectedPort);
   }
 }
 
 /**
- * The three settings this client reads, as one comparable value. Everything else
- * in `Settings` belongs to dedup or clipping and cannot change what we dial.
+ * The bridge settings this client reads, as one comparable value. A dormant
+ * numeric value is intentionally excluded while automatic mode is selected.
  */
 function bridgeConfigKey(settings: Settings): string {
-  return `${settings.bridgeEnabled ? 1 : 0}:${settings.bridgePort}:${settings.bridgeToken}`;
+  const port = settings.bridgePortMode === "fixed" ? settings.bridgePort : "auto";
+  return `${settings.bridgeEnabled ? 1 : 0}:${port}:${settings.bridgeToken}`;
 }
 
 /**
  * What is on the port — see PROBE_TIMEOUT_MS for why we ask before opening a
- * socket. Three answers, not two, and the third is the one that matters:
+ * socket. The marker and protocol version are routing evidence, not auth:
  *
  * - `"gullet"`   the sidecar identified itself. Dial.
  * - `"silent"`   refused, blocked, or timed out. Every such failure reads the
  *                same from here, which is the honest answer: we cannot tell
  *                "no sidecar" from "our fetch was blocked", so the caller
  *                treats a run of them as a reason to dial anyway, not proof.
+ * - `"incompatible"` Gullet answered with another protocol. Skip it.
  * - `"foreign"`  something answered and it is not Gullet. This used to be
  *                folded into "yes, something is there", and dialling on it is
  *                the worst of the three outcomes — see the call site.
  */
-type ProbeResult = "gullet" | "silent" | "foreign";
+type ProbeResult = "gullet" | "silent" | "foreign" | "incompatible";
 
 async function probePort(port: number): Promise<ProbeResult> {
   try {
@@ -862,12 +906,9 @@ async function probePort(port: number): Promise<ProbeResult> {
       cache: "no-store",
       signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
     });
-    if (res.headers.get(BRIDGE_PROBE_HEADER) !== null) return "gullet";
-    // Header first, body as the fallback. The background page reads both freely
-    // under `host_permissions`, but a header that came back filtered would
-    // otherwise read as "a stranger owns the port" and stop us dialling a
-    // perfectly good sidecar — a wrong answer that never self-corrects.
-    return (await bodyStartsWithMarker(res)) ? "gullet" : "foreign";
+    const header = res.headers.get(BRIDGE_PROBE_HEADER);
+    const identity = classifyBridgeProbe(header, header === null ? await probeBodyHead(res) : "");
+    return identity === "compatible" ? "gullet" : identity;
   } catch {
     return "silent";
   }
@@ -877,16 +918,15 @@ async function probePort(port: number): Promise<ProbeResult> {
  * First chunk only. A stranger on this port owes us nothing — it may answer
  * with megabytes, or stream forever — and we only ever need the opening bytes.
  */
-async function bodyStartsWithMarker(res: Response): Promise<boolean> {
+async function probeBodyHead(res: Response): Promise<string> {
   const reader = res.body?.getReader();
-  if (!reader) return false;
+  if (!reader) return "";
   try {
     const { value } = await reader.read();
-    if (!value) return false;
-    const head = new TextDecoder().decode(value.slice(0, 128));
-    return head.startsWith(BRIDGE_PROBE_MARKER);
+    if (!value) return "";
+    return new TextDecoder().decode(value.slice(0, 128));
   } catch {
-    return false;
+    return "";
   } finally {
     void reader.cancel();
   }

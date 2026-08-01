@@ -54,12 +54,14 @@ export type IncomingMessage =
 
 export interface GetBridgeStatusResponse {
   status: BridgeStatus;
+  port?: number;
 }
 
 /** Pushed to the options page on every transition, so it never has to poll. */
 export interface BridgeStatusChangedMessage {
   type: "bridge-status-changed";
   status: BridgeStatus;
+  port?: number;
 }
 
 export type ClipFailureReason = "extract-failed" | "trigger-failed";
@@ -154,10 +156,10 @@ const bridgeRunner = new BridgeMethodRunner({
 const bridge = new BridgeClient({
   getSettings: () => settings,
   run: (method, params) => bridgeRunner.run(method, params),
-  onStatusChange: (status) => {
+  onStatusChange: (status, port) => {
     // Nobody may be listening — an options page that is closed rejects, and
     // that is the normal case, not an error.
-    const msg: BridgeStatusChangedMessage = { type: "bridge-status-changed", status };
+    const msg: BridgeStatusChangedMessage = { type: "bridge-status-changed", status, port };
     void browser.runtime.sendMessage(msg).catch(() => {});
     // A failed dial cycles idle → connecting → idle every 30s. Repainting on
     // each would re-query and re-dedup every tab twice a minute to draw the
@@ -774,7 +776,10 @@ browser.runtime.onMessage.addListener(async (rawMsg: unknown): Promise<unknown> 
       return { ok: true };
     }
     case "get-bridge-status": {
-      const response: GetBridgeStatusResponse = { status: bridge.status };
+      const response: GetBridgeStatusResponse = {
+        status: bridge.status,
+        port: bridge.connectedPort,
+      };
       return response;
     }
   }

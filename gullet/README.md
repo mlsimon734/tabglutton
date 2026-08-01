@@ -9,7 +9,7 @@ Architecture, trust boundary, and phasing live in [`../docs/BRIDGE.md`](../docs/
 is the setup guide.
 
 ```
-Claude Code ──MCP (stdio)──► Gullet ──WebSocket (127.0.0.1:4589)──► Zen / Firefox / Chrome
+Claude Code ──MCP (stdio)──► Gullet ──WebSocket (automatic loopback port)──► browsers
 ```
 
 Zero dependencies: it runs on Bun's built-ins alone, so there is nothing to install beyond
@@ -27,7 +27,7 @@ tools appear under that namespace, and the token is `TABGLUTTON_TOKEN`. `GULLET_
    socket is opened while it is off.
 
 2. **Register Gullet with your agent.** The settings page renders a ready-made config with
-   your token and port filled in — _Copy config_ and paste it into `.mcp.json` (or
+   your token filled in — _Copy config_ and paste it into `.mcp.json` (or
    `~/.claude.json`), replacing the placeholder path with wherever you cloned this repo:
 
    ```json
@@ -35,7 +35,7 @@ tools appear under that namespace, and the token is `TABGLUTTON_TOKEN`. `GULLET_
      "mcpServers": {
        "tabglutton": {
          "command": "bun",
-         "args": ["run", "/path/to/tabglutton/gullet/gullet.ts", "--port", "4589"],
+         "args": ["run", "/path/to/tabglutton/gullet/gullet.ts"],
          "env": { "TABGLUTTON_TOKEN": "<token from the settings page>" }
        }
      }
@@ -48,12 +48,12 @@ tools appear under that namespace, and the token is `TABGLUTTON_TOKEN`. `GULLET_
    claude mcp add tabglutton --env TABGLUTTON_TOKEN=<token> -- bun run /path/to/tabglutton/gullet/gullet.ts
    ```
 
-3. **Start a session.** The agent spawns Gullet, Gullet opens the port, and the extension's
-   reconnect loop finds it — typically within a few seconds (it re-probes the port every 3s
-   while the browser's extension page is awake), worst case ~30 seconds (the alarm cadence,
-   when the page had suspended). The toolbar badge shows a terracotta dot while the
-   connection is live. When the session ends, Gullet exits and the extension goes back to
-   idle dialling.
+3. **Start a session.** The agent spawns Gullet, Gullet elects an approved port, and the
+   extension's reconnect loop finds it — typically within a few seconds (it rotates probes
+   every 3s while the browser's extension page is awake), worst case ~30 seconds (the alarm
+   cadence, when the page had suspended). The toolbar badge shows a terracotta dot while the
+   connection is live. When the session ends, Gullet exits and the extension goes back to idle
+   dialling.
 
 There is no app to launch and no per-session step. Multiple browsers can be connected at
 once — a Zen window and a Chrome profile, say — and each tool call picks one with the
@@ -61,10 +61,14 @@ once — a Zen window and a Chrome profile, say — and each tool call picks one
 
 ## Configuration
 
-| Flag      | Env                | Default | Notes                                                                              |
-| --------- | ------------------ | ------- | ---------------------------------------------------------------------------------- |
-| `--port`  | `TABGLUTTON_PORT`  | `4589`  | Must match the port in Tabglutton's settings.                                      |
-| `--token` | `TABGLUTTON_TOKEN` | —       | Required. Prefer the env var: process arguments are readable by other local users. |
+| Flag      | Env                | Default   | Notes                                                                              |
+| --------- | ------------------ | --------- | ---------------------------------------------------------------------------------- |
+| `--port`  | `TABGLUTTON_PORT`  | automatic | Use `auto` or omit it; a number pins one port and must match fixed browser mode.   |
+| `--token` | `TABGLUTTON_TOKEN` | —         | Required. Prefer the env var: process arguments are readable by other local users. |
+
+Automatic mode uses the ordered candidate set shared with the extension: `4589`, `20317`,
+`17483`, `27613`, and `24193`. It discovers an existing same-token hub before binding, so
+multiple Claude Code and Codex sessions converge even if an earlier candidate later frees up.
 
 Diagnostics go to **stderr**; stdout is the MCP transport and carries nothing else.
 
@@ -117,7 +121,7 @@ than you have sessions — some MCP clients spawn more than one — which is har
 losing the race is not fatal.
 
 **"No browser is connected."** The bridge is off in Tabglutton's settings, no token has
-been generated, the ports do not match, or the browser has not re-dialled yet — a first
+been generated, fixed-port settings do not match, or the browser has not re-dialled yet — a first
 call waits up to 45s for the browser's backstop alarm (30s cadence, on Firefox too) to
 fire and the dial to land, so this answer normally means configuration, not timing. The
 settings page shows live connection status.
@@ -150,9 +154,11 @@ and no setting fixes it — restart the browser.
 **"Token mismatch."** `TABGLUTTON_TOKEN` and the token in Tabglutton's settings differ.
 Regenerating the token in settings invalidates any sidecar still holding the old one.
 
-**"could not listen on 127.0.0.1:4589"** Another Gullet — usually from a second agent
-session — already holds the port. One sidecar can serve several browsers, but two sidecars
-cannot share a port; give the second one a different `--port` and match it in settings.
+**Every candidate is unavailable.** Gullet reports one summary and keeps retrying with
+backoff. A same-token Gullet is joined automatically; markerless services, incompatible
+versions, and different-token realms are skipped. Freeing any candidate heals the running
+MCP session. If policy requires one known endpoint, select **Fixed port** in Tabglutton and
+pass that number with `--port`.
 
 **Nothing in the logs.** Gullet writes to stderr, which most agent harnesses hide. Run it
 by hand to watch it:
@@ -161,7 +167,7 @@ by hand to watch it:
 TABGLUTTON_TOKEN=<token> bun run gullet/gullet.ts
 ```
 
-Then poke the socket directly:
+Then poke the selected socket directly (stderr prints the chosen port; `4589` is shown here):
 
 ```sh
 bunx wscat -c ws://127.0.0.1:4589 -H 'Origin: moz-extension://test'

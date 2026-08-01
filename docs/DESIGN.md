@@ -99,6 +99,9 @@ muted). All have hover / active / disabled / focus-visible (3px accent ring) sta
   `<dl>`), uppercase micro section labels.
 - Options — custom toggle `.switch`, `.radio-card` (selected = accent border + soft fill),
   text inputs (6px radius), inline status pill.
+- Agent bridge port selection reuses `.radio-card`: **Automatic** is the recommended default;
+  **Fixed port** reveals the numeric field. Automatic status names the discovered endpoint
+  (`Connected on 20317`) and never turns a skipped foreign candidate into a blocking error.
 - Toast — dark pill, fixed bottom-center, with Undo; slide-up enter.
 
 ## Motion
