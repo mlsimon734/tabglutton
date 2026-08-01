@@ -66,14 +66,42 @@ function stripAsciiControlChars(value: string): string {
     .join("");
 }
 
-function sanitizeFileName(fileName: string): string {
-  let sanitized = stripAsciiControlChars(fileName)
-    .replace(/[#[\]|^]/g, "")
-    .replace(/[/:]/g, "")
-    .replace(/^\./, "")
-    .replace(/^\.+/, "")
-    .trim()
-    .slice(0, 245);
+/**
+ * Which filesystem's naming rules a note name has to satisfy. `obsidian://` is
+ * a local handoff, so the browser's platform is the vault's platform.
+ */
+export type FilePlatform = "win" | "mac" | "other";
+
+/**
+ * Mirrors Obsidian Web Clipper's own `sanitizeFileName`, per platform. Matching
+ * it is the point: the target user runs both, and a page clipped by each should
+ * land on one note rather than two differently-named ones. That is also why the
+ * macOS branch strips `/` and `:` with nothing in their place — ugly, but it is
+ * the same ugly.
+ *
+ * Tabglutton applied the macOS branch everywhere until 0.2.0, so a Windows user
+ * clipping a title containing `? * " < > \` — or one that happened to be `CON`
+ * — handed Obsidian a name Windows cannot write.
+ */
+function sanitizeFileName(fileName: string, platform: FilePlatform): string {
+  // Obsidian's own reserved characters go on every platform; the rest is the host's.
+  let sanitized = stripAsciiControlChars(fileName).replace(/[#[\]|^]/g, "");
+  if (platform === "mac") {
+    sanitized = sanitized.replace(/[/:]/g, "");
+  } else {
+    // Windows' illegal set, applied on Linux and BSD too: those filesystems
+    // accept most of it, but a vault synced to a Windows machine does not.
+    sanitized = sanitized.replace(/[<>:"/\\?*]/g, "");
+    if (platform === "win") {
+      sanitized = sanitized
+        // DOS device names, still unwritable, with or without an extension.
+        .replace(/^(con|prn|aux|nul|com[0-9]|lpt[0-9])(\..*)?$/i, "_$1$2")
+        // Windows drops trailing dots and spaces, so Obsidian would afterwards
+        // be looking for a file under a name it did not get written under.
+        .replace(/[\s.]+$/, "");
+    }
+  }
+  sanitized = sanitized.replace(/^\.+/, "").trim().slice(0, 245);
   if (sanitized.length === 0) sanitized = "Untitled";
   return sanitized;
 }
@@ -150,9 +178,14 @@ export interface ObsidianClipRequest {
 }
 
 /** Vault-relative note path a clip will be filed under, without extension. */
-function clipFilePath(payload: ClipPayload, rule: SiteRule | null, baseFolder: string): string {
+function clipFilePath(
+  payload: ClipPayload,
+  rule: SiteRule | null,
+  baseFolder: string,
+  platform: FilePlatform,
+): string {
   const base = normalizeBaseFolder(baseFolder);
-  return `${folderForRule(rule, base)}/${sanitizeFileName(payload.title || payload.url)}`;
+  return `${folderForRule(rule, base)}/${sanitizeFileName(payload.title || payload.url, platform)}`;
 }
 
 /**
@@ -168,13 +201,14 @@ export async function resolveClipRequest(
   rule: SiteRule | null,
   mode: ClipMode,
   baseFolder: string,
+  platform: FilePlatform,
   copyToClipboard: (text: string) => Promise<boolean>,
 ): Promise<ObsidianClipRequest> {
-  const request = obsidianClipRequest(payload, vault, content, rule, mode, baseFolder);
+  const request = obsidianClipRequest(payload, vault, content, rule, mode, baseFolder, platform);
   if (request.clipboard === null) return request;
   if (await copyToClipboard(request.clipboard)) return request;
   // The URI carries the note itself — bigger, but it does not need the clipboard.
-  return obsidianClipRequest(payload, vault, content, rule, "legacy-uri", baseFolder);
+  return obsidianClipRequest(payload, vault, content, rule, "legacy-uri", baseFolder, platform);
 }
 
 export function obsidianClipRequest(
@@ -184,8 +218,12 @@ export function obsidianClipRequest(
   rule: SiteRule | null,
   mode: ClipMode,
   baseFolder: string = DEFAULT_CLIPPER_PATH,
+  // "other" is the conservative set — everything Windows rejects, minus the
+  // reserved-name rewrite. Defaulting to it means a caller that cannot answer
+  // the question still produces a name every filesystem accepts.
+  platform: FilePlatform = "other",
 ): ObsidianClipRequest {
-  const file = clipFilePath(payload, rule, baseFolder);
+  const file = clipFilePath(payload, rule, baseFolder, platform);
   let url = `obsidian://new?file=${encodeURIComponent(file)}`;
   if (vault) url += `&vault=${encodeURIComponent(vault)}`;
   if (mode === "clipboard") {

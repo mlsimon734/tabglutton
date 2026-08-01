@@ -312,6 +312,36 @@
         </div>
       </section>
 
+      <section>
+        <h2 class="section-title">Settings page</h2>
+
+        <div class="setting block" id="optionsLayout">
+          <div class="setting-text">
+            <strong>Where it opens</strong>
+            <small>
+              Applies to Tabglutton's own settings buttons. Reaching this page
+              <em>from</em> the Add-ons Manager always shows it there.
+            </small>
+          </div>
+          <div class="setting-control radio-stack">
+            <label class="radio-card">
+              <input type="radio" name="optionsInTab" value="tab" />
+              <span class="radio-card-body">
+                <strong>In its own tab</strong>
+                <small>Full width, with room for the agent bridge setup.</small>
+              </span>
+            </label>
+            <label class="radio-card">
+              <input type="radio" name="optionsInTab" value="embedded" />
+              <span class="radio-card-body">
+                <strong>Inside the Add-ons Manager</strong>
+                <small>Shown in Firefox's own panel for extension settings.</small>
+              </span>
+            </label>
+          </div>
+        </div>
+      </section>
+
       <p class="rerun-row">
         <a id="rerunOnboarding" href="#">Re-run setup walkthrough</a>
       </p>

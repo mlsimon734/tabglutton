@@ -7,6 +7,11 @@ import { vaultWarningFor } from "../src/vault-warning.js";
 
 const FALLBACK_SCOPE: ScopeMode = IS_CHROME ? "current-window" : "hidden-false";
 
+// Framed means the browser's own extension-settings panel is hosting us, and it
+// draws its own frame, heading and padding. CSP forbids an inline script, so
+// this lands one module-execution late — on a page this small, before paint.
+if (window.top !== window.self) document.documentElement.classList.add("embedded");
+
 const stripFragment = document.getElementById("stripFragment") as HTMLInputElement;
 const extraStripParams = document.getElementById("extraStripParams") as HTMLInputElement;
 const obsidianVault = document.getElementById("obsidianVault") as HTMLInputElement;
@@ -14,6 +19,9 @@ const clippingsBaseFolder = document.getElementById("clippingsBaseFolder") as HT
 const vaultWarning = document.getElementById("vaultWarning") as HTMLParagraphElement;
 const scopeRadios = document.querySelectorAll<HTMLInputElement>('input[name="scope"]');
 const clipModeRadios = document.querySelectorAll<HTMLInputElement>('input[name="clipMode"]');
+const optionsInTabRadios = document.querySelectorAll<HTMLInputElement>(
+  'input[name="optionsInTab"]',
+);
 const statusEl = document.getElementById("status") as HTMLParagraphElement;
 const bridgeEnabled = document.getElementById("bridgeEnabled") as HTMLInputElement;
 const bridgeAllowTabLoad = document.getElementById("bridgeAllowTabLoad") as HTMLInputElement;
@@ -34,6 +42,7 @@ const DEFAULTS: Pick<
   | "obsidianVault"
   | "clippingsBaseFolder"
   | "clipMode"
+  | "optionsInTab"
   | "bridgeEnabled"
   | "bridgePort"
   | "bridgeToken"
@@ -45,6 +54,7 @@ const DEFAULTS: Pick<
   obsidianVault: "",
   clippingsBaseFolder: "",
   clipMode: "clipboard",
+  optionsInTab: true,
   bridgeEnabled: false,
   bridgePort: DEFAULT_BRIDGE_PORT,
   bridgeToken: "",
@@ -81,6 +91,9 @@ async function load(): Promise<void> {
   for (const radio of clipModeRadios) {
     radio.checked = radio.value === settings.clipMode;
   }
+  for (const radio of optionsInTabRadios) {
+    radio.checked = (radio.value === "tab") === settings.optionsInTab;
+  }
   bridgeEnabled.checked = settings.bridgeEnabled;
   bridgeAllowTabLoad.checked = settings.bridgeAllowTabLoad;
   bridgePort.value = String(settings.bridgePort);
@@ -90,6 +103,11 @@ async function load(): Promise<void> {
     // Chrome has no tab.hidden / workspaces, so the scope choice is fixed.
     const scopeBlock = scopeRadios[0]?.closest(".setting.block") as HTMLElement | null;
     if (scopeBlock) scopeBlock.hidden = true;
+    // Chrome's embedded options are a modal on chrome://extensions, too narrow
+    // for this page, so the Chrome build stays on `open_in_tab: true` and there
+    // is no choice to offer. The whole section goes, not just the radios.
+    const layoutSection = document.getElementById("optionsLayout")?.closest("section");
+    if (layoutSection) (layoutSection as HTMLElement).hidden = true;
   }
   loaded = true;
 }
@@ -116,6 +134,7 @@ async function save(): Promise<void> {
     obsidianVault: obsidianVault.value.trim(),
     clippingsBaseFolder: clippingsBaseFolder.value.trim(),
     clipMode,
+    optionsInTab: [...optionsInTabRadios].find((r) => r.checked)?.value !== "embedded",
     bridgeEnabled: bridgeEnabled.checked,
     bridgeAllowTabLoad: bridgeAllowTabLoad.checked,
     bridgePort: parsePort(bridgePort.value),
@@ -146,6 +165,7 @@ for (const el of [
   bridgeAllowTabLoad,
   ...scopeRadios,
   ...clipModeRadios,
+  ...optionsInTabRadios,
 ]) {
   el.addEventListener("change", () => void save());
 }

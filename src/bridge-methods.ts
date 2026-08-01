@@ -31,6 +31,7 @@ import {
   type TabsLoadResult,
   type UndoCloseResult,
 } from "./bridge-protocol.js";
+import { getFilePlatformOnce } from "./platform.js";
 import { createTaskQueue, delay } from "./serialize.js";
 import { pickRule } from "./site-rules.js";
 import type { Settings } from "./storage.js";
@@ -600,6 +601,7 @@ export class BridgeMethodRunner {
         rule,
         settings.clipMode,
         settings.clippingsBaseFolder,
+        await getFilePlatformOnce(),
         (text) => this.deps.copyToClipboardViaTab(params.tabId, text),
       );
       await this.deps.openObsidianUrl(request.url);

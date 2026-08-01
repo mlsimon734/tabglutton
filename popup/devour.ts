@@ -7,6 +7,7 @@ import type {
   GetScopedTabsResponse,
   PopupTab,
 } from "../src/background.js";
+import { openOptionsUi } from "../src/open-options.js";
 import { pickRule, type SiteRule } from "../src/site-rules.js";
 import type { Settings } from "../src/storage.js";
 import {
@@ -447,7 +448,7 @@ function renderInspectorSetup(): HTMLElement {
   btn.type = "button";
   btn.className = "primary";
   btn.textContent = "Open settings";
-  btn.addEventListener("click", () => void browser.runtime.openOptionsPage());
+  btn.addEventListener("click", () => void openOptionsUi());
   div.append(h, p, btn);
   return div;
 }
@@ -868,7 +869,7 @@ document.addEventListener("keydown", (e) => {
 });
 
 dedupBtn.addEventListener("click", () => void runDedup());
-optionsBtn.addEventListener("click", () => void browser.runtime.openOptionsPage());
+optionsBtn.addEventListener("click", () => void openOptionsUi());
 filterInput.addEventListener("input", () => {
   state.filter = filterInput.value;
   state.stickyHostOrder = null;

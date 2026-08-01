@@ -13,6 +13,13 @@ export interface Settings {
   obsidianVault: string;
   clippingsBaseFolder: string;
   clipMode: ClipMode;
+  /**
+   * Whether Tabglutton's own settings buttons open the page in a full tab or
+   * inside Firefox's Add-ons Manager. Firefox-only: the Chrome build ships
+   * `open_in_tab: true` and hides the choice. See `openOptionsUi` for why the
+   * manifest cannot express this at runtime.
+   */
+  optionsInTab: boolean;
   onboardingComplete: boolean;
   /** Agent bridge (see BRIDGE.md). Off until the user opts in on the options page. */
   bridgeEnabled: boolean;
@@ -36,6 +43,7 @@ const DEFAULTS: Readonly<Settings> = Object.freeze({
   obsidianVault: "",
   clippingsBaseFolder: "Clippings",
   clipMode: "clipboard",
+  optionsInTab: true,
   onboardingComplete: false,
   bridgeEnabled: false,
   bridgePort: DEFAULT_BRIDGE_PORT,

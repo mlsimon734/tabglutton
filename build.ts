@@ -251,6 +251,14 @@ function writeManifest(target: Target, dist: string): void {
     // and the call would already have answered "no browser is connected".
     // Unpacked builds never reproduce it: kDevDelayMinimum is 1s.
     raw.minimum_chrome_version = "120";
+    // The source manifest declares `open_in_tab: false` so Firefox can render
+    // the settings inside about:addons — the one form an extension cannot open
+    // for itself, and the point of the `optionsInTab` setting. Chrome honours
+    // the same flag, but its embedded form is a narrow modal on
+    // chrome://extensions that this page does not fit, so the toggle is hidden
+    // on Chrome and the manifest opts back into a plain tab. Without this,
+    // Chrome's own "Extension options" button would open that modal.
+    raw.options_ui = { page: "options/options.html", open_in_tab: true };
   }
   writeFileSync(`${dist}/manifest.json`, `${JSON.stringify(raw, null, 2)}\n`);
 }

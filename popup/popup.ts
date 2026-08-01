@@ -7,6 +7,7 @@ import type {
   GetScopedTabsResponse,
   PopupTab,
 } from "../src/background.js";
+import { openOptionsUi } from "../src/open-options.js";
 import type { Settings } from "../src/storage.js";
 import { IS_CHROME } from "../src/target.js";
 import {
@@ -577,8 +578,12 @@ async function openCockpit(): Promise<void> {
 
 dedupBtn.addEventListener("click", () => void runDedup());
 optionsBtn.addEventListener("click", () => {
-  void browser.runtime.openOptionsPage();
-  window.close();
+  // Awaited, not fired-and-forgotten: closing the popup tears down this script,
+  // and openOptionsUi has to read a setting before it can open anything.
+  void (async () => {
+    await openOptionsUi();
+    window.close();
+  })();
 });
 cockpitBtn.addEventListener("click", () => void openCockpit());
 filterInput.addEventListener("input", () => {

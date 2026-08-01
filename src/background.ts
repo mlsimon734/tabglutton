@@ -14,6 +14,7 @@ import {
   type ClipPayload,
   type ObsidianClipRequest,
 } from "./clip-format.js";
+import { getFilePlatformOnce } from "./platform.js";
 import { delay } from "./serialize.js";
 import { pickRule } from "./site-rules.js";
 import { groupDuplicates, pickKeeper, type Tab } from "./dedup.js";
@@ -634,6 +635,7 @@ async function clipSelectedTabs(tabIds: number[]): Promise<ClipSelectedTabsRespo
           rule,
           settings.clipMode,
           settings.clippingsBaseFolder,
+          await getFilePlatformOnce(),
           async (text) => {
             const copied = await copyToClipboardViaTab(tabId, text);
             if (!copied) {

@@ -373,12 +373,33 @@ actually sell it.
 
 1. ✅ **Devour cockpit, light** — tabs grouped by host, duplicates flagged. Lead image.
 2. ✅ **Devour cockpit, dark** — same view, proves the theme.
-3. ⬜ **Popup with duplicates found** — the 10-second version of the product. Contrive a
-   window with a believable handful of duplicates.
-4. ⬜ **Cockpit inspector on one tab** — showing the frontmatter and the exact vault path
-   the note will land at. This is what makes "files into Obsidian" concrete.
+3. ✅ **Popup with duplicates found** — `popup-{light,dark}.png`. 600×600 logical at 2×,
+   which is the height Chrome actually caps a popup at. Shows the Dedup pill reading 5 and
+   the three `kepano/defuddle` rows (one `utm`-tagged) that produce it.
+4. ✅ **Cockpit inspector on one tab** — `cockpit-inspector-{light,dark}-1280x800.png`.
+   Inspector focused on an arXiv paper, showing `test / Clippings / ….md` and the
+   frontmatter preview. This is what makes "files into Obsidian" concrete.
 5. ⬜ **Obsidian, immediately after a Devour** — the clipping open in the vault. Sells the
-   outcome rather than the mechanism. Worth more than any UI shot.
+   outcome rather than the mechanism. Worth more than any UI shot. Native app, so it has to
+   be captured by hand.
+
+**Popup sizing is unresolved.** The popup is 600px wide, so `popup-*.png` is 1200×1200 and
+does not match Chrome's exact 1280×800 requirement. Either composite it onto a 1280×800
+`--bone` background, or drop it from the Chrome listing and use it on AMO only (AMO has no
+fixed size). Compositing is also the point at which the raw-vs-composited decision below
+has to be made for the whole set.
+
+**Capture method.** `scratch-chrome/shoot-store.ts` (dark) and `shoot-light.ts` (light)
+drive CDP's own screenshot path — exact pixels, no window chrome, no Screen Recording
+permission, repeatable after any UI change. Re-run them after the 0.2.0 version bump if
+anything visible changed.
+
+One trap worth keeping: sites serve colour-scheme-conditional favicons. GitHub ships
+`favicon-dark.svg`, a **white** glyph, whenever the page rendered under dark mode. Shooting
+the extension in light theme while the content tabs had loaded dark puts white icons on
+white paper and they vanish. `shoot-light.ts` flips every content tab to light and reloads
+first, so the light variants are fetched; it asserts zero tabs still report a dark-variant
+favicon before capturing.
 
 Optional but high-value for the launch posts, not the stores: a ~20s screen recording of
 the cockpit emptying a real backlog (filter → select → Devour → notes landing in Obsidian
