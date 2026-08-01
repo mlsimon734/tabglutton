@@ -1,6 +1,7 @@
 import type { BridgeStatusChangedMessage, GetBridgeStatusResponse } from "../src/background.js";
 import type { BridgeStatus } from "../src/bridge-client.js";
 import { DEFAULT_BRIDGE_PORT, generateToken, isBridgePort } from "../src/bridge-protocol.js";
+import { BRIDGE_ORIGINS, requestOrigins } from "../src/permissions.js";
 import type { ClipMode, ScopeMode, Settings } from "../src/storage.js";
 import { IS_CHROME } from "../src/target.js";
 import { vaultWarningFor } from "../src/vault-warning.js";
@@ -161,7 +162,6 @@ function queueSave(): void {
 
 for (const el of [
   stripFragment,
-  bridgeEnabled,
   bridgeAllowTabLoad,
   ...scopeRadios,
   ...clipModeRadios,
@@ -169,6 +169,23 @@ for (const el of [
 ]) {
   el.addEventListener("change", () => void save());
 }
+
+// `bridgeEnabled` is not in that list because switching it on is the one moment
+// we can ask for site access to the sidecar's loopback origin: Chrome requires a
+// user gesture, and the background page — where the dialling happens — never has
+// one. A refusal leaves the toggle off rather than persisting an enabled bridge
+// that could only ever report "needs access".
+bridgeEnabled.addEventListener("change", () => {
+  void (async () => {
+    // First await in the handler; see requestOrigins on why nothing may precede it.
+    if (bridgeEnabled.checked && !(await requestOrigins(BRIDGE_ORIGINS))) {
+      bridgeEnabled.checked = false;
+      renderBridgeStatus("needs-access");
+      return;
+    }
+    await save();
+  })();
+});
 extraStripParams.addEventListener("input", queueSave);
 obsidianVault.addEventListener("input", () => {
   updateVaultWarning();
@@ -276,6 +293,10 @@ const BRIDGE_STATUS_LABELS: Record<BridgeStatus, string> = {
   // otherwise presents as "Waiting for a sidecar" forever with a sidecar that
   // is running perfectly well a few lines above.
   "port-conflict": "Port in use by another program",
+  // Chrome only: the loopback grant was refused or later revoked. Switching the
+  // toggle off and on again is what re-asks for it, so the label says so — the
+  // browser's own permissions UI is the other route and much harder to describe.
+  "needs-access": "Needs access — switch off and on to allow",
 };
 
 function renderBridgeStatus(status: BridgeStatus): void {

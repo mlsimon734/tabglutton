@@ -8,6 +8,7 @@ import type {
   PopupTab,
 } from "../src/background.js";
 import { openOptionsUi } from "../src/open-options.js";
+import { CLIP_ORIGINS, requestOrigins } from "../src/permissions.js";
 import { pickRule, type SiteRule } from "../src/site-rules.js";
 import type { Settings } from "../src/storage.js";
 import {
@@ -675,6 +676,17 @@ async function clipSelected(): Promise<void> {
     state.clipping = true;
     clipCurrentBtn.disabled = true;
     restore("Devour", 2200);
+    return;
+  }
+
+  // The first await in this handler, deliberately: Chrome gates
+  // permissions.request on the click's transient activation, so any earlier
+  // await would spend it and the request would reject as gesture-less. Held
+  // already (always, on Firefox) this resolves true without showing anything.
+  if (!(await requestOrigins(CLIP_ORIGINS))) {
+    state.clipping = true;
+    clipCurrentBtn.disabled = true;
+    restore("Needs site access", 2600);
     return;
   }
 

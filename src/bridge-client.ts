@@ -29,6 +29,7 @@ import {
   type ResponseMessage,
 } from "./bridge-protocol.js";
 import { getBrowserInfoOnce } from "./browser-info.js";
+import { BRIDGE_ORIGINS, hasOrigins } from "./permissions.js";
 import type { Settings } from "./storage.js";
 import { IS_CHROME, TARGET } from "./target.js";
 
@@ -167,7 +168,13 @@ const PROBE_MISSES_BEFORE_DIALLING_BLIND = 4;
  */
 const IDLE_PROBE_MS = 3_000;
 
-export type BridgeStatus = "disabled" | "idle" | "connecting" | "connected" | "port-conflict";
+export type BridgeStatus =
+  | "disabled"
+  | "idle"
+  | "connecting"
+  | "connected"
+  | "port-conflict"
+  | "needs-access";
 
 export interface BridgeClientDeps {
   getSettings: () => Settings;
@@ -211,6 +218,8 @@ export class BridgeClient {
   private countedTickPending = false;
   /** Latched by the probe when a stranger holds the port; see setPortConflict. */
   private portConflict = false;
+  /** Latched when the loopback origin is not granted; see hasHostAccess. */
+  private hostAccessDenied = false;
   private label = IS_CHROME ? "Chrome" : "Firefox";
   /** Whether `start()` has run, i.e. whether the settings we read are real ones. */
   private started = false;
@@ -319,11 +328,57 @@ export class BridgeClient {
   get status(): BridgeStatus {
     if (!this.isConfigured(this.deps.getSettings())) return "disabled";
     if (this.phase === "open") return "connected";
-    // Ranked above "idle" because it is the one state with a cause the user can
+    // Ranked above "idle" because these are the states with a cause the user can
     // act on. "Idle" says "no sidecar yet, keep waiting", which is the wrong
-    // advice when the truth is that another program holds the port.
-    if (this.phase === "closed") return this.portConflict ? "port-conflict" : "idle";
+    // advice when the truth is that another program holds the port, or that we
+    // were never allowed to look. Access outranks the conflict because without
+    // it no probe ran, so any latched conflict is evidence from before.
+    if (this.phase === "closed") {
+      if (this.hostAccessDenied) return "needs-access";
+      return this.portConflict ? "port-conflict" : "idle";
+    }
     return "connecting";
+  }
+
+  /**
+   * Whether we may talk to the sidecar at all.
+   *
+   * Site access to the loopback origin is optional on Chrome — `build.ts` moves
+   * host permissions to `optional_host_permissions` so the install prompt stays
+   * silent — and this page has no user gesture to ask with. The options page
+   * requests it when the bridge is switched on; all we can do here is notice.
+   *
+   * Deliberately *not* counted as a probe miss. A miss advances the blind-dial
+   * counter, and a blind dial is a failed WebSocket connect — the single input
+   * to Gecko's FailDelayManager. Counting a permission we can see we do not hold
+   * would build the very reconnect penalty the probe exists to avoid, and would
+   * keep rebuilding it for as long as the grant is missing.
+   */
+  private async hasHostAccess(): Promise<boolean> {
+    const granted = await hasOrigins(BRIDGE_ORIGINS);
+    if (this.hostAccessDenied !== !granted) {
+      this.hostAccessDenied = !granted;
+      if (!granted) {
+        console.warn(
+          "[tabglutton] the bridge has no site access to 127.0.0.1, so it cannot reach " +
+            "Gullet. Re-enable the bridge in Tabglutton's settings to be asked for it.",
+        );
+      }
+      this.deps.onStatusChange(this.status);
+    }
+    return granted;
+  }
+
+  /** The force path's equivalent of probeThenConnect: no probe, same gate. */
+  private async connectWithAccess(): Promise<void> {
+    if (!(await this.hasHostAccess())) {
+      this.scheduleIdleProbe();
+      return;
+    }
+    // Re-read, as everywhere: the check above is an await.
+    const current = this.deps.getSettings();
+    if (this.phase !== "closed" || !this.isConfigured(current)) return;
+    this.connect(current);
   }
 
   /**
@@ -376,7 +431,7 @@ export class BridgeClient {
     }
     if (force) {
       this.probeMisses = 0;
-      this.connect(settings);
+      void this.connectWithAccess();
       return;
     }
     void this.probeThenConnect(settings, true);
@@ -396,6 +451,14 @@ export class BridgeClient {
     this.probing = true;
     let result: ProbeResult = "silent";
     try {
+      if (!(await this.hasHostAccess())) {
+        // Re-armed rather than abandoned: the grant can arrive from the browser's
+        // own permissions UI, with nothing to notify us, and re-checking is a
+        // local call with no socket and no penalty behind it.
+        this.countedTickPending = false;
+        this.scheduleIdleProbe();
+        return;
+      }
       result = await probePort(settings.bridgePort);
     } finally {
       this.probing = false;
