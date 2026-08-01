@@ -1,4 +1,4 @@
-// Wire contract for the agent bridge (see BRIDGE.md). Imported by BOTH the
+// Wire contract for the agent bridge (see docs/BRIDGE.md). Imported by BOTH the
 // extension background and the Gullet sidecar, so it must stay pure: no
 // `browser.*`, no Bun, no DOM. WebCrypto is the one ambient dependency and is
 // present in every runtime that speaks this protocol.

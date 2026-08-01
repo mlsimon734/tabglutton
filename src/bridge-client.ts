@@ -1,5 +1,5 @@
 // Extension side of the agent bridge: dials the Gullet sidecar on loopback and
-// serves method calls with real `browser.*` APIs. See BRIDGE.md.
+// serves method calls with real `browser.*` APIs. See docs/BRIDGE.md.
 //
 // Nobody launches an app. While the page is awake, an idle loop re-probes the
 // port every few seconds (IDLE_PROBE_MS) so a sidecar started mid-session is
@@ -157,7 +157,7 @@ const PROBE_MISSES_BEFORE_DIALLING_BLIND = 4;
  * answering HTTP in microseconds. (The same browser was later caught failing
  * socket creation browser-wide — its own Push service logging
  * `NS_ERROR_SOCKET_CREATE_FAILED` — so the counter may not own that 48s
- * alone; see BRIDGE.md. Either way the mechanism stands: blind dials are the
+ * alone; see docs/BRIDGE.md. Either way the mechanism stands: blind dials are the
  * only thing we control that feeds the penalty.) Suspension resetting the
  * count is not a reliability bug in the valve; it is what keeps blind dials
  * rare. The valve

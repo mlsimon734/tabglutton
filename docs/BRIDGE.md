@@ -13,10 +13,12 @@ edited away, because the correction is usually worth more than the conclusion.
 Where to look instead: `gullet/README.md` to _run_ it, and the MCP schema in
 `gullet/src/tools.ts` — which is executable, so it is authoritative — for exact tool
 signatures. Code lives in `gullet/` (sidecar) and `src/bridge-protocol.ts`,
-`src/bridge-client.ts`, `src/bridge-methods.ts`, `src/undo-log.ts` (extension half).
+`src/bridge-client.ts`, `src/bridge-methods.ts`, `src/undo-log.ts` (extension half). Paths
+here are relative to the repo root, not to this file.
 
-Companion docs: PRODUCT.md (product register), DESIGN.md (visual system). UI for the bridge
-(badge states, consent surfaces) belongs in DESIGN.md when it lands.
+Companion docs: `docs/PRODUCT.md` (product register), `docs/DESIGN.md` (visual system),
+`AGENTS.md` at the root (contributor notes and the browser-quirk catalogue). UI for the
+bridge (badge states, consent surfaces) belongs in DESIGN.md when it lands.
 
 ## Why
 

@@ -94,7 +94,7 @@ that acts on a page rather than reading one. Nothing is ever closed that the und
 couldn't put back — if a tab can't be recorded, it's left open and reported as skipped.
 
 Setup lives in [`gullet/README.md`](gullet/README.md); the design rationale, wire protocol,
-and a long list of hard-won browser quirks are in [`BRIDGE.md`](BRIDGE.md).
+and a long list of hard-won browser quirks are in [`docs/BRIDGE.md`](docs/BRIDGE.md).
 
 ## Install
 

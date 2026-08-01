@@ -5,7 +5,7 @@ way to a coding agent. One side is an **MCP server over stdio**, spawned by what
 harness you use; the other is a **WebSocket server on loopback** that browsers running
 Tabglutton dial into.
 
-Architecture, trust boundary, and phasing live in [`../BRIDGE.md`](../BRIDGE.md). This file
+Architecture, trust boundary, and phasing live in [`../docs/BRIDGE.md`](../docs/BRIDGE.md). This file
 is the setup guide.
 
 ```
@@ -81,7 +81,7 @@ Diagnostics go to **stderr**; stdout is the MCP transport and carries nothing el
 
 Deliberately absent: navigate, click, type, evaluate. The agent can read what you already
 chose to open, file it, and clean up — it cannot act as you. Adding anything richer means
-revisiting the prompt-injection posture in `BRIDGE.md` first.
+revisiting the prompt-injection posture in `../docs/BRIDGE.md` first.
 
 `tabs_load` is the one tool that acts on a page rather than observing it, so it has its own
 switch — **Agent bridge → "Let agents load unloaded tabs"** in Tabglutton's settings — and

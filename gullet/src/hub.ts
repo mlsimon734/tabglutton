@@ -1,7 +1,7 @@
 // The browser-facing half of Gullet: a loopback WebSocket server that browsers
 // dial in to, plus request routing on top of the connections they establish.
 //
-// Security posture (BRIDGE.md): bound to 127.0.0.1 only, upgrade requests must
+// Security posture (docs/BRIDGE.md): bound to 127.0.0.1 only, upgrade requests must
 // carry an extension origin, and both ends prove knowledge of the shared token
 // against a nonce the other side chose before any method is served.
 

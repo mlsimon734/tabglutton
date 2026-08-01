@@ -1,0 +1,157 @@
+<!doctype html>
+<!--
+  Source for the Chrome Web Store small promo tile (exactly 440x280).
+
+  Rendered by `bun scripts/shoot-promo-tile.ts`, which inlines the two webfonts
+  and shoots this through headless Chrome. Authored at 1x and captured at 2x so
+  the downscale does the antialiasing.
+
+  Palette and type are lifted from popup/tokens.css deliberately rather than
+  imported: this page is shot outside the extension, and a tile that silently
+  drifted from the product would be worse than one that has to be updated by
+  hand. The values here are the *dark* theme — the store's own chrome is white,
+  so a bone tile disappears into it, and dark is a real Tabglutton surface
+  rather than an invented one.
+
+  Store rules this is built to: fill the canvas edge to edge, no transparency,
+  no shrunk-down UI screenshot, no call to action, no Chrome/Google branding.
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Tabglutton — promo tile</title>
+    <style>
+      @font-face {
+        font-family: "Vollkorn";
+        src: url("../../popup/fonts/Vollkorn.woff2") format("woff2");
+        font-weight: 400 900;
+        font-display: block;
+      }
+      @font-face {
+        font-family: "Geist";
+        src: url("../../popup/fonts/Geist.woff2") format("woff2");
+        font-weight: 100 900;
+        font-display: block;
+      }
+
+      :root {
+        --bone: #16110e;
+        --ink: #f0e6d6;
+        --muted: #9a8a7a;
+        --accent: #d89456;
+      }
+
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        width: 440px;
+        height: 280px;
+        overflow: hidden;
+      }
+
+      body {
+        background: var(--bone);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        -webkit-font-smoothing: antialiased;
+      }
+
+      /* The cockpit's paper-grain wash, warmed toward the accent. Without it the
+         field reads as flat black at thumbnail size. */
+      .tile {
+        position: relative;
+        width: 440px;
+        height: 280px;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 18px;
+        background:
+          radial-gradient(120% 90% at 50% 8%, rgba(216, 148, 86, 0.13), transparent 62%),
+          radial-gradient(90% 70% at 50% 100%, rgba(216, 148, 86, 0.05), transparent 70%),
+          var(--bone);
+      }
+
+      .mark {
+        width: 78px;
+        height: 78px;
+        color: var(--accent);
+        display: block;
+      }
+
+      .wordmark {
+        font-family: "Vollkorn", Georgia, serif;
+        /* Geist's ss01/ss03/cv11 are inherited elsewhere in the product and mean
+           something else in Vollkorn — see the Typography note in DESIGN.md. */
+        font-feature-settings: normal;
+        font-weight: 500;
+        font-size: 46px;
+        line-height: 1;
+        letter-spacing: -0.018em;
+        color: var(--ink);
+      }
+
+      .line {
+        font-family:
+          "Geist",
+          -apple-system,
+          system-ui,
+          sans-serif;
+        font-weight: 450;
+        font-size: 14px;
+        line-height: 1;
+        letter-spacing: 0.005em;
+        color: var(--muted);
+      }
+    </style>
+  </head>
+  <body>
+    <div class="tile">
+      <!-- icons/logo-mark.svg, inlined so the tile is one file. `currentColor`
+           tints the tab silhouette; the crumb dots keep their own dark brown so
+           they read as bites out of the accent. -->
+      <svg class="mark" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+        <defs>
+          <mask id="cookie-bite" maskUnits="userSpaceOnUse" x="0" y="0" width="64" height="64">
+            <rect width="64" height="64" fill="#fff" />
+            <circle cx="47.5" cy="17" r="6.5" fill="#000" />
+            <circle cx="44.5" cy="24" r="6.5" fill="#000" />
+            <circle cx="44" cy="31" r="6.5" fill="#000" />
+            <circle cx="49" cy="38" r="6.5" fill="#000" />
+            <circle cx="52" cy="21" r="4.2" fill="#000" />
+            <circle cx="52" cy="28" r="4.2" fill="#000" />
+            <circle cx="53" cy="35" r="4.2" fill="#000" />
+          </mask>
+        </defs>
+        <path
+          d="M12 56C9.8 56 8 54.2 8 52V20C8 18.3 9.3 17 11 17H13C16.5 17 16 10 19.5 10H26.5C30 10 29.5 17 33 17H50C51.1 17 52 17.9 52 19V52C52 54.2 50.2 56 48 56H12Z"
+          fill="currentColor"
+          stroke="#fff"
+          stroke-opacity="0.18"
+          stroke-width="0.55"
+          stroke-linejoin="round"
+          vector-effect="non-scaling-stroke"
+          mask="url(#cookie-bite)"
+        />
+        <g fill="#3b2113" opacity="0.84">
+          <circle cx="23" cy="13.5" r="1.5" />
+          <circle cx="18" cy="26" r="1.7" />
+          <circle cx="31" cy="21" r="1.45" />
+          <circle cx="21" cy="40" r="1.8" />
+          <circle cx="35" cy="44" r="1.55" />
+          <circle cx="28" cy="31" r="1.2" />
+        </g>
+      </svg>
+
+      <p class="wordmark">Tabglutton</p>
+      <p class="line">Duplicates out. Keepers into Obsidian.</p>
+    </div>
+  </body>
+</html>

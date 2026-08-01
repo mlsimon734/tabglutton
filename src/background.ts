@@ -140,7 +140,7 @@ const pendingClips = new Map<
   }
 >();
 
-// Agent bridge (BRIDGE.md). The runner owns the tab/undo surface; everything
+// Agent bridge (docs/BRIDGE.md). The runner owns the tab/undo surface; everything
 // that touches a page is handed down from here, so the bridge cannot reach any
 // capability the popup does not already have.
 const bridgeRunner = new BridgeMethodRunner({
@@ -444,7 +444,7 @@ interface ClipTabOptions {
    * Reload a discarded tab before extracting. True for user-initiated clips;
    * the agent bridge passes false, because waking a tab on the agent's behalf is
    * its own opt-in act there — the `tabs_load` method, which the user has to
-   * enable — and must never happen as a side effect of a read (see BRIDGE.md).
+   * enable — and must never happen as a side effect of a read (see docs/BRIDGE.md).
    */
   wake: boolean;
 }

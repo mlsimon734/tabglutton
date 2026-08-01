@@ -194,7 +194,7 @@ Setup is a token from the extension's settings page and one `.mcp.json` block:
 ```
 
 Source and the full wire protocol: https://github.com/mlsimon734/tabglutton
-(`BRIDGE.md` has the design rationale and a long catalogue of browser quirks that cost me
+(`docs/BRIDGE.md` has the design rationale and a long catalogue of browser quirks that cost me
 real time.)
 
 I'm the author. Interested in what breaks it.

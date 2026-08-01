@@ -232,7 +232,7 @@ AGENT BRIDGE
 Off by default; no socket is opened while it is off. When enabled it connects to
 ws://127.0.0.1:<port> only. Both ends authenticate against a user-generated shared token
 using a nonce challenge, so the token never crosses the wire, and the server validates the
-extension origin. Rationale and wire protocol: BRIDGE.md in the source.
+extension origin. Rationale and wire protocol: docs/BRIDGE.md in the source.
 
 Note that manifest.json declares content_security_policy.extension_pages explicitly. This
 is load-bearing: Firefox's default MV3 CSP includes upgrade-insecure-requests, which
@@ -346,7 +346,7 @@ Tick **nothing** in the collected-data categories, then affirm all three certifi
 | -------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Broad host permission triggers extra scrutiny                              | The justification above is the case: no declared content scripts, injection only on explicit user action. Expect one clarification round.        |
 | "Single purpose" challenged because the bridge looks like a second product | Answer with the single-purpose statement: the bridge exposes existing tab operations, it does not add a feature.                                 |
-| Opening a local WebSocket flagged as suspicious                            | Loopback only, off by default, token-authenticated, source public. Point at `BRIDGE.md`.                                                         |
+| Opening a local WebSocket flagged as suspicious                            | Loopback only, off by default, token-authenticated, source public. Point at `docs/BRIDGE.md`.                                                    |
 | First-submission review latency                                            | Budget up to a couple of weeks for a first item with broad host permissions. AMO is usually days. Do not schedule launch posts before both land. |
 
 ---
@@ -358,7 +358,7 @@ Tick **nothing** in the collected-data categories, then affirm all three certifi
 | Store  | Required                                                          |
 | ------ | ----------------------------------------------------------------- |
 | Chrome | **exactly 1280×800** or 640×400, PNG or JPEG, at least 1, up to 5 |
-| Chrome | small promo tile 440×280 PNG (needed for store placement)         |
+| Chrome | small promo tile 440×280 PNG — ✅ `promo-tile-440x280.png`        |
 | AMO    | PNG/JPEG, no fixed size; 1280×800 is a good default               |
 | Both   | icon 128×128 PNG — `icons/icon-chomp-128.png` already exists      |
 
@@ -368,8 +368,7 @@ pair.
 
 ### Shot list
 
-Two screenshots exist; the store slots take five and the missing three are the ones that
-actually sell it.
+All five slots are filled. The set lives in `docs/media/store/`.
 
 1. ✅ **Devour cockpit, light** — tabs grouped by host, duplicates flagged. Lead image.
 2. ✅ **Devour cockpit, dark** — same view, proves the theme.
@@ -379,15 +378,47 @@ actually sell it.
 4. ✅ **Cockpit inspector on one tab** — `cockpit-inspector-{light,dark}-1280x800.png`.
    Inspector focused on an arXiv paper, showing `test / Clippings / ….md` and the
    frontmatter preview. This is what makes "files into Obsidian" concrete.
-5. ⬜ **Obsidian, immediately after a Devour** — the clipping open in the vault. Sells the
-   outcome rather than the mechanism. Worth more than any UI shot. Native app, so it has to
-   be captured by hand.
+5. ✅ **Obsidian, immediately after a Devour** — `obsidian-note-1280x800.png`. The
+   `kepano/defuddle` clipping open in the `test` vault, dark, with the Properties block
+   populated (title, source, author, created, description, `clippings` tag). Sells the
+   outcome rather than the mechanism. Native app, so it was captured by hand; the
+   full-resolution original is kept as `obsidian-note-original.jpg` because unlike the
+   other four it cannot be regenerated from a script. Downscale recipe:
+   `sips -s format png -Z 1280 in.jpg --out a.png && sips -s format png -c 800 1280 a.png
+--out out.png` — the `-s format png` is load-bearing, since `sips` otherwise writes
+   JPEG bytes under a `.png` name and only warns.
+
+   **Two things to decide before this ships.** The note's filename is the most prominent
+   text in the frame, and it reads `kepanodefuddle Get the main content of any page as
+Markdown.` — the slash stripped with no separator. That is correct behaviour and matches
+   Obsidian Web Clipper exactly (see `sanitizeFileName` in `src/clip-format.ts`), but it is
+   the least flattering filename the product produces and it is the first thing a viewer's
+   eye lands on. Second, the file tree beside it carries test detritus — `Web browser 1/2/3`,
+   `Service worker 1`, a bare `y`, three copies of the same Dario Amodei note. Cleaning the
+   `test` vault's `Clippings/` and `inbox/` and re-shooting on a subject whose title has no
+   `/` in it would fix both; shipping as-is is defensible but concedes the first impression.
 
 **Popup sizing is unresolved.** The popup is 600px wide, so `popup-*.png` is 1200×1200 and
 does not match Chrome's exact 1280×800 requirement. Either composite it onto a 1280×800
 `--bone` background, or drop it from the Chrome listing and use it on AMO only (AMO has no
 fixed size). Compositing is also the point at which the raw-vs-composited decision below
 has to be made for the whole set.
+
+### Promo tile
+
+`docs/media/promo-tile.html` → `bun scripts/shoot-promo-tile.ts` → `promo-tile-440x280.png`.
+Committed source rather than a one-off export, so the tile can be re-rendered when the
+palette or wordmark moves. It uses the **dark** theme: the store's own chrome is white, so a
+bone tile dissolves into it, and dark is a real Tabglutton surface rather than an invented
+one. Built to the store's rules — canvas filled edge to edge, no transparency, no shrunk-down
+UI screenshot, no call to action, no Chrome/Google branding.
+
+Two traps the script exists to hold, both documented in its header: `@font-face` with a
+relative URL fetches nothing from a `file://` page (every such document is its own opaque
+origin, so the tile silently renders in Times), and Chrome 151's `--headless` writes the
+screenshot in about a second and then sits for two to three minutes before exiting — so the
+script polls the PNG for a stable size and kills Chrome rather than awaiting it. Warm run is
+~2.5s and byte-identical between runs.
 
 **Capture method.** `scratch-chrome/shoot-store.ts` (dark) and `shoot-light.ts` (light)
 drive CDP's own screenshot path — exact pixels, no window chrome, no Screen Recording
@@ -414,7 +445,7 @@ the cockpit emptying a real backlog (filter → select → Devour → notes land
 [ ] bun run check          # typecheck + format + lint + test
 [ ] bun run package        # both zips + source zip
 [ ] Capture the three missing screenshots; resize all to 1280x800
-[ ] Build the 440x280 Chrome promo tile
+[x] Build the 440x280 Chrome promo tile — `bun scripts/shoot-promo-tile.ts`
 [ ] Commit and push PRIVACY.md so the policy URL resolves on main
 
 AMO

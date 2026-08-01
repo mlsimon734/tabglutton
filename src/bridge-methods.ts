@@ -1,4 +1,4 @@
-// Extension-side implementations of the five bridge methods (see BRIDGE.md).
+// Extension-side implementations of the five bridge methods (see docs/BRIDGE.md).
 // Everything that touches the real page — extraction, the Obsidian handoff — is
 // injected as a dependency by background.ts, which already owns that machinery;
 // this module only adds the tab/undo-log surface the agent sees.
@@ -655,7 +655,7 @@ export class BridgeMethodRunner {
   private async tabsClose(raw: unknown): Promise<TabsCloseResult> {
     const { tabIds } = parseTabsCloseParams(raw);
     // One listing rather than a `tabs.get` per id: a triage run closes tabs by
-    // the hundred (BRIDGE.md sizes one at ~180), and that many IPC round-trips
+    // the hundred (docs/BRIDGE.md sizes one at ~180), and that many IPC round-trips
     // just to build undo entries is the bulk of the call.
     const byId = new Map((await queryAllTabs()).filter(hasTabId).map((t) => [t.id, t] as const));
     const missing = tabIds.filter((id) => !byId.has(id));

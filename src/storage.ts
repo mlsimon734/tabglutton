@@ -21,7 +21,7 @@ export interface Settings {
    */
   optionsInTab: boolean;
   onboardingComplete: boolean;
-  /** Agent bridge (see BRIDGE.md). Off until the user opts in on the options page. */
+  /** Agent bridge (see docs/BRIDGE.md). Off until the user opts in on the options page. */
   bridgeEnabled: boolean;
   bridgePort: number;
   /** Shared secret; also pasted into Gullet's env. Empty until first generated. */
