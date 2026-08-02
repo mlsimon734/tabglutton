@@ -400,7 +400,7 @@ Markdown.` — the slash stripped with no separator. That is correct behaviour a
    `/` in it would fix both; shipping as-is is defensible but concedes the first impression.
 
 **Popup sizing — decided: the popup ships on AMO, not on Chrome.** The popup is 600px wide,
-so `popup-{light,dark}.png` is 1200×1200 and cannot satisfy Chrome's *exact* 1280×800. AMO
+so `popup-{light,dark}.png` is 1200×1200 and cannot satisfy Chrome's _exact_ 1280×800. AMO
 has no fixed size, so it goes there unchanged.
 
 The Chrome five therefore become cockpit light, cockpit dark, inspector light, inspector
@@ -408,7 +408,7 @@ dark, and the Obsidian note — every one a native 1280×800 capture, verified w
 rather than trusted from the filename. Be clear about what that spends: the popup's slot
 goes to a second theme variant of a view already shown, and on merit the popup is the
 better image — it is the surface a user touches daily, and it is now absent from the
-Chrome listing entirely. It is traded away because the alternative is worse *right now*:
+Chrome listing entirely. It is traded away because the alternative is worse _right now_:
 compositing onto a `--bone` 1280×800 canvas would make it the only padded image among four
 full-bleed ones, and the "raw vs composited for the whole set" decision that would force
 was never actually written down — the sentence that used to sit here pointed at a section
