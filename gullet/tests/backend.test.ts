@@ -237,7 +237,18 @@ describe("hub/peer election", () => {
     stranger.listen();
 
     const sup = track(new Supervisor({ port, token: TOKEN, startTimeoutMs: 300 }));
-    await expect(sup.start()).rejects.toThrow(String(port));
+    // Start a tool call before the first sweep publishes its fault. It must use
+    // the same bounded wait as start(), then re-read the reason instead of
+    // parking forever on an election that keeps retrying underneath.
+    const [startResult, callResult] = await Promise.allSettled([sup.start(), sup.connections()]);
+    expect(startResult.status).toBe("rejected");
+    expect(String(startResult.status === "rejected" ? startResult.reason : "")).toContain(
+      String(port),
+    );
+    expect(callResult.status).toBe("rejected");
+    expect(String(callResult.status === "rejected" ? callResult.reason : "")).toContain(
+      "Could not establish the Tabglutton bridge",
+    );
     // Published, not just thrown: tool calls read this per call, so they answer
     // with the reason rather than waiting on an election with nothing to win.
     expect(sup.fault()?.code).toBe("unsupported");

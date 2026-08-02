@@ -95,13 +95,13 @@ function sanitizeFileName(fileName: string, platform: FilePlatform): string {
     if (platform === "win") {
       sanitized = sanitized
         // DOS device names, still unwritable, with or without an extension.
-        .replace(/^(con|prn|aux|nul|com[0-9]|lpt[0-9])(\..*)?$/i, "_$1$2")
-        // Windows drops trailing dots and spaces, so Obsidian would afterwards
-        // be looking for a file under a name it did not get written under.
-        .replace(/[\s.]+$/, "");
+        .replace(/^(con|prn|aux|nul|com[0-9]|lpt[0-9])(\..*)?$/i, "_$1$2");
     }
   }
   sanitized = sanitized.replace(/^\.+/, "").trim().slice(0, 245);
+  // Truncation can expose a trailing dot or space even when the original title
+  // did not end with one. Windows silently drops both on write.
+  if (platform === "win") sanitized = sanitized.replace(/[\s.]+$/, "");
   if (sanitized.length === 0) sanitized = "Untitled";
   return sanitized;
 }

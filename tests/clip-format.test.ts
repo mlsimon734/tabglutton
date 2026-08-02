@@ -518,6 +518,11 @@ describe("obsidianClipRequest - sanitizeFileName per platform", () => {
     expect(nameOn("Markdown.", "mac")).toBe("Markdown.");
   });
 
+  test("Windows trims a dot or space exposed by truncation", () => {
+    expect(nameOn(`${"a".repeat(244)}.tail`, "win")).toBe("a".repeat(244));
+    expect(nameOn(`${"a".repeat(244)} tail`, "win")).toBe("a".repeat(244));
+  });
+
   test("a title that sanitizes away still falls back to Untitled", () => {
     expect(nameOn(`<>"?*`, "win")).toBe("Untitled");
   });

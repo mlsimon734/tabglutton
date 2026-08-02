@@ -228,6 +228,11 @@ export class BridgeClient {
   private portConflict = false;
   /** Latched when the loopback origin is not granted; see hasHostAccess. */
   private hostAccessDenied = false;
+  /**
+   * One permission check per background-page lifetime. Calling
+   * permissions.contains on every 3s probe keeps a Chrome MV3 worker awake.
+   */
+  private hostAccessGrant: Promise<boolean> | null = null;
   private label = IS_CHROME ? "Chrome" : "Firefox";
   /** Whether `start()` has run, i.e. whether the settings we read are real ones. */
   private started = false;
@@ -252,6 +257,12 @@ export class BridgeClient {
       this.fastRetries = 0;
       this.tick();
     });
+    const permissionsChanged = (): void => {
+      this.hostAccessGrant = null;
+      if (this.started && this.phase === "closed") this.tick();
+    };
+    browser.permissions.onAdded.addListener(permissionsChanged);
+    browser.permissions.onRemoved.addListener(permissionsChanged);
   }
 
   /**
@@ -372,7 +383,7 @@ export class BridgeClient {
    * keep rebuilding it for as long as the grant is missing.
    */
   private async hasHostAccess(): Promise<boolean> {
-    const granted = await hasOrigins(BRIDGE_ORIGINS);
+    const granted = await (this.hostAccessGrant ??= hasOrigins(BRIDGE_ORIGINS));
     if (this.hostAccessDenied !== !granted) {
       this.hostAccessDenied = !granted;
       if (!granted) {
@@ -468,9 +479,10 @@ export class BridgeClient {
     let result: ProbeResult = "silent";
     try {
       if (!(await this.hasHostAccess())) {
-        // Re-armed rather than abandoned: the grant can arrive from the browser's
-        // own permissions UI, with nothing to notify us, and re-checking is a
-        // local call with no socket and no penalty behind it.
+        // Permission events invalidate the cached denial and tick immediately.
+        // The idle loop may continue while this page is awake, but it only
+        // awaits the cached result — it makes no WebExtension API call that
+        // would keep a Chrome MV3 worker resident.
         this.countedTickPending = false;
         this.scheduleIdleProbe();
         return;

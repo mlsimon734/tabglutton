@@ -14,6 +14,7 @@ import {
   classifyBridgeProbe,
   errorMessage,
   isBridgePort,
+  BridgeRequestError,
   type BridgeError,
   type BridgeMethod,
   type BridgeProbeIdentity,
@@ -106,15 +107,27 @@ export class Supervisor implements BridgeBackend {
    * settled by then — the election keeps going, and `fault()` tracks it.
    */
   async start(): Promise<void> {
-    const budget = this.options.startTimeoutMs ?? ELECTION_START_TIMEOUT_MS;
     this.settling = this.elect();
+    await this.waitForSettling();
+  }
+
+  /** Bound calls that land while an election is still trying to settle. */
+  private async waitForSettling(): Promise<void> {
+    const budget = this.options.startTimeoutMs ?? ELECTION_START_TIMEOUT_MS;
+    const settling = this.settling;
+    let timer: ReturnType<typeof setTimeout> | null = null;
     const settled = await Promise.race([
-      this.settling.then(() => true),
-      delay(budget).then(() => false),
+      settling.then(() => true),
+      new Promise<boolean>((resolve) => {
+        timer = setTimeout(() => resolve(false), budget);
+      }),
     ]);
+    if (timer !== null) clearTimeout(timer);
     if (settled) return;
-    throw new Error(
-      this.electionFault?.message ??
+    const fault = this.fault();
+    throw new BridgeRequestError(
+      fault?.code ?? "unsupported",
+      fault?.message ??
         `No Tabglutton bridge candidate settled within ${budget}ms ` +
           `(tried 127.0.0.1:${this.candidatePorts().join(", ")}).`,
     );
@@ -251,14 +264,14 @@ export class Supervisor implements BridgeBackend {
   // hub it is attached to, a hub applies it here. No caller gets a knob — the
   // wait lives at the layer that owns it, so the roles cannot diverge.
   async connections(): Promise<ConnectionSummary[]> {
-    await this.settling;
+    await this.waitForSettling();
     if (this.peer) return this.peer.connections();
     if (!this.hub) return [];
     return this.hub.connectionsWithin(this.options.connectWaitMs ?? BRIDGE_CONNECT_WAIT_MS);
   }
 
   async request(connectionId: string, method: BridgeMethod, params: unknown): Promise<unknown> {
-    await this.settling;
+    await this.waitForSettling();
     if (this.peer) return this.peer.request(connectionId, method, params);
     if (this.hub) return this.hub.request(connectionId, method, params);
     throw new Error("No bridge backend is available.");
