@@ -5,7 +5,7 @@
 **Devour a sprawling tab list.** Close duplicates, file the keepers into Obsidian —
 or hand the whole backlog to a coding agent and let it triage.
 
-For [Zen Browser](https://zen-browser.app/), Firefox, and Chrome.
+For Firefox based browsers like [Zen Browser](https://zen-browser.app/) and Chromium browsers like [Helium](https://helium.computer/).
 
 [![ci](https://github.com/mlsimon734/tabglutton/actions/workflows/ci.yml/badge.svg)](https://github.com/mlsimon734/tabglutton/actions/workflows/ci.yml)
 [![license](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
@@ -35,12 +35,12 @@ For [Zen Browser](https://zen-browser.app/), Firefox, and Chrome.
 
 ## The problem
 
-You open thirty tabs a day out of mild interest. Some are honest duplicates — the same
-thread reached from two links, the same repo opened twice. Most are things you've already
-mentally finished but don't want to lose. They belong in a notes vault, not in the tab
-strip. So they sit there, and by Friday there are four hundred of them.
-
-Tabglutton does three things about that.
+Too much content, so little time! Tabglutton is for those voracious consumers of information
+who open dozens of blog posts, X posts, and articles every day out of interest where discovery
+outpaces ingestion. Tabglutton helps manage the feast of tabs you may or may not want to
+imbibe, acting as a curator, deduplicator, and dashboard. It even connects to your Obsidian vault
+to automate second brain extension, acting as a batch ingest version of Obsidian Web Clipper.
+Connect to your agent of choice to triage high signal content, determined by your existing interests and pursuits.
 
 ## What it does
 
@@ -61,6 +61,11 @@ Select tabs and hit **Devour**. Each one is read through
 [Defuddle](https://github.com/kepano/defuddle) — the same extractor behind Obsidian's own
 Web Clipper — formatted as markdown with frontmatter (title, source URL, author, site,
 published date), filed into your vault under `Clippings/`, and closed.
+
+> [!NOTE]
+> You can include the Clippings directory in your main vault, or put it in a secondary
+> agent managed vault (LLM-wiki style), where you can do additional agent-driven synthesis to avoid polluting
+> your primary vault with noise.
 
 The full-screen **Devour cockpit** (`Alt+Shift+D`) is the workspace for this: tabs grouped
 by host, an inspector previewing exactly where each note will land, and keyboard triage
