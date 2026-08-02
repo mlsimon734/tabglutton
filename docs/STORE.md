@@ -372,7 +372,8 @@ All five slots are filled. The set lives in `docs/media/store/`.
 
 1. ✅ **Devour cockpit, light** — tabs grouped by host, duplicates flagged. Lead image.
 2. ✅ **Devour cockpit, dark** — same view, proves the theme.
-3. ✅ **Popup with duplicates found** — `popup-{light,dark}.png`. 600×600 logical at 2×,
+3. ✅ **Popup with duplicates found** — `popup-{light,dark}.png`, **AMO only**; 1200×1200
+   cannot meet Chrome's exact 1280×800, see the sizing note below. 600×600 logical at 2×,
    which is the height Chrome actually caps a popup at. Shows the Dedup pill reading 5 and
    the three `kepano/defuddle` rows (one `utm`-tagged) that produce it.
 4. ✅ **Cockpit inspector on one tab** — `cockpit-inspector-{light,dark}-1280x800.png`.
@@ -398,11 +399,26 @@ Markdown.` — the slash stripped with no separator. That is correct behaviour a
    `test` vault's `Clippings/` and `inbox/` and re-shooting on a subject whose title has no
    `/` in it would fix both; shipping as-is is defensible but concedes the first impression.
 
-**Popup sizing is unresolved.** The popup is 600px wide, so `popup-*.png` is 1200×1200 and
-does not match Chrome's exact 1280×800 requirement. Either composite it onto a 1280×800
-`--bone` background, or drop it from the Chrome listing and use it on AMO only (AMO has no
-fixed size). Compositing is also the point at which the raw-vs-composited decision below
-has to be made for the whole set.
+**Popup sizing — decided: the popup ships on AMO, not on Chrome.** The popup is 600px wide,
+so `popup-{light,dark}.png` is 1200×1200 and cannot satisfy Chrome's *exact* 1280×800. AMO
+has no fixed size, so it goes there unchanged.
+
+The Chrome five therefore become cockpit light, cockpit dark, inspector light, inspector
+dark, and the Obsidian note — every one a native 1280×800 capture, verified with `sips`
+rather than trusted from the filename. Be clear about what that spends: the popup's slot
+goes to a second theme variant of a view already shown, and on merit the popup is the
+better image — it is the surface a user touches daily, and it is now absent from the
+Chrome listing entirely. It is traded away because the alternative is worse *right now*:
+compositing onto a `--bone` 1280×800 canvas would make it the only padded image among four
+full-bleed ones, and the "raw vs composited for the whole set" decision that would force
+was never actually written down — the sentence that used to sit here pointed at a section
+below that does not exist, and the promo tile follows instead. Do not go looking for it.
+
+Worth doing after launch, not before: replace `cockpit-inspector-dark` with a real popup
+shot — a hand-captured 1280×800 browser window with the popup anchored under the toolbar
+icon, the way `obsidian-note` was taken. Chrome's toolbar popup is browser UI and not
+reachable from CDP, so it cannot be scripted, and store listings are editable at any time.
+That is a better five than this one; it is not worth blocking 0.2.0.
 
 ### Promo tile
 
@@ -449,8 +465,8 @@ the cockpit emptying a real backlog (filter → select → Devour → notes land
 [ ] Merge to main, then tag v0.2.0 there — tagging the release branch before a
     squash merge leaves the tag on a commit main never gets
 [ ] bun run package        # both zips + source zip, from the tagged commit
-[x] Screenshots captured — all 1280x800 except the popup pair (1200x1200; §5
-    has the composite-or-drop decision, and Chrome requires exactly 1280x800)
+[x] Screenshots captured and sized — Chrome takes the five native 1280x800
+    shots; the popup pair (1200x1200) goes to AMO only, decided in §5
 [x] Build the 440x280 Chrome promo tile — `bun scripts/shoot-promo-tile.ts`
 [ ] Commit and push PRIVACY.md so the policy URL resolves on main
 
@@ -459,14 +475,14 @@ AMO
 [ ] Attach tabglutton-source-0.2.0.zip
 [ ] Paste reviewer notes (§3)
 [ ] Confirm data collection = none on every category
-[ ] Fill listing copy, category Tabs, screenshots
+[ ] Fill listing copy, category Tabs, screenshots (all seven, popup pair included)
 
 Chrome
 [ ] Pay the $5 developer registration fee if not already registered
 [ ] Upload tabglutton-chrome-0.2.0.zip
 [ ] Paste all seven permission justifications + single purpose statement
 [ ] Declare no remote code, no data collection, tick all three certifications
-[ ] Fill listing copy, category Workflow & Planning, screenshots, promo tile
+[ ] Fill listing copy, category Workflow & Planning, the five 1280x800 shots, promo tile
 
 After both are live
 [ ] Update README Install section: replace "Not in the add-on stores yet" with store links
