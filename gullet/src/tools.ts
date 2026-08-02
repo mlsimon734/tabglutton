@@ -1,4 +1,4 @@
-// The MCP tool surface (BRIDGE.md "Tool surface (v1)") and its mapping onto
+// The MCP tool surface (docs/BRIDGE.md "Tool surface (v1)") and its mapping onto
 // bridge methods. Read + file + close, and nothing else: no navigation, no
 // clicking, no typing, no arbitrary script execution.
 

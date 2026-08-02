@@ -5,6 +5,7 @@ import {
   normalizeBaseFolder,
   obsidianClipRequest,
   type ClipPayload,
+  type FilePlatform,
 } from "../src/clip-format.js";
 import { BUILT_IN_RULES, type SiteRule } from "../src/site-rules.js";
 
@@ -460,5 +461,69 @@ describe("obsidianClipRequest - sanitizeFileName robustness", () => {
       "legacy-uri",
     );
     expect(fileSegment(url).length).toBe(245);
+  });
+});
+
+describe("obsidianClipRequest - sanitizeFileName per platform", () => {
+  function nameOn(title: string, platform: FilePlatform): string {
+    const { url } = obsidianClipRequest(
+      makePayload({ title }),
+      "",
+      "x",
+      null,
+      "legacy-uri",
+      "Clippings",
+      platform,
+    );
+    return decodeURIComponent(url.match(/file=([^&]+)/)![1]!).replace(/^Clippings\//, "");
+  }
+
+  test("Obsidian's own reserved characters go on every platform", () => {
+    for (const platform of ["win", "mac", "other"] as const) {
+      expect(nameOn("a#b|c^d[e]f", platform)).toBe("abcdef");
+    }
+  });
+
+  test("/ and : go on every platform", () => {
+    for (const platform of ["win", "mac", "other"] as const) {
+      expect(nameOn("a/b:c", platform)).toBe("abc");
+    }
+  });
+
+  test("Windows strips the characters Windows rejects", () => {
+    expect(nameOn(`a<b>c"d\\e?f*g`, "win")).toBe("abcdefg");
+  });
+
+  test("macOS keeps them, matching Obsidian Web Clipper", () => {
+    expect(nameOn(`a<b>c"d\\e?f*g`, "mac")).toBe(`a<b>c"d\\e?f*g`);
+  });
+
+  test("Linux and the rest get the Windows set, for vaults that sync", () => {
+    expect(nameOn(`a<b>c"d\\e?f*g`, "other")).toBe("abcdefg");
+  });
+
+  test("Windows rewrites reserved DOS device names", () => {
+    expect(nameOn("CON", "win")).toBe("_CON");
+    expect(nameOn("nul.txt", "win")).toBe("_nul.txt");
+    expect(nameOn("com3", "win")).toBe("_com3");
+    // Only the whole name is reserved; a prefix is not.
+    expect(nameOn("Console tricks", "win")).toBe("Console tricks");
+    expect(nameOn("CON", "mac")).toBe("CON");
+  });
+
+  test("Windows trims trailing dots, which it silently drops on write", () => {
+    // Obsidian appends ".md", so the note would be looked up as "Markdown..md"
+    // and written as "Markdown.md".
+    expect(nameOn("Markdown.", "win")).toBe("Markdown");
+    expect(nameOn("Markdown.", "mac")).toBe("Markdown.");
+  });
+
+  test("Windows trims a dot or space exposed by truncation", () => {
+    expect(nameOn(`${"a".repeat(244)}.tail`, "win")).toBe("a".repeat(244));
+    expect(nameOn(`${"a".repeat(244)} tail`, "win")).toBe("a".repeat(244));
+  });
+
+  test("a title that sanitizes away still falls back to Untitled", () => {
+    expect(nameOn(`<>"?*`, "win")).toBe("Untitled");
   });
 });

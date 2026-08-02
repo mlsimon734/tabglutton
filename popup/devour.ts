@@ -7,6 +7,8 @@ import type {
   GetScopedTabsResponse,
   PopupTab,
 } from "../src/background.js";
+import { openOptionsUi } from "../src/open-options.js";
+import { CLIP_ORIGINS, requestOrigins } from "../src/permissions.js";
 import { pickRule, type SiteRule } from "../src/site-rules.js";
 import type { Settings } from "../src/storage.js";
 import {
@@ -447,7 +449,7 @@ function renderInspectorSetup(): HTMLElement {
   btn.type = "button";
   btn.className = "primary";
   btn.textContent = "Open settings";
-  btn.addEventListener("click", () => void browser.runtime.openOptionsPage());
+  btn.addEventListener("click", () => void openOptionsUi());
   div.append(h, p, btn);
   return div;
 }
@@ -677,6 +679,17 @@ async function clipSelected(): Promise<void> {
     return;
   }
 
+  // The first await in this handler, deliberately: Chrome gates
+  // permissions.request on the click's transient activation, so any earlier
+  // await would spend it and the request would reject as gesture-less. Held
+  // already (always, on Firefox) this resolves true without showing anything.
+  if (!(await requestOrigins(CLIP_ORIGINS))) {
+    state.clipping = true;
+    clipCurrentBtn.disabled = true;
+    restore("Needs site access", 2600);
+    return;
+  }
+
   state.clipping = true;
   clipCurrentBtn.disabled = true;
   setDevourProgress(0, queue.length);
@@ -868,7 +881,7 @@ document.addEventListener("keydown", (e) => {
 });
 
 dedupBtn.addEventListener("click", () => void runDedup());
-optionsBtn.addEventListener("click", () => void browser.runtime.openOptionsPage());
+optionsBtn.addEventListener("click", () => void openOptionsUi());
 filterInput.addEventListener("input", () => {
   state.filter = filterInput.value;
   state.stickyHostOrder = null;
@@ -911,11 +924,14 @@ async function loadLogoMark(): Promise<void> {
   }
 }
 
-browser.runtime.onMessage.addListener(async (raw: unknown) => {
+// Keep this listener synchronous. An async listener returns a Promise for every
+// message, including messages it does not handle, which can claim the response
+// before the background page answers requests such as `get-scoped-tabs`.
+browser.runtime.onMessage.addListener((raw: unknown): void => {
   if (!raw || typeof raw !== "object") return;
   const msg = raw as { type?: string; completed?: number; total?: number };
   if (msg.type === "refresh-cockpit") {
-    await refresh();
+    void refresh();
   } else if (
     msg.type === "clip-progress" &&
     typeof msg.completed === "number" &&

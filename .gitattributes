@@ -1,0 +1,4 @@
+# `bun run package` builds the AMO source zip with `git archive HEAD`, and AMO
+# only needs what builds the extension. Without this the store screenshots ride
+# along and the source zip goes from ~260 KB to ~4.7 MB.
+docs/media/ export-ignore

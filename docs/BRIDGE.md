@@ -13,10 +13,12 @@ edited away, because the correction is usually worth more than the conclusion.
 Where to look instead: `gullet/README.md` to _run_ it, and the MCP schema in
 `gullet/src/tools.ts` — which is executable, so it is authoritative — for exact tool
 signatures. Code lives in `gullet/` (sidecar) and `src/bridge-protocol.ts`,
-`src/bridge-client.ts`, `src/bridge-methods.ts`, `src/undo-log.ts` (extension half).
+`src/bridge-client.ts`, `src/bridge-methods.ts`, `src/undo-log.ts` (extension half). Paths
+here are relative to the repo root, not to this file.
 
-Companion docs: PRODUCT.md (product register), DESIGN.md (visual system). UI for the bridge
-(badge states, consent surfaces) belongs in DESIGN.md when it lands.
+Companion docs: `docs/PRODUCT.md` (product register), `docs/DESIGN.md` (visual system),
+`AGENTS.md` at the root (contributor notes and the browser-quirk catalogue). UI for the
+bridge (badge states, consent surfaces) belongs in DESIGN.md when it lands.
 
 ## Why
 
@@ -51,20 +53,19 @@ wanted, that is a different product (and Claude-in-Chrome already exists for Chr
 ## Architecture
 
 ```
-┌────────────┐  MCP (stdio)  ┌─────────────┐  WebSocket (127.0.0.1:4589)  ┌───────────────┐
-│ Claude Code │◄────────────►│   Gullet    │◄────────────────────────────►│  Tabglutton   │
-│ / any MCP   │              │  (sidecar,  │◄───────────────┐             │  background   │
-│   client    │              │  Bun + TS)  │                └────────────►│  (Zen/FF and/ │
-└────────────┘              └─────────────┘   multiple browsers may dial in │  or Chrome)   │
-                                                                          └───────────────┘
+┌────────────┐  MCP (stdio)  ┌─────────────┐  WebSocket (auto loopback)  ┌───────────────┐
+│ Claude Code │◄────────────►│   Gullet    │◄───────────────────────────►│  Tabglutton   │
+│ / any MCP   │              │  (sidecar,  │◄──────────────┐             │  background   │
+│   client    │              │  Bun + TS)  │               └────────────►│ (Zen/FF/Chrome)│
+└────────────┘               └─────────────┘  multiple browsers may dial  └───────────────┘
 ```
 
 - **Gullet** is a small Bun/TypeScript process living in this repo (`gullet/`). One side is
-  an MCP server over stdio; the other is a WebSocket server bound to loopback on a fixed
-  default port (**4589** — GLUT on a phone keypad), configurable.
-- **The extension background** runs a reconnect loop that dials the port. When no sidecar
-  is running the socket just fails cheaply and the extension idles. When a connection is
-  live, the toolbar badge indicates it (design TBD in DESIGN.md).
+  an MCP server over stdio; the other is a WebSocket server bound to one port from the
+  shared automatic candidate set. A fixed-port override remains available.
+- **The extension background** runs a reconnect loop that probes the same set. When no sidecar
+  is running the extension idles without opening WebSockets against empty ports. When a
+  connection is live, the toolbar badge indicates it.
 - **MCP tool calls** are translated 1:1 into JSON-RPC-style messages over the socket; the
   extension executes them with real `browser.*` APIs and returns results.
 - Multiple browsers (e.g. Zen and a Chrome profile) can be connected at once. The sidecar
@@ -123,6 +124,223 @@ session, every session start re-runs port discovery, and discovery-by-polling ra
 first call's connect wait. The probe loop above shrinks that race to a few seconds; a hub
 that outlives sessions removes it. See "Session-start connect latency" under Open
 questions for the sketch.
+
+## Automatic candidate-port discovery
+
+The original bridge used one configured port. That was enough for many browsers and many
+agent sessions — both are multiplexed behind one hub — but it makes the port itself shared
+configuration between two runtimes that cannot read each other's settings. It also makes a
+changed default sticky in exactly the wrong way: extension storage preserves the old value,
+and a sidecar already in memory preserves the old code.
+
+This stopped being hypothetical on 2026-07-31. A Claude session started before the default
+moved was still serving the old, unmarked Gullet response on **4588**; a newer Codex session
+was serving the current marked endpoint on **4589**. Chrome had persisted `bridgePort: 4588`,
+so its new extension code correctly classified the old generic `403 Forbidden` as foreign
+and displayed “Port in use by another program,” while the compatible hub sat one candidate
+away. Nothing about the hub prevented Chrome and Zen connecting together — rendezvous had
+split across versions.
+
+The implementation is an **automatic candidate mode**, not an arbitrary port scan and not a
+contiguous numeric range. The fixed-port path remains for debugging, policy, and deliberate
+isolation.
+
+### User and configuration contract
+
+- The options page offers **Automatic (recommended)** and **Fixed port**. Automatic is the
+  default for new installs; the numeric input is shown only for the fixed mode.
+- Extension storage keeps the concerns separate:
+  - `bridgePortMode: "auto" | "fixed"` is the user's setting.
+  - `bridgePort` is authoritative only in fixed mode.
+  - `bridgeLastPort` is a separate, non-setting `storage.local` cache of the last
+    authenticated automatic endpoint. It is excluded from settings change handling, may
+    improve ordering, and must never narrow the candidate set or become configuration.
+- Gullet mirrors that contract. No `--port` flag and no `TABGLUTTON_PORT` means automatic
+  mode. A numeric `--port` or environment value pins exactly that port. `--port auto` may be
+  accepted for explicitness, but generated snippets should simply omit the flag.
+- Existing numeric MCP configurations stay fixed: Gullet cannot tell whether an explicit
+  `--port 4588` was once copied as a default or deliberately chosen. Entering automatic mode
+  requires removing that flag or environment value. The options page's automatic-mode
+  snippet must not put it back.
+- The token remains the bridge realm. Browsers and sidecars with the same token converge on
+  one hub and can be selected by `browser` / `connectionId`; a different token may establish
+  a separate hub on another candidate without gaining access to the first.
+
+### Settings migration
+
+The extension _can_ distinguish historical defaults from likely custom choices, so its
+one-time migration is:
+
+1. If `bridgePortMode` already exists, preserve it.
+2. If it is absent and `bridgePort` is a known historical default (`4588` or `4589`), persist
+   automatic mode.
+3. If it is absent and `bridgePort` is any other valid value, persist fixed mode with that
+   value unchanged.
+4. Preserve the token, enablement, and load permission exactly; changing discovery mode is
+   not token rotation.
+
+This intentionally treats someone who manually chose a number that was also a shipped
+default as automatic. There is no evidence in the old schema that can recover that intent,
+and retaining the stale-default failure for every existing install would defeat the
+migration. Fixed mode remains one click away.
+
+### Candidate-set contract
+
+- `BRIDGE_PORT_CANDIDATES` lives in `src/bridge-protocol.ts`, beside
+  `DEFAULT_BRIDGE_PORT`, and is imported by both builds. The initial ordered set is
+  **4589, 20317, 17483, 27613, 24193**.
+- The set is ordered, short, non-contiguous, and append-only within a bridge protocol major
+  version. Ordering is part of the election contract; two compatible sidecars must never
+  see the same candidates in a different order.
+- Additional ports get the same recorded scrutiny as 4589: unassigned by IANA, absent from
+  Chromium and Gecko restricted-port lists, and checked for real developer-tool defaults.
+  “The next few numbers” is explicitly not a selection rule — the neighbourhood around 4589
+  already contains registered and historically busy ports.
+- The set stays small enough that one candidate rotation at the awake 3s cadence completes
+  comfortably inside `BRIDGE_CONNECT_WAIT_MS`. Tests receive an injected candidate set and
+  use ephemeral ports; they never depend on the production numbers being free.
+- Candidate additions are compatibility fallbacks, not silent replacements. Older clients
+  know only their prefix of the list; if every port they know is occupied, updating that
+  client is the honest recovery.
+
+The set was checked on 2026-08-01. Every candidate has no row in the
+[IANA service-name and port registry](https://www.iana.org/assignments/service-names-port-numbers/service-names-port-numbers.xhtml),
+is absent from Chromium's
+[`kRestrictedPorts`](https://chromium.googlesource.com/chromium/src/+/refs/heads/main/net/base/port_util.cc)
+and Gecko's
+[`gBadPortList`](https://hg.mozilla.org/mozilla-central/file/tip/netwerk/base/nsIOService.cpp),
+and sits below Linux's default `32768-60999` ephemeral range documented in the
+[kernel IP sysctls](https://docs.kernel.org/networking/ip-sysctl.html#ip-local-port-range).
+The current macOS host uses `49152-65535`. Developer-convention checks found no dominant
+localhost tool on the fallbacks. These registries and defaults can change, and custom OS
+ephemeral ranges exist, so additions must repeat the review and append rather than reorder.
+
+### Gullet election across candidates
+
+The invariant generalises from “one port, one hub” to **at most one compatible hub per token
+realm across the candidate set**. A round has two phases:
+
+1. **Discovery sweep.** Probe every candidate that answers as Gullet and attempt the peer
+   handshake. Attach immediately to the first compatible, same-token hub in canonical
+   order. A Gullet with a different token or unsupported protocol occupies that candidate
+   but is not our hub; continue the sweep. An HTTP service that does not present Gullet's
+   marker is never handed a peer proof.
+2. **Binding sweep.** Only after the full discovery sweep found no same-token hub, try to
+   bind free candidates in canonical order. The first successful bind becomes the hub.
+3. **Race closure.** If a bind loses, re-probe and attempt authenticated peer attachment on
+   _that candidate_ before advancing. Two same-token processes starting together will both
+   contest the same first usable port; the loser must attach to the winner, not create a
+   second hub one slot later.
+4. **Exhaustion.** If no candidate can be joined or bound, publish one `startupError` that
+   summarises occupied, incompatible, and foreign candidates without tokens or proofs. Keep
+   the existing backing-off election alive so freeing a port heals the MCP session in place.
+
+The full discovery sweep before any bind is load-bearing. A same-token hub may live on a
+later candidate because earlier ports were occupied when it started; if one of those earlier
+ports later becomes free, a new sidecar must still find and join the existing later hub
+rather than compacting itself into a split brain.
+
+Hub loss uses the same algorithm. Peers re-elect, one bind wins atomically, and the rest
+attach. The proposed detached-hub lifecycle, if implemented later, also uses this election;
+automatic ports neither require nor imply a daemon.
+
+### Extension discovery across candidates
+
+Fixed mode keeps today's single-port behaviour. Automatic mode follows these rules:
+
+1. Order the scan with `bridgeLastPort` first when it is still a candidate, followed by the
+   remaining canonical candidates without duplication.
+2. On startup, an explicit settings sync, an alarm wake, or an `IDLE_PROBE_MS` tick, probe
+   one candidate and advance the in-memory cursor. While the background page remains awake,
+   this completes a full five-port rotation in about 15 seconds. One trigger never becomes
+   N probes or N blind WebSocket dials.
+3. A probe is positive only when the response carries Gullet's marker with a supported
+   protocol. Foreign listeners are skipped. A marked endpoint gets a WebSocket handshake;
+   token mismatch or protocol rejection advances to the next marked candidate rather than
+   latching a global conflict.
+4. Cache a candidate only after mutual token proof reaches `hello-ack`. Clear or replace the
+   cache after a successful connection elsewhere; a cached silent/foreign endpoint is merely
+   tried first and never blocks fallback.
+5. Keep at most one WebSocket dial in flight. The first authenticated connection wins the
+   pass and cancels the remaining probe work.
+
+The HTTP probe remains a safety device, not an absolute gate. A future browser rule could
+block loopback `fetch` while still allowing WebSockets, so the current blind-dial escape
+valve survives with a strict bound: after the same instance-only counted misses, an eligible
+non-idle tick may blind-dial **one** candidate, rotating from the last-known/default choice.
+The 3s idle loop never increments that counter, and one tick never bursts across the set.
+Automatic discovery must not turn one Gecko `FailDelayManager` input into N.
+
+An unmarked legacy Gullet is indistinguishable from another generic local HTTP service and
+is therefore foreign. Automatic mode does not weaken the marker check for compatibility;
+it finds a current marked hub on another candidate or reports that none exists. Restarting
+the old agent session is the upgrade path.
+
+### Status and diagnostics
+
+- Connected automatic mode displays the selected endpoint, e.g. **Connected on 4589**.
+- Fixed mode retains **Port in use by another program** because one foreign answer exhausts
+  the user's explicit choice.
+- Automatic mode reports **No compatible sidecar found** while it keeps rotating. A foreign
+  candidate is evidence about that port, not a reason to stop scanning.
+- Gullet writes its selected port, hub/peer role, and candidate-exhaustion summary to stderr.
+  The extension logs candidate and classification but never settings wholesale. Neither
+  side logs the token, its proof, or a token-derived stable identifier.
+- The options-page config snippet omits the port in automatic mode and includes the numeric
+  flag only in fixed mode.
+
+A filesystem rendezvous file is not part of this design. Gullet, Claude, and Codex could all
+read one, but a WebExtension cannot read an arbitrary config directory. Such a file may be
+useful later for human diagnostics; it cannot make the two halves discover each other
+without native messaging or another fixed bootstrap service.
+
+### Security and failure semantics
+
+- Every candidate remains loopback-only and keeps the extension-origin check and mutual
+  nonce proof. Expanding discovery does not expand the tool surface or browser permissions.
+- A plain probe may touch a foreign loopback service, but no WebSocket, browser identity, or
+  proof is sent unless the endpoint first presents Gullet's marker. The marker is routing
+  evidence, not authentication — a malicious local process can imitate it, after which the
+  existing mutual proof still decides whether the endpoint belongs to the token realm. As
+  today, Gullet publishes no CORS permission, so ordinary web pages cannot read its marker.
+- Different-token Gullet hubs may coexist. Authentication failure selects another candidate;
+  it never downgrades to sharing and never reports the other realm's browsers.
+- Candidate exhaustion is non-fatal to the MCP transport. Tools receive the live startup
+  fault while the supervisor continues its bounded, backing-off recovery loop.
+- A connected socket is pinned to its authenticated token and endpoint. Token regeneration
+  tears it down and starts a fresh full discovery pass; a candidate change alone is not
+  revocation.
+
+### Acceptance and test matrix
+
+The feature is not complete until all of these discriminate against the old implementation:
+
+- **Historical split:** an unmarked legacy listener occupies 4588, current Gullet serves
+  4589, and an extension migrated from stored 4588 automatically connects to 4589.
+- **Many browsers:** Zen and Chrome with one token connect to the same auto-selected hub;
+  `tabs_list` returns both and a tab-scoped call without `browser` is ambiguous.
+- **Many sessions:** two same-token Gullet processes launched concurrently produce one hub
+  and one peer, including when the first production candidate is foreign.
+- **No late compaction split:** a same-token hub on a later candidate is joined even after an
+  earlier candidate becomes free.
+- **Separate realms:** two tokens can occupy different candidates; each browser and MCP
+  client sees only its matching realm.
+- **Failover:** killing the hub makes peers re-elect on an available candidate and extensions
+  rediscover it without settings changes.
+- **Probe discipline:** markerless foreign services receive HTTP only; normal automatic
+  discovery makes no blind WebSocket attempts; the blocked-fetch escape valve makes at most
+  one per eligible tick and keeps its counter instance-only.
+- **Migration:** historical defaults become automatic, custom values remain fixed, and an
+  explicit CLI/env port remains fixed.
+- **Exhaustion and recovery:** all candidates occupied yields an actionable MCP fault, then
+  heals after one becomes available without restarting the client.
+- **Live engines:** repeat the shared-hub and failover scenarios on current Chrome and Zen,
+  since event-page suspension, alarm cadence, and Gecko reconnect delay are not faithfully
+  represented by unit tests.
+
+Pure candidate ordering, migration, and election decisions should be extracted behind
+injectable probes/candidate arrays. Socket tests bind ephemeral ports; production candidate
+numbers are validated separately against the documented selection criteria.
 
 ## Wire protocol
 

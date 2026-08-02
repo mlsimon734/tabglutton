@@ -31,7 +31,10 @@ export async function main(
   // calls can explain the fix and the agent can relay it; exiting instead kills
   // the session before `initialize`, and every client reports that the same
   // unhelpful way — "connection closed".
-  const backend = new Supervisor({ port: config.port, token: config.token });
+  const backend = new Supervisor({
+    ...(config.portMode === "fixed" ? { port: config.port } : {}),
+    token: config.token,
+  });
 
   // Losing the port is no longer a failure. Whoever binds it serves the browser
   // and everyone else attaches to them, because nothing guarantees one Gullet

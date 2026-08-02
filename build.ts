@@ -251,6 +251,28 @@ function writeManifest(target: Target, dist: string): void {
     // and the call would already have answered "no browser is connected".
     // Unpacked builds never reproduce it: kDevDelayMinimum is 1s.
     raw.minimum_chrome_version = "120";
+    // The source manifest declares `open_in_tab: false` so Firefox can render
+    // the settings inside about:addons — the one form an extension cannot open
+    // for itself, and the point of the `optionsInTab` setting. Chrome honours
+    // the same flag, but its embedded form is a narrow modal on
+    // chrome://extensions that this page does not fit, so the toggle is hidden
+    // on Chrome and the manifest opts back into a plain tab. Without this,
+    // Chrome's own "Extension options" button would open that modal.
+    raw.options_ui = { page: "options/options.html", open_in_tab: true };
+    // `*://*/*` as a *required* permission is the single worst thing this
+    // extension could say at install time — Chrome renders it as "Read and
+    // change all your data on all websites" and routes the submission into
+    // manual review. Nothing needs it until someone clips (the Defuddle
+    // extractor is injected into arbitrary tabs) or turns the bridge on (the
+    // loopback probe is a cross-origin fetch), and both of those start from a
+    // click, so `src/permissions.ts` asks for them there instead. Dedup, the
+    // default flow, needs neither and is never interrupted.
+    //
+    // Firefox is left alone: MV3 already treats manifest `host_permissions` as
+    // optional-at-install and hands them to the user as a post-install
+    // doorhanger, so moving them here would only add a second prompt.
+    delete raw.host_permissions;
+    raw.optional_host_permissions = ["*://*/*", "http://127.0.0.1/*"];
   }
   writeFileSync(`${dist}/manifest.json`, `${JSON.stringify(raw, null, 2)}\n`);
 }

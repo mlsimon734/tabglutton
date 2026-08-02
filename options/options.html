@@ -284,14 +284,37 @@
           <div class="setting-text">
             <strong>Port</strong>
             <small>
-              Loopback port the sidecar listens on. Change it only if something else already uses
-              <code>4589</code>; Gullet needs the same value via <code>--port</code>.
+              Automatic mode lets browsers and agent sessions find the same Gullet hub without a
+              hard-coded port.
             </small>
           </div>
-          <div class="setting-control">
-            <!-- Bounds mirror isBridgePort() in src/bridge-protocol.ts; HTML cannot
-                 import, and parsePort() re-checks on save, so this is a hint only. -->
-            <input type="number" id="bridgePort" min="1024" max="65535" placeholder="4589" />
+          <div class="setting-control radio-stack">
+            <label class="radio-card">
+              <input type="radio" name="bridgePortMode" value="auto" />
+              <span class="radio-card-body">
+                <strong>Automatic</strong>
+                <small>Recommended. Tries Tabglutton's small approved port set in order.</small>
+              </span>
+            </label>
+            <label class="radio-card">
+              <input type="radio" name="bridgePortMode" value="fixed" />
+              <span class="radio-card-body">
+                <strong>Fixed port</strong>
+                <small>Advanced. Gullet must be started with the same <code>--port</code>.</small>
+              </span>
+            </label>
+            <div id="bridgeFixedPort">
+              <!-- Bounds mirror isBridgePort() in src/bridge-protocol.ts; HTML cannot
+                   import, and parsePort() re-checks on save, so this is a hint only. -->
+              <input
+                type="number"
+                id="bridgePort"
+                min="1024"
+                max="65535"
+                placeholder="4589"
+                aria-label="Fixed bridge port"
+              />
+            </div>
           </div>
         </div>
 
@@ -308,6 +331,36 @@
             <button type="button" id="bridgeSnippetCopy" class="mini-button self-start">
               Copy config
             </button>
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <h2 class="section-title">Settings page</h2>
+
+        <div class="setting block" id="optionsLayout">
+          <div class="setting-text">
+            <strong>Where it opens</strong>
+            <small>
+              Applies to Tabglutton's own settings buttons. Reaching this page
+              <em>from</em> the Add-ons Manager always shows it there.
+            </small>
+          </div>
+          <div class="setting-control radio-stack">
+            <label class="radio-card">
+              <input type="radio" name="optionsInTab" value="tab" />
+              <span class="radio-card-body">
+                <strong>In its own tab</strong>
+                <small>Full width, with room for the agent bridge setup.</small>
+              </span>
+            </label>
+            <label class="radio-card">
+              <input type="radio" name="optionsInTab" value="embedded" />
+              <span class="radio-card-body">
+                <strong>Inside the Add-ons Manager</strong>
+                <small>Shown in Firefox's own panel for extension settings.</small>
+              </span>
+            </label>
           </div>
         </div>
       </section>

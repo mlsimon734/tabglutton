@@ -1,4 +1,4 @@
-// Wire contract for the agent bridge (see BRIDGE.md). Imported by BOTH the
+// Wire contract for the agent bridge (see docs/BRIDGE.md). Imported by BOTH the
 // extension background and the Gullet sidecar, so it must stay pure: no
 // `browser.*`, no Bun, no DOM. WebCrypto is the one ambient dependency and is
 // present in every runtime that speaks this protocol.
@@ -43,6 +43,19 @@ export const BRIDGE_PROTO = 1;
 export const DEFAULT_BRIDGE_PORT = 4589;
 
 /**
+ * Ordered, append-only ports used by automatic discovery. The first entry is
+ * the historical default, so a normal one-sidecar install stays where it was.
+ *
+ * Verified 2026-08-01: every entry is unassigned by IANA, absent from both
+ * Chromium's and Gecko's restricted-port lists, and below the default Linux
+ * and macOS ephemeral ranges. No unassigned port is guaranteed free; the list
+ * is deliberately small because this is deterministic discovery, not a scan.
+ * Add future candidates at the end so independent upgrades keep agreeing on
+ * which compatible hub wins.
+ */
+export const BRIDGE_PORT_CANDIDATES = [4589, 20317, 17483, 27613, 24193] as const;
+
+/**
  * Marker Gullet returns on any non-upgrade request, so a probe can tell "the
  * sidecar is here" from "something else owns this port". Both are HTTP
  * responses and used to be indistinguishable, which is the whole problem: see
@@ -57,6 +70,31 @@ export const DEFAULT_BRIDGE_PORT = 4589;
  */
 export const BRIDGE_PROBE_HEADER = "x-tabglutton-bridge";
 export const BRIDGE_PROBE_MARKER = "tabglutton-bridge";
+export const BRIDGE_PROBE_BODY_PREFIX = `${BRIDGE_PROBE_MARKER}/${BRIDGE_PROTO}`;
+
+export type BridgeProbeIdentity = "compatible" | "incompatible" | "foreign";
+
+/** Classify an HTTP probe without ever WebSocket-dialling an unidentified port. */
+export function classifyBridgeProbe(
+  protocolHeader: string | null,
+  body: string,
+): BridgeProbeIdentity {
+  if (protocolHeader !== null) {
+    return protocolHeader.trim() === String(BRIDGE_PROTO) ? "compatible" : "incompatible";
+  }
+  if (body.startsWith(BRIDGE_PROBE_BODY_PREFIX)) return "compatible";
+  if (body.startsWith(BRIDGE_PROBE_MARKER)) return "incompatible";
+  return "foreign";
+}
+
+/** Put a proven recent automatic port first without changing canonical order. */
+export function orderedBridgePortCandidates(lastPort?: number): number[] {
+  const canonical = [...BRIDGE_PORT_CANDIDATES];
+  if (lastPort === undefined || !BRIDGE_PORT_CANDIDATES.some((port) => port === lastPort)) {
+    return canonical;
+  }
+  return [lastPort, ...canonical.filter((port) => port !== lastPort)];
+}
 
 /**
  * A port the sidecar could actually listen on: below 1024 needs root to bind

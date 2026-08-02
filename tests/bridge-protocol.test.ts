@@ -1,11 +1,15 @@
 import { describe, test, expect } from "bun:test";
 import {
   BRIDGE_PROTO,
+  BRIDGE_PORT_CANDIDATES,
+  BRIDGE_PROBE_BODY_PREFIX,
   BridgeRequestError,
   DEFAULT_BRIDGE_PORT,
+  classifyBridgeProbe,
   deriveProof,
   generateToken,
   isBridgeMethod,
+  orderedBridgePortCandidates,
   parseMessage,
   parseTabClipParams,
   parseTabReadParams,
@@ -21,7 +25,28 @@ import {
 describe("constants", () => {
   test("port and proto are the documented values", () => {
     expect(DEFAULT_BRIDGE_PORT).toBe(4589);
+    expect(BRIDGE_PORT_CANDIDATES).toEqual([4589, 20317, 17483, 27613, 24193]);
+    expect(BRIDGE_PORT_CANDIDATES[0]).toBe(DEFAULT_BRIDGE_PORT);
     expect(BRIDGE_PROTO).toBe(1);
+  });
+});
+
+describe("automatic bridge discovery", () => {
+  test("puts a valid cached port first without disturbing the canonical remainder", () => {
+    expect(orderedBridgePortCandidates(17483)).toEqual([17483, 4589, 20317, 27613, 24193]);
+  });
+
+  test("ignores stale or unknown cached ports", () => {
+    expect(orderedBridgePortCandidates(5000)).toEqual([...BRIDGE_PORT_CANDIDATES]);
+    expect(orderedBridgePortCandidates()).toEqual([...BRIDGE_PORT_CANDIDATES]);
+  });
+
+  test("requires the current protocol marker before a candidate is compatible", () => {
+    expect(classifyBridgeProbe(String(BRIDGE_PROTO), "")).toBe("compatible");
+    expect(classifyBridgeProbe("2", BRIDGE_PROBE_BODY_PREFIX)).toBe("incompatible");
+    expect(classifyBridgeProbe(null, `${BRIDGE_PROBE_BODY_PREFIX}\nForbidden`)).toBe("compatible");
+    expect(classifyBridgeProbe(null, "tabglutton-bridge\nlegacy")).toBe("incompatible");
+    expect(classifyBridgeProbe(null, "some other service")).toBe("foreign");
   });
 });
 

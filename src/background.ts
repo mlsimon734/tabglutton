@@ -14,6 +14,7 @@ import {
   type ClipPayload,
   type ObsidianClipRequest,
 } from "./clip-format.js";
+import { getFilePlatformOnce } from "./platform.js";
 import { delay } from "./serialize.js";
 import { pickRule } from "./site-rules.js";
 import { groupDuplicates, pickKeeper, type Tab } from "./dedup.js";
@@ -53,12 +54,14 @@ export type IncomingMessage =
 
 export interface GetBridgeStatusResponse {
   status: BridgeStatus;
+  port?: number;
 }
 
 /** Pushed to the options page on every transition, so it never has to poll. */
 export interface BridgeStatusChangedMessage {
   type: "bridge-status-changed";
   status: BridgeStatus;
+  port?: number;
 }
 
 export type ClipFailureReason = "extract-failed" | "trigger-failed";
@@ -139,7 +142,7 @@ const pendingClips = new Map<
   }
 >();
 
-// Agent bridge (BRIDGE.md). The runner owns the tab/undo surface; everything
+// Agent bridge (docs/BRIDGE.md). The runner owns the tab/undo surface; everything
 // that touches a page is handed down from here, so the bridge cannot reach any
 // capability the popup does not already have.
 const bridgeRunner = new BridgeMethodRunner({
@@ -153,10 +156,10 @@ const bridgeRunner = new BridgeMethodRunner({
 const bridge = new BridgeClient({
   getSettings: () => settings,
   run: (method, params) => bridgeRunner.run(method, params),
-  onStatusChange: (status) => {
+  onStatusChange: (status, port) => {
     // Nobody may be listening — an options page that is closed rejects, and
     // that is the normal case, not an error.
-    const msg: BridgeStatusChangedMessage = { type: "bridge-status-changed", status };
+    const msg: BridgeStatusChangedMessage = { type: "bridge-status-changed", status, port };
     void browser.runtime.sendMessage(msg).catch(() => {});
     // A failed dial cycles idle → connecting → idle every 30s. Repainting on
     // each would re-query and re-dedup every tab twice a minute to draw the
@@ -443,7 +446,7 @@ interface ClipTabOptions {
    * Reload a discarded tab before extracting. True for user-initiated clips;
    * the agent bridge passes false, because waking a tab on the agent's behalf is
    * its own opt-in act there — the `tabs_load` method, which the user has to
-   * enable — and must never happen as a side effect of a read (see BRIDGE.md).
+   * enable — and must never happen as a side effect of a read (see docs/BRIDGE.md).
    */
   wake: boolean;
 }
@@ -634,6 +637,7 @@ async function clipSelectedTabs(tabIds: number[]): Promise<ClipSelectedTabsRespo
           rule,
           settings.clipMode,
           settings.clippingsBaseFolder,
+          await getFilePlatformOnce(),
           async (text) => {
             const copied = await copyToClipboardViaTab(tabId, text);
             if (!copied) {
@@ -772,7 +776,10 @@ browser.runtime.onMessage.addListener(async (rawMsg: unknown): Promise<unknown> 
       return { ok: true };
     }
     case "get-bridge-status": {
-      const response: GetBridgeStatusResponse = { status: bridge.status };
+      const response: GetBridgeStatusResponse = {
+        status: bridge.status,
+        port: bridge.connectedPort,
+      };
       return response;
     }
   }

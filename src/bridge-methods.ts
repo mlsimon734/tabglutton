@@ -1,4 +1,4 @@
-// Extension-side implementations of the five bridge methods (see BRIDGE.md).
+// Extension-side implementations of the five bridge methods (see docs/BRIDGE.md).
 // Everything that touches the real page — extraction, the Obsidian handoff — is
 // injected as a dependency by background.ts, which already owns that machinery;
 // this module only adds the tab/undo-log surface the agent sees.
@@ -31,9 +31,11 @@ import {
   type TabsLoadResult,
   type UndoCloseResult,
 } from "./bridge-protocol.js";
+import { getFilePlatformOnce } from "./platform.js";
 import { createTaskQueue, delay } from "./serialize.js";
 import { pickRule } from "./site-rules.js";
 import type { Settings } from "./storage.js";
+import { CLIP_ORIGINS, hasOrigins } from "./permissions.js";
 import { IS_CHROME } from "./target.js";
 import {
   appendBatch,
@@ -557,6 +559,19 @@ export class BridgeMethodRunner {
     }
     const result = await this.deps.extract(tabId);
     if (!result.ok || !result.payload) {
+      // Asked only once extraction has already failed, so a read costs no extra
+      // IPC in the normal case. Site access is optional on Chrome and only a
+      // click can request it, which the bridge does not have — so an agent whose
+      // user has never clipped from the popup would otherwise meet this as an
+      // opaque injection error with no stated remedy.
+      if (!(await hasOrigins(CLIP_ORIGINS))) {
+        fail(
+          "not-enabled",
+          "Tabglutton has no access to page contents, so tabs cannot be read or clipped. " +
+            "Ask the user to open the Tabglutton popup and run Devour once — that is where " +
+            "the browser asks for the permission.",
+        );
+      }
       fail("extract-failed", result.error ?? "Extraction failed.");
     }
     return result.payload;
@@ -600,6 +615,7 @@ export class BridgeMethodRunner {
         rule,
         settings.clipMode,
         settings.clippingsBaseFolder,
+        await getFilePlatformOnce(),
         (text) => this.deps.copyToClipboardViaTab(params.tabId, text),
       );
       await this.deps.openObsidianUrl(request.url);
@@ -653,7 +669,7 @@ export class BridgeMethodRunner {
   private async tabsClose(raw: unknown): Promise<TabsCloseResult> {
     const { tabIds } = parseTabsCloseParams(raw);
     // One listing rather than a `tabs.get` per id: a triage run closes tabs by
-    // the hundred (BRIDGE.md sizes one at ~180), and that many IPC round-trips
+    // the hundred (docs/BRIDGE.md sizes one at ~180), and that many IPC round-trips
     // just to build undo entries is the bulk of the call.
     const byId = new Map((await queryAllTabs()).filter(hasTabId).map((t) => [t.id, t] as const));
     const missing = tabIds.filter((id) => !byId.has(id));

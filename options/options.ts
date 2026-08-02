@@ -1,11 +1,22 @@
 import type { BridgeStatusChangedMessage, GetBridgeStatusResponse } from "../src/background.js";
 import type { BridgeStatus } from "../src/bridge-client.js";
 import { DEFAULT_BRIDGE_PORT, generateToken, isBridgePort } from "../src/bridge-protocol.js";
-import type { ClipMode, ScopeMode, Settings } from "../src/storage.js";
+import { BRIDGE_ORIGINS, requestOrigins } from "../src/permissions.js";
+import {
+  loadSettings,
+  type BridgePortMode,
+  type ClipMode,
+  type ScopeMode,
+} from "../src/storage.js";
 import { IS_CHROME } from "../src/target.js";
 import { vaultWarningFor } from "../src/vault-warning.js";
 
 const FALLBACK_SCOPE: ScopeMode = IS_CHROME ? "current-window" : "hidden-false";
+
+// Framed means the browser's own extension-settings panel is hosting us, and it
+// draws its own frame, heading and padding. CSP forbids an inline script, so
+// this lands one module-execution late — on a page this small, before paint.
+if (window.top !== window.self) document.documentElement.classList.add("embedded");
 
 const stripFragment = document.getElementById("stripFragment") as HTMLInputElement;
 const extraStripParams = document.getElementById("extraStripParams") as HTMLInputElement;
@@ -14,9 +25,16 @@ const clippingsBaseFolder = document.getElementById("clippingsBaseFolder") as HT
 const vaultWarning = document.getElementById("vaultWarning") as HTMLParagraphElement;
 const scopeRadios = document.querySelectorAll<HTMLInputElement>('input[name="scope"]');
 const clipModeRadios = document.querySelectorAll<HTMLInputElement>('input[name="clipMode"]');
+const optionsInTabRadios = document.querySelectorAll<HTMLInputElement>(
+  'input[name="optionsInTab"]',
+);
 const statusEl = document.getElementById("status") as HTMLParagraphElement;
 const bridgeEnabled = document.getElementById("bridgeEnabled") as HTMLInputElement;
 const bridgeAllowTabLoad = document.getElementById("bridgeAllowTabLoad") as HTMLInputElement;
+const bridgePortModeRadios = document.querySelectorAll<HTMLInputElement>(
+  'input[name="bridgePortMode"]',
+);
+const bridgeFixedPort = document.getElementById("bridgeFixedPort") as HTMLDivElement;
 const bridgePort = document.getElementById("bridgePort") as HTMLInputElement;
 const bridgeToken = document.getElementById("bridgeToken") as HTMLInputElement;
 const bridgeTokenCopy = document.getElementById("bridgeTokenCopy") as HTMLButtonElement;
@@ -25,31 +43,6 @@ const bridgeTokenGenerate = document.getElementById("bridgeTokenGenerate") as HT
 const bridgeStatusEl = document.getElementById("bridgeStatus") as HTMLSpanElement;
 const bridgeSnippet = document.getElementById("bridgeSnippet") as HTMLPreElement;
 const bridgeSnippetCopy = document.getElementById("bridgeSnippetCopy") as HTMLButtonElement;
-
-const DEFAULTS: Pick<
-  Settings,
-  | "stripFragment"
-  | "extraStripParams"
-  | "scope"
-  | "obsidianVault"
-  | "clippingsBaseFolder"
-  | "clipMode"
-  | "bridgeEnabled"
-  | "bridgePort"
-  | "bridgeToken"
-  | "bridgeAllowTabLoad"
-> = {
-  stripFragment: true,
-  extraStripParams: [],
-  scope: FALLBACK_SCOPE,
-  obsidianVault: "",
-  clippingsBaseFolder: "",
-  clipMode: "clipboard",
-  bridgeEnabled: false,
-  bridgePort: DEFAULT_BRIDGE_PORT,
-  bridgeToken: "",
-  bridgeAllowTabLoad: false,
-};
 
 function parseParams(text: string): string[] {
   return text
@@ -68,8 +61,7 @@ function parseParams(text: string): string[] {
 let loaded = false;
 
 async function load(): Promise<void> {
-  const stored = (await browser.storage.local.get(Object.keys(DEFAULTS))) as Partial<Settings>;
-  const settings = { ...DEFAULTS, ...stored };
+  const settings = await loadSettings();
   stripFragment.checked = settings.stripFragment;
   extraStripParams.value = (settings.extraStripParams ?? []).join(", ");
   obsidianVault.value = settings.obsidianVault;
@@ -81,15 +73,27 @@ async function load(): Promise<void> {
   for (const radio of clipModeRadios) {
     radio.checked = radio.value === settings.clipMode;
   }
+  for (const radio of optionsInTabRadios) {
+    radio.checked = (radio.value === "tab") === settings.optionsInTab;
+  }
   bridgeEnabled.checked = settings.bridgeEnabled;
   bridgeAllowTabLoad.checked = settings.bridgeAllowTabLoad;
+  for (const radio of bridgePortModeRadios) {
+    radio.checked = radio.value === settings.bridgePortMode;
+  }
   bridgePort.value = String(settings.bridgePort);
   bridgeToken.value = settings.bridgeToken;
-  updateBridgeSnippet();
+  // Repaints the snippet itself, so no separate updateBridgeSnippet() here.
+  updateBridgePortMode();
   if (IS_CHROME) {
     // Chrome has no tab.hidden / workspaces, so the scope choice is fixed.
     const scopeBlock = scopeRadios[0]?.closest(".setting.block") as HTMLElement | null;
     if (scopeBlock) scopeBlock.hidden = true;
+    // Chrome's embedded options are a modal on chrome://extensions, too narrow
+    // for this page, so the Chrome build stays on `open_in_tab: true` and there
+    // is no choice to offer. The whole section goes, not just the radios.
+    const layoutSection = document.getElementById("optionsLayout")?.closest("section");
+    if (layoutSection) (layoutSection as HTMLElement).hidden = true;
   }
   loaded = true;
 }
@@ -109,6 +113,7 @@ async function save(): Promise<void> {
   const scope: ScopeMode = (checked?.value as ScopeMode) ?? FALLBACK_SCOPE;
   const checkedClipMode = [...clipModeRadios].find((r) => r.checked);
   const clipMode: ClipMode = (checkedClipMode?.value as ClipMode) ?? "clipboard";
+  const bridgePortMode = selectedBridgePortMode();
   await browser.storage.local.set({
     stripFragment: stripFragment.checked,
     extraStripParams: parseParams(extraStripParams.value),
@@ -116,8 +121,10 @@ async function save(): Promise<void> {
     obsidianVault: obsidianVault.value.trim(),
     clippingsBaseFolder: clippingsBaseFolder.value.trim(),
     clipMode,
+    optionsInTab: [...optionsInTabRadios].find((r) => r.checked)?.value !== "embedded",
     bridgeEnabled: bridgeEnabled.checked,
     bridgeAllowTabLoad: bridgeAllowTabLoad.checked,
+    bridgePortMode,
     bridgePort: parsePort(bridgePort.value),
     // Only ever written when we have one. The field is readonly and Generate is
     // the sole way to set it, so an empty value means "not populated", never
@@ -130,8 +137,21 @@ async function save(): Promise<void> {
 
 function parsePort(raw: string): number {
   // Fall back rather than persist a value the sidecar could never listen on.
-  const port = Number.parseInt(raw, 10);
+  const value = raw.trim();
+  const port = /^\d+$/.test(value) ? Number(value) : Number.NaN;
   return isBridgePort(port) ? port : DEFAULT_BRIDGE_PORT;
+}
+
+function selectedBridgePortMode(): BridgePortMode {
+  const selected = [...bridgePortModeRadios].find((radio) => radio.checked)?.value;
+  return selected === "fixed" ? "fixed" : "auto";
+}
+
+function updateBridgePortMode(): void {
+  const fixed = selectedBridgePortMode() === "fixed";
+  bridgeFixedPort.hidden = !fixed;
+  bridgePort.disabled = !fixed;
+  updateBridgeSnippet();
 }
 
 /** Text inputs save on a trailing edge, so a save is not issued per keystroke. */
@@ -142,13 +162,30 @@ function queueSave(): void {
 
 for (const el of [
   stripFragment,
-  bridgeEnabled,
   bridgeAllowTabLoad,
   ...scopeRadios,
   ...clipModeRadios,
+  ...optionsInTabRadios,
 ]) {
   el.addEventListener("change", () => void save());
 }
+
+// `bridgeEnabled` is not in that list because switching it on is the one moment
+// we can ask for site access to the sidecar's loopback origin: Chrome requires a
+// user gesture, and the background page — where the dialling happens — never has
+// one. A refusal leaves the toggle off rather than persisting an enabled bridge
+// that could only ever report "needs access".
+bridgeEnabled.addEventListener("change", () => {
+  void (async () => {
+    // First await in the handler; see requestOrigins on why nothing may precede it.
+    if (bridgeEnabled.checked && !(await requestOrigins(BRIDGE_ORIGINS))) {
+      bridgeEnabled.checked = false;
+      renderBridgeStatus("needs-access");
+      return;
+    }
+    await save();
+  })();
+});
 extraStripParams.addEventListener("input", queueSave);
 obsidianVault.addEventListener("input", () => {
   updateVaultWarning();
@@ -157,6 +194,13 @@ obsidianVault.addEventListener("input", () => {
 clippingsBaseFolder.addEventListener("input", queueSave);
 
 // ---------- agent bridge ----------
+
+for (const radio of bridgePortModeRadios) {
+  radio.addEventListener("change", () => {
+    updateBridgePortMode();
+    void save();
+  });
+}
 
 bridgePort.addEventListener("input", () => {
   updateBridgeSnippet();
@@ -232,7 +276,11 @@ function bridgeSnippetText(masked: boolean): string {
       mcpServers: {
         tabglutton: {
           command: "bun",
-          args: ["run", "/path/to/tabglutton/gullet/gullet.ts", "--port", String(port)],
+          args: [
+            "run",
+            "/path/to/tabglutton/gullet/gullet.ts",
+            ...(selectedBridgePortMode() === "fixed" ? ["--port", String(port)] : []),
+          ],
           env: { TABGLUTTON_TOKEN: token },
         },
       },
@@ -256,20 +304,34 @@ const BRIDGE_STATUS_LABELS: Record<BridgeStatus, string> = {
   // otherwise presents as "Waiting for a sidecar" forever with a sidecar that
   // is running perfectly well a few lines above.
   "port-conflict": "Port in use by another program",
+  // Chrome only: the loopback grant was refused or later revoked. Switching the
+  // toggle off and on again is what re-asks for it, so the label says so — the
+  // browser's own permissions UI is the other route and much harder to describe.
+  "needs-access": "Needs access — switch off and on to allow",
 };
 
-function renderBridgeStatus(status: BridgeStatus): void {
-  bridgeStatusEl.textContent = BRIDGE_STATUS_LABELS[status];
+function renderBridgeStatus(status: BridgeStatus, port?: number): void {
+  if (status === "connected" && port !== undefined) {
+    bridgeStatusEl.textContent = `Connected on ${port}`;
+  } else if (status === "idle" && selectedBridgePortMode() === "auto") {
+    bridgeStatusEl.textContent = "No compatible sidecar found";
+  } else {
+    bridgeStatusEl.textContent = BRIDGE_STATUS_LABELS[status];
+  }
   bridgeStatusEl.dataset.state = status;
 }
 
 async function refreshBridgeStatus(): Promise<void> {
   let status: BridgeStatus = "disabled";
+  let port: number | undefined;
   try {
     const res = (await browser.runtime.sendMessage({ type: "get-bridge-status" })) as
       | GetBridgeStatusResponse
       | undefined;
-    if (res) status = res.status;
+    if (res) {
+      status = res.status;
+      port = res.port;
+    }
   } catch {
     // Background asleep or restarting; infer from the settings we rendered
     // rather than showing an error the user cannot act on. This mirrors
@@ -278,14 +340,16 @@ async function refreshBridgeStatus(): Promise<void> {
     // no token and is therefore not dialling at all.
     status = bridgeEnabled.checked && bridgeToken.value ? "idle" : "disabled";
   }
-  renderBridgeStatus(status);
+  renderBridgeStatus(status, port);
 }
 
 // The background pushes every transition, so this page never polls — on Chrome
 // MV3 a poll would keep the service worker awake for as long as it is open.
 browser.runtime.onMessage.addListener((raw: unknown) => {
   const msg = raw as Partial<BridgeStatusChangedMessage> | null;
-  if (msg?.type === "bridge-status-changed" && msg.status) renderBridgeStatus(msg.status);
+  if (msg?.type === "bridge-status-changed" && msg.status) {
+    renderBridgeStatus(msg.status, msg.port);
+  }
 });
 // Resync on return to the tab, in case a push landed while it was hidden.
 document.addEventListener("visibilitychange", () => {

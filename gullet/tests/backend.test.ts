@@ -37,6 +37,15 @@ async function supervisor(port: number): Promise<Supervisor> {
   return s;
 }
 
+async function autoSupervisor(
+  candidates: readonly number[],
+  token: string = TOKEN,
+): Promise<Supervisor> {
+  const s = track(new Supervisor({ candidates, token, connectWaitMs: 0 }));
+  await s.start();
+  return s;
+}
+
 /** A supervisor plus a way to await its next role, for the promotion test. */
 async function watchedSupervisor(
   port: number,
@@ -74,7 +83,7 @@ async function watchedSupervisor(
 }
 
 /** A browser that completes the handshake and answers one method with a fixed result. */
-function fakeBrowser(port: number, answer: unknown): Promise<WebSocket> {
+function fakeBrowser(port: number, answer: unknown, token: string = TOKEN): Promise<WebSocket> {
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(`ws://127.0.0.1:${port}/`, {
       headers: { Origin: "moz-extension://test" },
@@ -91,7 +100,7 @@ function fakeBrowser(port: number, answer: unknown): Promise<WebSocket> {
             extVersion: "test",
             label: "Zen",
             nonce,
-            proof: await deriveProof(TOKEN, msg.nonce),
+            proof: await deriveProof(token, msg.nonce),
           }),
         );
       } else if (msg.type === "hello-ack") {
@@ -105,6 +114,59 @@ function fakeBrowser(port: number, answer: unknown): Promise<WebSocket> {
 }
 
 describe("hub/peer election", () => {
+  test("automatic sidecars racing at once converge on one hub", async () => {
+    const candidates = [freePort(), freePort()];
+    const [first, second] = await Promise.all([
+      autoSupervisor(candidates),
+      autoSupervisor(candidates),
+    ]);
+    const browser = await fakeBrowser(candidates[0] ?? 0, null);
+    expect(await first.connections()).toHaveLength(1);
+    expect(await second.connections()).toHaveLength(1);
+    browser.close();
+  });
+
+  test("automatic discovery joins a later compatible hub before binding an earlier free port", async () => {
+    const candidates = [freePort(), freePort()];
+    const existing = track(new Hub({ port: candidates[1] ?? 0, token: TOKEN }));
+    existing.listen();
+    const discovered = await autoSupervisor(candidates);
+    const browser = await fakeBrowser(candidates[1] ?? 0, null);
+    expect(await discovered.connections()).toHaveLength(1);
+    browser.close();
+  });
+
+  test("automatic discovery skips a markerless service and binds the next candidate", async () => {
+    const candidates = [freePort(), freePort()];
+    let websocketUpgrades = 0;
+    const foreign = Bun.serve({
+      hostname: "127.0.0.1",
+      port: candidates[0] ?? 0,
+      fetch: (request) => {
+        if (request.headers.get("upgrade")?.toLowerCase() === "websocket") websocketUpgrades += 1;
+        return new Response("not gullet");
+      },
+    });
+    started.push({ stop: () => foreign.stop(true) });
+    const sup = await autoSupervisor(candidates);
+    const browser = await fakeBrowser(candidates[1] ?? 0, null);
+    expect(await sup.connections()).toHaveLength(1);
+    expect(websocketUpgrades).toBe(0);
+    browser.close();
+  });
+
+  test("different tokens settle into separate automatic realms", async () => {
+    const candidates = [freePort(), freePort()];
+    const first = await autoSupervisor(candidates, "realm-a");
+    const second = await autoSupervisor(candidates, "realm-b");
+    const browserA = await fakeBrowser(candidates[0] ?? 0, null, "realm-a");
+    const browserB = await fakeBrowser(candidates[1] ?? 0, null, "realm-b");
+    expect(await first.connections()).toHaveLength(1);
+    expect(await second.connections()).toHaveLength(1);
+    browserA.close();
+    browserB.close();
+  });
+
   test("the first sidecar binds the port and serves as the hub", async () => {
     const port = freePort();
     const first = await supervisor(port);
@@ -175,7 +237,18 @@ describe("hub/peer election", () => {
     stranger.listen();
 
     const sup = track(new Supervisor({ port, token: TOKEN, startTimeoutMs: 300 }));
-    await expect(sup.start()).rejects.toThrow(/127\.0\.0\.1:/);
+    // Start a tool call before the first sweep publishes its fault. It must use
+    // the same bounded wait as start(), then re-read the reason instead of
+    // parking forever on an election that keeps retrying underneath.
+    const [startResult, callResult] = await Promise.allSettled([sup.start(), sup.connections()]);
+    expect(startResult.status).toBe("rejected");
+    expect(String(startResult.status === "rejected" ? startResult.reason : "")).toContain(
+      String(port),
+    );
+    expect(callResult.status).toBe("rejected");
+    expect(String(callResult.status === "rejected" ? callResult.reason : "")).toContain(
+      "Could not establish the Tabglutton bridge",
+    );
     // Published, not just thrown: tool calls read this per call, so they answer
     // with the reason rather than waiting on an election with nothing to win.
     expect(sup.fault()?.code).toBe("unsupported");
@@ -199,6 +272,28 @@ describe("hub/peer election", () => {
     }
     expect(sup.fault()).toBeNull();
     expect(await sup.connections()).toEqual([]);
+  }, 10_000);
+
+  test("automatic exhaustion heals when any candidate becomes free", async () => {
+    const candidates = [freePort(), freePort()];
+    const strangers = candidates.map((port, index) =>
+      track(new Hub({ port, token: `other-realm-${index}` })),
+    );
+    for (const stranger of strangers) stranger.listen();
+
+    const sup = track(
+      new Supervisor({ candidates, token: TOKEN, startTimeoutMs: 300, connectWaitMs: 0 }),
+    );
+    await expect(sup.start()).rejects.toThrow();
+    strangers[1]?.stop();
+
+    for (let i = 0; i < 50 && sup.fault() !== null; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    expect(sup.fault()).toBeNull();
+    const browser = await fakeBrowser(candidates[1] ?? 0, null);
+    expect(await sup.connections()).toHaveLength(1);
+    browser.close();
   }, 10_000);
 
   test("an attached peer is not offered to tools as a browser", async () => {

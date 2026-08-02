@@ -12,6 +12,17 @@ body {
   animation: surface-in var(--duration) var(--easing) both;
 }
 
+/* Embedded in the browser's extension-settings panel, which is narrower than a
+   tab and already supplies a frame — so drop ours rather than nest two. */
+.embedded body {
+  min-width: 0;
+}
+
+.embedded .surface {
+  max-width: none;
+  padding: 20px 2px 24px;
+}
+
 @keyframes surface-in {
   from {
     opacity: 0;

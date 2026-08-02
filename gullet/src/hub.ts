@@ -1,7 +1,7 @@
 // The browser-facing half of Gullet: a loopback WebSocket server that browsers
 // dial in to, plus request routing on top of the connections they establish.
 //
-// Security posture (BRIDGE.md): bound to 127.0.0.1 only, upgrade requests must
+// Security posture (docs/BRIDGE.md): bound to 127.0.0.1 only, upgrade requests must
 // carry an extension origin, and both ends prove knowledge of the shared token
 // against a nonce the other side chose before any method is served.
 
@@ -10,7 +10,7 @@ import {
   BRIDGE_HANDSHAKE_TIMEOUT_MS,
   BRIDGE_HEARTBEAT_MS,
   BRIDGE_PROBE_HEADER,
-  BRIDGE_PROBE_MARKER,
+  BRIDGE_PROBE_BODY_PREFIX,
   BRIDGE_PROTO,
   BRIDGE_REQUEST_TIMEOUT_MS,
   BridgeRequestError,
@@ -47,7 +47,7 @@ export function isExtensionOrigin(origin: string | null): boolean {
  * unable to read either the header or the body.
  */
 export function identifyingResponse(message: string, status: number): Response {
-  return new Response(`${BRIDGE_PROBE_MARKER}\n${message}\n`, {
+  return new Response(`${BRIDGE_PROBE_BODY_PREFIX}\n${message}\n`, {
     status,
     headers: { [BRIDGE_PROBE_HEADER]: String(BRIDGE_PROTO) },
   });

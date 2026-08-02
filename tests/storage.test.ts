@@ -2,7 +2,12 @@
 // loadSettings/saveSettings require browser.storage.local and are out of scope.
 import { describe, test, expect } from "bun:test";
 import { DEFAULT_BRIDGE_PORT } from "../src/bridge-protocol.js";
-import { defaults, normalizeOptsFrom, type Settings } from "../src/storage.js";
+import {
+  bridgePortModeFromStored,
+  defaults,
+  normalizeOptsFrom,
+  type Settings,
+} from "../src/storage.js";
 import { IS_CHROME } from "../src/target.js";
 
 describe("defaults()", () => {
@@ -16,8 +21,10 @@ describe("defaults()", () => {
       obsidianVault: "",
       clippingsBaseFolder: "Clippings",
       clipMode: "clipboard",
+      optionsInTab: true,
       onboardingComplete: false,
       bridgeEnabled: false,
+      bridgePortMode: "auto",
       bridgePort: DEFAULT_BRIDGE_PORT,
       bridgeToken: "",
       bridgeAllowTabLoad: false,
@@ -63,8 +70,10 @@ describe("normalizeOptsFrom()", () => {
       obsidianVault: "v",
       clippingsBaseFolder: "Inbox",
       clipMode: "clipboard",
+      optionsInTab: true,
       onboardingComplete: true,
       bridgeEnabled: false,
+      bridgePortMode: "auto",
       bridgePort: DEFAULT_BRIDGE_PORT,
       bridgeToken: "",
       bridgeAllowTabLoad: false,
@@ -80,5 +89,26 @@ describe("normalizeOptsFrom()", () => {
       stripFragment: true,
       extraStripParams: [],
     });
+  });
+});
+
+describe("bridgePortModeFromStored()", () => {
+  test("defaults new installs and historical default ports to automatic", () => {
+    expect(bridgePortModeFromStored({})).toBe("auto");
+    expect(bridgePortModeFromStored({ bridgePort: 4588 })).toBe("auto");
+    expect(bridgePortModeFromStored({ bridgePort: DEFAULT_BRIDGE_PORT })).toBe("auto");
+  });
+
+  test("preserves a valid custom legacy port as fixed", () => {
+    expect(bridgePortModeFromStored({ bridgePort: 5000 })).toBe("fixed");
+  });
+
+  test("preserves an explicit mode", () => {
+    expect(bridgePortModeFromStored({ bridgePortMode: "fixed", bridgePort: 4589 })).toBe("fixed");
+    expect(bridgePortModeFromStored({ bridgePortMode: "auto", bridgePort: 5000 })).toBe("auto");
+  });
+
+  test("repairs invalid legacy ports to automatic", () => {
+    expect(bridgePortModeFromStored({ bridgePort: 80 })).toBe("auto");
   });
 });
