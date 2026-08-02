@@ -441,10 +441,16 @@ the cockpit emptying a real backlog (filter → select → Devour → notes land
 ## 6. Submission checklist
 
 ```
-[ ] Bump version to 0.2.0 in package.json and manifest.json
-[ ] bun run check          # typecheck + format + lint + test
-[ ] bun run package        # both zips + source zip
-[ ] Capture the three missing screenshots; resize all to 1280x800
+[x] Bump version to 0.2.0 in package.json and manifest.json
+[x] Write the 0.2.0 CHANGELOG entry (hand-written: the commits here are not
+    Conventional Commits, so commit-and-tag-version generates an empty section)
+[x] bun run check          # 336 tests; web-ext lint 0 errors, 3 pre-existing
+                           # UNSAFE_VAR_ASSIGNMENT warnings from bundled Defuddle
+[ ] Merge to main, then tag v0.2.0 there — tagging the release branch before a
+    squash merge leaves the tag on a commit main never gets
+[ ] bun run package        # both zips + source zip, from the tagged commit
+[x] Screenshots captured — all 1280x800 except the popup pair (1200x1200; §5
+    has the composite-or-drop decision, and Chrome requires exactly 1280x800)
 [x] Build the 440x280 Chrome promo tile — `bun scripts/shoot-promo-tile.ts`
 [ ] Commit and push PRIVACY.md so the policy URL resolves on main
 
