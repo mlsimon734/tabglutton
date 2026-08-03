@@ -173,6 +173,22 @@ describe("tabs_list", () => {
     expect(result).toMatchObject({ matched: 3, truncated: true });
   });
 
+  // Regression, caught live: grouping ran on the unfiltered merge, so a query
+  // plus groupBy counted the whole backlog. The browser here ignores `query`
+  // entirely, which is the version skew that exposed it — a newer extension
+  // pre-filters and would have hidden the bug rather than prevented it.
+  test("groupBy honours query even when the browser ignored it", async () => {
+    const { call } = caller([zen], () => ({
+      tabs: [tab(1, "https://x.com/a"), tab(2, "https://x.com/b"), tab(3, "https://other.test/c")],
+    }));
+    const result = payload(await call("tabs_list", { query: "x.com", groupBy: "domain" }));
+    expect(result).toMatchObject({
+      groups: [{ domain: "x.com", tabs: 2, discarded: 0 }],
+      domains: 1,
+      matched: 2,
+    });
+  });
+
   test("groupBy: domain answers with counts across every browser and no tabs", async () => {
     const { call } = caller([zen, chrome], ({ connectionId }) =>
       connectionId === "conn-1"

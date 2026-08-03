@@ -5,10 +5,12 @@
 import {
   asRecord,
   BridgeRequestError,
+  filterTabs,
   groupTabsByDomain,
   isBridgeMethod,
   parseTabsListParams,
   selectTabs,
+  TABS_LIST_DEFAULT_GROUP_LIMIT,
   TABS_LIST_DEFAULT_LIMIT,
   TABS_LIST_MAX_LIMIT,
   TABS_LOAD_MAX_BATCH,
@@ -91,7 +93,7 @@ export const GULLET_TOOLS: readonly McpTool[] = [
           type: "integer",
           minimum: 1,
           maximum: TABS_LIST_MAX_LIMIT,
-          description: `Max tabs (or domain groups) to return. Defaults to ${TABS_LIST_DEFAULT_LIMIT}.`,
+          description: `Max rows to return. Defaults to ${TABS_LIST_DEFAULT_LIMIT} tabs, or ${TABS_LIST_DEFAULT_GROUP_LIMIT} when groupBy is set — a domain histogram has a long tail of one-tab domains.`,
         },
         sort: {
           type: "string",
@@ -103,7 +105,7 @@ export const GULLET_TOOLS: readonly McpTool[] = [
           type: "string",
           enum: ["domain"],
           description:
-            "Return per-domain counts instead of tabs: { domain, tabs, discarded, newest }, most tabs first. Honours query and limit. The cheap first call for triaging a backlog you have not seen.",
+            "Return per-domain counts instead of tabs: { domain, tabs, discarded, newest }, most tabs first. Honours query, so you can count one slice of the backlog. Answers with `domains` (distinct domains matched) and `matched` (tabs behind them). The cheap first call for triaging a backlog you have not seen.",
         },
         scope: {
           type: "string",
@@ -336,7 +338,10 @@ async function tabsList(
   const head = { browsers: targets, ...(failures.length > 0 ? { failures } : {}) };
 
   if (listParams.groupBy === "domain") {
-    return { ...head, ...groupTabsByDomain(merged, listParams.limit) };
+    // filterTabs, not `merged`: the extension may be older than this Gullet and
+    // ignore `query` entirely, and grouping the unfiltered set would answer a
+    // question nobody asked.
+    return { ...head, ...groupTabsByDomain(filterTabs(merged, listParams), listParams.limit) };
   }
   const selected = selectTabs(merged, listParams);
   // Ids only mean something inside one browser, so a listing that actually

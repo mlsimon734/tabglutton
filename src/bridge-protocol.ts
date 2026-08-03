@@ -379,6 +379,16 @@ export const TABS_LIST_DEFAULT_LIMIT = 200;
 /** Ceiling on an explicit `limit`. Above this a listing is not triage material. */
 export const TABS_LIST_MAX_LIMIT = 2000;
 
+/**
+ * Default ceiling on `groupBy: "domain"` rows, which is much tighter than the
+ * tab default because a domain histogram has a long, uninformative tail. A real
+ * 874-tab backlog held 298 distinct domains, and everything past roughly the
+ * fiftieth was a single tab — 250 rows of noise around the ~20 that describe the
+ * backlog. `domains` still reports the true count, so the tail is visible
+ * without being spelled out.
+ */
+export const TABS_LIST_DEFAULT_GROUP_LIMIT = 50;
+
 export interface TabsListParams {
   /** Default "all": every window. "current-window" narrows to the focused one. */
   scope?: "all" | "current-window";
@@ -478,6 +488,27 @@ function compareTabs(sort: TabsListSort): (a: BridgeTab, b: BridgeTab) => number
 }
 
 /**
+ * The `query` and `includeHidden` cut, on its own.
+ *
+ * Split out of `selectTabs` because `groupBy` needs the same filter but none of
+ * the sorting or truncation, and folding it into `selectTabs` meant the grouping
+ * path silently skipped it: `tabs_list { query: "x.com", groupBy: "domain" }`
+ * counted the whole backlog. Caught against a real 874-tab browser, where the
+ * extension was older than Gullet and so did not pre-filter — which is exactly
+ * the version skew the second pass exists to cover, so a newer extension would
+ * have hidden the bug rather than prevented it. Returns a new array; callers
+ * sort it in place.
+ */
+export function filterTabs(tabs: readonly BridgeTab[], params: TabsListParams): BridgeTab[] {
+  const includeHidden = params.includeHidden ?? true;
+  const query = params.query?.trim() ?? "";
+  return tabs.filter(
+    (tab) =>
+      (includeHidden || tab.hidden !== true) && (query === "" || matchesTabQuery(tab, query)),
+  );
+}
+
+/**
  * Filter, sort, and truncate a listing. Pure and shared, because it runs
  * **twice**: in the extension, so a backlog never crosses the socket in full,
  * and again in Gullet over the merged results of every connected browser, where
@@ -486,12 +517,7 @@ function compareTabs(sort: TabsListSort): (a: BridgeTab, b: BridgeTab) => number
  * filtered answer rather than a flood.
  */
 export function selectTabs(tabs: BridgeTab[], params: TabsListParams): TabsListResult {
-  const includeHidden = params.includeHidden ?? true;
-  const query = params.query?.trim() ?? "";
-  const matches = tabs.filter(
-    (tab) =>
-      (includeHidden || tab.hidden !== true) && (query === "" || matchesTabQuery(tab, query)),
-  );
+  const matches = filterTabs(tabs, params);
   matches.sort(compareTabs(params.sort ?? "recent"));
   const limit = params.limit ?? TABS_LIST_DEFAULT_LIMIT;
   const result: TabsListResult = { tabs: matches.slice(0, limit), matched: matches.length };
@@ -760,7 +786,9 @@ export function parseTabsListParams(raw: unknown): ResolvedTabsListParams {
     scope: scope ?? "all",
     includeHidden: includeHidden ?? true,
     sort: sort ?? "recent",
-    limit: limit ?? TABS_LIST_DEFAULT_LIMIT,
+    // The default depends on what is being counted; an explicit limit governs both.
+    limit:
+      limit ?? (groupBy === "domain" ? TABS_LIST_DEFAULT_GROUP_LIMIT : TABS_LIST_DEFAULT_LIMIT),
     ...(query !== undefined && query.trim() !== "" ? { query: query.trim() } : {}),
     ...(groupBy !== undefined ? { groupBy } : {}),
   };

@@ -8,6 +8,7 @@ import {
   classifyBridgeProbe,
   deriveProof,
   generateToken,
+  filterTabs,
   groupTabsByDomain,
   isBridgeMethod,
   matchesTabQuery,
@@ -21,6 +22,7 @@ import {
   parseUndoCloseParams,
   selectTabs,
   tabDomain,
+  TABS_LIST_DEFAULT_GROUP_LIMIT,
   TABS_LIST_DEFAULT_LIMIT,
   TABS_LIST_MAX_LIMIT,
   TABS_LOAD_MAX_BATCH,
@@ -172,6 +174,13 @@ describe("parseTabsListParams()", () => {
     });
   });
 
+  // A domain histogram has a long tail of one-tab domains, so it gets a tighter
+  // default than a tab listing. An explicit limit still governs both.
+  test("defaults groupBy to its own smaller limit", () => {
+    expect(parseTabsListParams({ groupBy: "domain" }).limit).toBe(TABS_LIST_DEFAULT_GROUP_LIMIT);
+    expect(parseTabsListParams({ groupBy: "domain", limit: 5 }).limit).toBe(5);
+  });
+
   test("accepts the documented values", () => {
     expect(
       parseTabsListParams({
@@ -319,6 +328,34 @@ describe("groupTabsByDomain()", () => {
     const result = groupTabsByDomain(tabs, 1);
     expect(result.groups.map((g) => g.domain)).toEqual(["x.com"]);
     expect(result).toMatchObject({ domains: 2, matched: 4, truncated: true });
+  });
+
+  // Regression, caught live against an 874-tab browser: grouping ran on the
+  // unfiltered set, so `{ query, groupBy }` counted the whole backlog. The
+  // filter has to be applied by the caller, which is what `filterTabs` is for.
+  test("counts only what the filter kept, when the caller filters first", () => {
+    const result = groupTabsByDomain(filterTabs(tabs, { query: "x.com" }), 10);
+    expect(result).toMatchObject({ domains: 1, matched: 3 });
+    expect(result.groups.map((g) => g.domain)).toEqual(["x.com"]);
+  });
+});
+
+describe("filterTabs()", () => {
+  const tabs = [
+    makeTab({ id: 1, url: "https://x.com/a", title: "keep" }),
+    makeTab({ id: 2, url: "https://y.com/b", title: "drop" }),
+    makeTab({ id: 3, url: "https://z.com/c", title: "keep", hidden: true }),
+  ];
+
+  test("applies query and includeHidden without sorting or truncating", () => {
+    expect(filterTabs(tabs, { query: "keep" }).map((t) => t.id)).toEqual([1, 3]);
+    expect(filterTabs(tabs, { query: "keep", includeHidden: false }).map((t) => t.id)).toEqual([1]);
+    expect(filterTabs(tabs, {}).map((t) => t.id)).toEqual([1, 2, 3]);
+  });
+
+  test("returns a new array, so the caller can sort in place", () => {
+    const out = filterTabs(tabs, {});
+    expect(out).not.toBe(tabs as unknown as typeof out);
   });
 });
 

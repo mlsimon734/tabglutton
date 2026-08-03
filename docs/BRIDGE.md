@@ -444,7 +444,11 @@ Five changes, in the order they matter:
    Deliberately not a regex: an agent-authored regex is an unbounded backtracking risk on a
    thousand strings, and substring terms are what triage actually needs.
 2. **`groupBy: "domain"`** — counts only, no tabs. The real triage primitive: one cheap
-   call says what the backlog is made of and what to pass as `query` next. The domain is
+   call says what the backlog is made of and what to pass as `query` next. It honours
+   `query` too, so it can count one slice rather than the whole backlog, and it gets its
+   own tighter default limit (`TABS_LIST_DEFAULT_GROUP_LIMIT`, 50): the real 874-tab
+   browser held **298 distinct domains**, and everything past roughly the fiftieth was a
+   single tab — 250 rows of noise around the ~20 that describe the backlog. The domain is
    the hostname minus `www.`, not the registrable domain: eTLD+1 needs the Public Suffix
    List, which `bridge-protocol.ts` cannot take as a dependency and which goes stale, and
    `mail.google.com` vs `docs.google.com` is the distinction triage wants anyway.
@@ -495,6 +499,18 @@ the merged results, and a query matching text that clipping had already removed 
 silently drop the exact tab the agent asked for. So every filter sees whole strings and
 only the bytes handed to the model are trimmed. This is the same trade as `groupBy`: the
 socket is loopback, and loopback bytes are not the budget anyone is spending.
+
+▸ **The second pass hid a bug from itself, and only a stale extension exposed it.**
+`groupBy` grouped the _unfiltered_ merge: `tabs_list { query: "x.com", groupBy: "domain" }`
+answered `matched: 874, domains: 298` — the whole backlog, identical to the unfiltered
+call. The filter lived inside `selectTabs`, and the grouping branch skipped `selectTabs`
+entirely. Against a **current** extension this was invisible, because the extension had
+already applied `query` before sending; it only surfaced against a real browser running
+0.2.0, which ignores `query` and hands over everything. So the version-skew tolerance that
+the second pass exists to provide is exactly what stopped the bug being noticed, and the
+skew itself is what revealed it. The filter is now `filterTabs`, called by both paths.
+The lesson generalises: a redundant safety pass has to be tested with the primary pass
+_disabled_, or it is only ever exercised as a no-op.
 
 `renderTabs` also tolerates a tab missing `title` or `url` rather than throwing. The
 extension guarantees both, but a version-skewed one does not, and one malformed entry must
