@@ -46,10 +46,7 @@ describe("Obsidian registry parsing", () => {
       },
     });
     for (const platform of ["darwin", "linux"] as const) {
-      expect(parseObsidianVaultRegistry(raw, platform)).toEqual([
-        { name: "Main Vault", path: "/Users/michael/Documents/Main Vault" },
-        { name: "Research\\Work", path: "/Notes/Research\\Work" },
-      ]);
+      expect(parseObsidianVaultRegistry(raw, platform)).toEqual(["Main Vault", "Research\\Work"]);
     }
   });
 
@@ -59,12 +56,14 @@ describe("Obsidian registry parsing", () => {
         JSON.stringify({ vaults: { first: { path: "C:\\Notes\\Work\\", ts: 1 } } }),
         "win32",
       ),
-    ).toEqual([{ name: "Work", path: "C:\\Notes\\Work\\" }]);
+    ).toEqual(["Work"]);
   });
 
   test("treats malformed JSON or an unfamiliar shape as cannot-check", () => {
     expect(parseObsidianVaultRegistry("{")).toBeNull();
     expect(parseObsidianVaultRegistry(JSON.stringify({ vaults: [] }))).toBeNull();
+    // A registry listing no vaults proves nothing about the requested name.
+    expect(parseObsidianVaultRegistry(JSON.stringify({ vaults: {} }))).toBeNull();
     expect(
       parseObsidianVaultRegistry(JSON.stringify({ vaults: { id: { location: "/x" } } })),
     ).toBeNull();
@@ -82,7 +81,7 @@ describe("Obsidian registry lookup", () => {
 
     await mkdir(dirname(path), { recursive: true });
     await Bun.write(path, JSON.stringify({ vaults: { one: { path: "/Notes/Work" } } }));
-    expect(await lookup()).toEqual([{ name: "Work", path: "/Notes/Work" }]);
+    expect(await lookup()).toEqual(["Work"]);
 
     // Different size guarantees a different cheap cache signature even on a
     // filesystem whose timestamp granularity collapses these adjacent writes.
@@ -95,10 +94,7 @@ describe("Obsidian registry lookup", () => {
         },
       }),
     );
-    expect(await lookup()).toEqual([
-      { name: "Personal Archive", path: "/Notes/Personal Archive" },
-      { name: "Work", path: "/Notes/Work" },
-    ]);
+    expect(await lookup()).toEqual(["Personal Archive", "Work"]);
   });
 
   test("recovers after malformed contents are replaced", async () => {
@@ -110,6 +106,6 @@ describe("Obsidian registry lookup", () => {
     await Bun.write(path, "not json");
     expect(await lookup()).toBeNull();
     await Bun.write(path, JSON.stringify({ vaults: { one: { path: "/Notes/Main" } } }));
-    expect(await lookup()).toEqual([{ name: "Main", path: "/Notes/Main" }]);
+    expect(await lookup()).toEqual(["Main"]);
   });
 });

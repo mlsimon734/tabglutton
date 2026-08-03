@@ -840,8 +840,12 @@ export function parseTabClipParams(raw: unknown): TabClipParams {
  * Obsidian has open" instead of the configured one. Falling back to settings on
  * a blank is the wrong repair too: the agent asked for a specific destination
  * and would be told it got one. Refusing is the only answer that cannot mislead.
+ *
+ * Exported so Gullet can vet an override on its own — against Obsidian's local
+ * registry, which only the sidecar can read — without adopting the rest of
+ * `tab_clip`'s contract, which stays the extension's to enforce.
  */
-function parseVaultOverride(raw: unknown): { vault?: string } {
+export function parseVaultOverride(raw: unknown): { vault?: string } {
   if (raw === undefined) return {};
   if (typeof raw !== "string") badRequest("vault must be a string");
   const vault = raw.trim();

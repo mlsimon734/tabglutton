@@ -411,8 +411,8 @@ report a destination the caller did not ask for. Both readings are wrong, so `""
 vault registry before forwarding it. A readable, understood registry that does not contain
 the name produces a `bad-request` listing the vaults that registry knows. This is deliberately
 a soft check: the registry is undocumented and incomplete, and its location varies outside a
-standard install, so an absent, unreadable, malformed, or unfamiliar registry preserves the
-old pass-through behavior. The extension still cannot validate the destination — its handoff
+standard install, so an absent, unreadable, malformed, unfamiliar, or empty registry preserves
+the old pass-through behavior. The extension still cannot validate the destination — its handoff
 is a URL given to the OS — and Gullet's error therefore describes _known_ vaults rather than
 claiming to enumerate every vault on disk. The lookup caches parsed contents by modification
 time and size, so a vault added while Gullet is running appears on the next changed-file check.

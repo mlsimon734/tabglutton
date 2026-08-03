@@ -2,15 +2,12 @@
 // extension cannot see the filesystem; Gullet can, because it runs beside the
 // browser and the obsidian:// handler on the same host.
 
+import { readFile, stat } from "node:fs/promises";
 import { posix, win32 } from "node:path";
+import { asRecord } from "../../src/bridge-protocol.js";
 
-export interface KnownObsidianVault {
-  /** The exact basename accepted by obsidian://new?vault=. */
-  name: string;
-  path: string;
-}
-
-export type ObsidianVaultLookup = () => Promise<readonly KnownObsidianVault[] | null>;
+/** Vault names exactly as `obsidian://new?vault=` accepts them, or null for "cannot check". */
+export type ObsidianVaultLookup = () => Promise<readonly string[] | null>;
 
 type Environment = Readonly<Record<string, string | undefined>>;
 
@@ -37,12 +34,14 @@ export function obsidianRegistryPath(
 /**
  * Parse only the registry shape we understand. A partial or changed shape is
  * "cannot check", not an empty registry: Obsidian owns this undocumented file,
- * so uncertainty must never become a false rejection.
+ * so uncertainty must never become a false rejection. A registry that lists no
+ * vaults at all is the same "cannot check" — it proves nothing about a name the
+ * user just read off their own vault switcher.
  */
 export function parseObsidianVaultRegistry(
   raw: string,
   platform: NodeJS.Platform = process.platform,
-): KnownObsidianVault[] | null {
+): string[] | null {
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
@@ -50,20 +49,20 @@ export function parseObsidianVaultRegistry(
     return null;
   }
 
-  const root = asRecord(parsed);
-  const entries = asRecord(root?.vaults);
+  const entries = asRecord(asRecord(parsed)?.vaults);
   if (!entries) return null;
 
-  const byName = new Map<string, KnownObsidianVault>();
+  const names = new Set<string>();
   for (const value of Object.values(entries)) {
     const entry = asRecord(value);
     if (!entry || typeof entry.path !== "string") return null;
-    const path = entry.path.trim();
-    const name = vaultName(path, platform);
-    if (!name) return null;
-    byName.set(name, { name, path });
+    // Use only the host platform's separator; the other is a legal filename character.
+    const basename =
+      platform === "win32" ? win32.basename(entry.path.trim()) : posix.basename(entry.path.trim());
+    if (!basename) return null;
+    names.add(basename);
   }
-  return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
+  return names.size === 0 ? null : [...names].sort((a, b) => a.localeCompare(b));
 }
 
 /**
@@ -74,36 +73,26 @@ export function parseObsidianVaultRegistry(
  */
 export function createObsidianVaultLookup(
   path: string | null = obsidianRegistryPath(),
-  platform: NodeJS.Platform = process.platform,
 ): ObsidianVaultLookup {
-  let cached: { signature: string; vaults: KnownObsidianVault[] | null } | undefined;
+  let cached: { signature: string; vaults: string[] | null } | undefined;
 
   return async () => {
     if (!path) return null;
     try {
-      const file = Bun.file(path);
-      if (!(await file.exists())) return null;
-      const signature = `${file.lastModified}:${file.size}`;
+      // One stat, not an exists() plus a second metadata read: a missing file
+      // throws here and takes the same soft path as any other failure.
+      const { mtimeMs, size } = await stat(path);
+      const signature = `${mtimeMs}:${size}`;
       if (cached?.signature === signature) return cached.vaults;
-      const vaults = parseObsidianVaultRegistry(await file.text(), platform);
+      const vaults = parseObsidianVaultRegistry(await readFile(path, "utf8"));
       cached = { signature, vaults };
       return vaults;
     } catch {
-      // Missing permissions, a concurrent Obsidian rewrite, or any platform
-      // surprise only means this advisory check is unavailable. The clip must
-      // still reach the extension, which retains the old pass-through behavior.
+      // A missing registry, missing permissions, a concurrent Obsidian rewrite,
+      // or any platform surprise only means this advisory check is unavailable.
+      // The clip must still reach the extension, which retains the old
+      // pass-through behavior.
       return null;
     }
   };
-}
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
-
-/** Use only the host platform's separator; the other one is a legal filename character. */
-function vaultName(path: string, platform: NodeJS.Platform): string {
-  return platform === "win32" ? win32.basename(path) : posix.basename(path);
 }

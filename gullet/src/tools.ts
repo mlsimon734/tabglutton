@@ -8,8 +8,8 @@ import {
   filterTabs,
   groupTabsByDomain,
   isBridgeMethod,
-  parseTabClipParams,
   parseTabsListParams,
+  parseVaultOverride,
   selectTabs,
   TABS_LIST_DEFAULT_GROUP_LIMIT,
   TABS_LIST_DEFAULT_LIMIT,
@@ -43,8 +43,10 @@ export interface ToolContext {
   /**
    * Known vaults from Obsidian's local registry, or null when that advisory
    * registry cannot be trusted. Checked only for an explicit tab_clip override.
+   * Optional for the same reason as `rivalHubs`: it can refuse a call it can
+   * prove is wrong, but an absent lookup never changes one.
    */
-  knownObsidianVaults: ObsidianVaultLookup;
+  knownObsidianVaults?: ObsidianVaultLookup;
   /**
    * Candidate ports held by another Tabglutton hub, asked only when there is no
    * browser to serve. Optional so tests and any future embedding can omit it —
@@ -283,7 +285,11 @@ async function route(
   }
   const target = typeof args.browser === "string" ? args.browser : undefined;
   const { browser: _browser, ...params } = args;
-  if (name === "tab_clip") await validateVaultOverride(ctx, params);
+  // Before `connections()`, deliberately: that call waits up to
+  // BRIDGE_CONNECT_WAIT_MS for a browser, and a name we can already prove wrong
+  // should fail in milliseconds rather than after a 45s wait for a browser it
+  // was never going to reach.
+  if (name === "tab_clip") await validateVaultOverride(ctx, params.vault);
   const summaries = await ctx.connections();
 
   if (name === "tabs_list") return tabsList(ctx, summaries, target, params);
@@ -300,18 +306,14 @@ async function route(
 }
 
 /** Reject only when a registry we could read proves the requested name is absent. */
-async function validateVaultOverride(
-  ctx: ToolContext,
-  params: Record<string, unknown>,
-): Promise<void> {
-  if (params.vault === undefined) return;
-
+async function validateVaultOverride(ctx: ToolContext, raw: unknown): Promise<void> {
   // Shared with the extension so trimming, blank rejection, and the path-vs-name
-  // warning cannot drift between the two sides of the same call.
-  const vault = parseTabClipParams(params).vault;
-  if (!vault) return;
+  // warning cannot drift between the two sides of the same call. Only the vault:
+  // the rest of tab_clip's contract stays the extension's to enforce.
+  const { vault } = parseVaultOverride(raw);
+  if (!vault || !ctx.knownObsidianVaults) return;
 
-  let known;
+  let known: readonly string[] | null;
   try {
     known = await ctx.knownObsidianVaults();
   } catch {
@@ -319,17 +321,14 @@ async function validateVaultOverride(
     // the built-in filesystem reader: inability to check is never a rejection.
     return;
   }
-  if (known === null || known.some((candidate) => candidate.name === vault)) return;
+  if (known === null || known.includes(vault)) return;
 
-  const names =
-    known.length === 0
-      ? "(none)"
-      : known.map((candidate) => JSON.stringify(candidate.name)).join(", ");
   throw new BridgeRequestError(
     "bad-request",
     `Vault ${JSON.stringify(vault)} is not in Obsidian's local registry. ` +
-      `Known vaults in that registry: ${names}. Use an exact name from Obsidian's vault ` +
-      `switcher, or omit vault to use Tabglutton's configured destination.`,
+      `Known vaults in that registry: ${known.map((name) => JSON.stringify(name)).join(", ")}. ` +
+      `Use an exact name from Obsidian's vault switcher, or omit vault to use ` +
+      `Tabglutton's configured destination.`,
   );
 }
 
