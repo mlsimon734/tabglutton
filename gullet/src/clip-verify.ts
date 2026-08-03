@@ -45,29 +45,42 @@ const POLL_INTERVAL_MS = 200;
  */
 export const CLIP_MTIME_SLACK_MS = 2_000;
 
+/**
+ * Not-there and cannot-look are different answers and must stay different. Only
+ * ENOENT is "not written yet"; a permission or I/O failure on a vault Obsidian
+ * can reach is the soft contract's "cannot check", and collapsing both to `null`
+ * reported a real clip as missing.
+ */
+export type FileTime = number | null | "unreadable";
+export type DirListing = string[] | "missing" | "unreadable";
+
 export interface ClipVerifierOptions {
   timeoutMs?: number;
-  /** Last-modified time in ms, or null when the note is not there. Injected for tests. */
-  modifiedAt?: (path: string) => Promise<number | null>;
-  /** Names in a directory, or null when it cannot be read. Injected for tests. */
-  readDir?: (dir: string) => Promise<string[] | null>;
+  /** Last-modified time in ms, null when absent, "unreadable" when it cannot be checked. */
+  modifiedAt?: (path: string) => Promise<FileTime>;
+  /** Names in a directory, or why they could not be read. Injected for tests. */
+  readDir?: (dir: string) => Promise<DirListing>;
   sleep?: (ms: number) => Promise<void>;
   now?: () => number;
 }
 
-async function defaultModifiedAt(path: string): Promise<number | null> {
+function isNotFound(err: unknown): boolean {
+  return (err as { code?: unknown } | null)?.code === "ENOENT";
+}
+
+async function defaultModifiedAt(path: string): Promise<FileTime> {
   try {
     return (await stat(path)).mtimeMs;
-  } catch {
-    return null;
+  } catch (err) {
+    return isNotFound(err) ? null : "unreadable";
   }
 }
 
-async function defaultReadDir(dir: string): Promise<string[] | null> {
+async function defaultReadDir(dir: string): Promise<DirListing> {
   try {
     return await readdir(dir);
-  } catch {
-    return null;
+  } catch (err) {
+    return isNotFound(err) ? "missing" : "unreadable";
   }
 }
 
@@ -100,6 +113,18 @@ export function clipNotePath(vaultPath: string, file: string): string {
   return join(vaultPath, relative);
 }
 
+/**
+ * Forget claims no verification could still be looking at. The oldest freshness
+ * floor any in-flight verification can hold is its start (at most `timeoutMs`
+ * ago) minus the mtime slack, so a claim below that could never be reused as
+ * proof regardless — and the map must not grow for the life of a session.
+ */
+function prune(claimed: Map<string, number>, floor: number): void {
+  for (const [path, mtime] of claimed) {
+    if (mtime < floor) claimed.delete(path);
+  }
+}
+
 export function createClipVerifier(
   vaultPaths: ObsidianVaultPaths,
   options: ClipVerifierOptions = {},
@@ -109,6 +134,26 @@ export function createClipVerifier(
   const readDir = options.readDir ?? defaultReadDir;
   const sleep = options.sleep ?? ((ms: number) => Bun.sleep(ms));
   const now = options.now ?? (() => Date.now());
+
+  /**
+   * Notes already spent as proof, by absolute path and the mtime that was
+   * accepted.
+   *
+   * Two clips of pages with the same title produce the same requested name, and
+   * the second is written as "Note 1.md" — but only if it was written at all.
+   * With both requests in flight, both timestamps precede both writes, so if one
+   * handoff is dropped the single fresh note satisfies both verifications and
+   * `close: true` closes the tab whose content was never saved. A note can
+   * therefore vouch for exactly one clip: once claimed, only a *newer* write to
+   * the same path counts (Obsidian never overwrites, so a real second clip is a
+   * different path anyway; the same path with a newer mtime means the user
+   * deleted the note and re-filed it).
+   *
+   * Process-local. Two Gullets sharing one browser — a hub and a peer — each run
+   * their own verifier, so the same interleaving across two agent sessions is
+   * still possible; it needs the same page clipped from both within seconds.
+   */
+  const claimed = new Map<string, number>();
 
   return async (vault, file, since) => {
     let paths: ReadonlyMap<string, string> | null;
@@ -131,11 +176,19 @@ export function createClipVerifier(
       const entries = await readDir(dir);
       // The folder not existing yet is a legitimate "not written", but a folder
       // we cannot read at all is "cannot check" — the soft contract again.
-      if (entries === null && (await modifiedAt(dir)) !== null) return "unknown";
-      for (const entry of entries ?? []) {
+      if (entries === "unreadable") return "unknown";
+      for (const entry of entries === "missing" ? [] : entries) {
         if (!isClipNoteName(entry, base)) continue;
-        const mtime = await modifiedAt(join(dir, entry));
-        if (mtime !== null && mtime >= fresh) return "landed";
+        const path = join(dir, entry);
+        const mtime = await modifiedAt(path);
+        // A note we can see but cannot stat is the same "cannot check".
+        if (mtime === "unreadable") return "unknown";
+        if (mtime === null || mtime < fresh) continue;
+        const spentAt = claimed.get(path);
+        if (spentAt !== undefined && mtime <= spentAt) continue;
+        claimed.set(path, mtime);
+        prune(claimed, now() - timeoutMs - CLIP_MTIME_SLACK_MS);
+        return "landed";
       }
       if (now() >= deadline) return "missing";
       await sleep(POLL_INTERVAL_MS);

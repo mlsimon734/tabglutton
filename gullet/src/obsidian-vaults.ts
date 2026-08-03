@@ -73,9 +73,14 @@ export function parseObsidianVaultEntries(
   for (const value of Object.values(entries)) {
     const entry = asRecord(value);
     if (!entry || typeof entry.path !== "string") return null;
-    const path = entry.path.trim();
+    // Trim only the copy the vault *name* is derived from. A trailing space is a
+    // legal directory name on macOS and Linux, so trimming the stored path would
+    // send the clip check to a directory next to the real vault and report a
+    // note that landed as missing.
+    const path = entry.path;
+    const trimmed = path.trim();
     // Use only the host platform's separator; the other is a legal filename character.
-    const basename = platform === "win32" ? win32.basename(path) : posix.basename(path);
+    const basename = platform === "win32" ? win32.basename(trimmed) : posix.basename(trimmed);
     if (!basename) return null;
     vaults.set(basename, path);
   }

@@ -5,9 +5,11 @@
 import {
   asRecord,
   BridgeRequestError,
+  errorMessage,
   filterTabs,
   groupTabsByDomain,
   isBridgeMethod,
+  parseTabClipParams,
   parseTabsListParams,
   parseVaultOverride,
   selectTabs,
@@ -334,10 +336,16 @@ async function clipAndVerify(
   connectionId: string,
   params: Record<string, unknown>,
 ): Promise<unknown> {
-  const wantsClose = params.close === true;
   // Without a verifier there is nothing to add, and inventing a second round
   // trip would only widen the window in which the tab could change.
   if (!ctx.verifyClip) return ctx.request(connectionId, "tab_clip", params);
+
+  // Parsed before `close` is overwritten, not after: the MCP transport does not
+  // enforce the advertised schema, so a non-boolean `close` would otherwise be
+  // replaced by `false` here and reach the extension as a well-formed clip-only
+  // call instead of the bad-request it is. The rest of the contract stays the
+  // extension's to enforce; this only re-checks what the rewrite would hide.
+  const { tabId, close: wantsClose } = parseTabClipParams(params);
 
   // Sampled before the clip so an already-filed note from an earlier run cannot
   // vouch for this one.
@@ -363,9 +371,18 @@ async function clipAndVerify(
 
   if (!wantsClose) return { ...result, clipVerified: verdict === "landed" };
 
-  const closed = asRecord(
-    await ctx.request(connectionId, "tabs_close", { tabIds: [params.tabId] }),
-  );
+  // The note is already on disk at this point, so a close that fails must not
+  // turn the whole call into an error: an agent reading "tab_clip failed" over a
+  // filed note re-clips it, and Obsidian happily writes the duplicate. The tab
+  // going away or being renumbered during verification makes `tabs_close` throw
+  // not-found, which is exactly this case.
+  let closed: Record<string, unknown> | null = null;
+  let closeError: string | undefined;
+  try {
+    closed = asRecord(await ctx.request(connectionId, "tabs_close", { tabIds: [tabId] }));
+  } catch (err) {
+    closeError = errorMessage(err);
+  }
   // `tabs_close` is the authority on whether the tab actually went, and on the
   // undo batch that reverses it. Never report a close it did not confirm.
   const didClose = closed?.closed === 1;
@@ -374,7 +391,7 @@ async function clipAndVerify(
     clipVerified: verdict === "landed",
     closed: didClose,
     ...(didClose && typeof closed?.batchId === "string" ? { batchId: closed.batchId } : {}),
-    ...(didClose ? {} : { closeSkipped: closed?.skipped ?? closed?.missing ?? true }),
+    ...(didClose ? {} : { closeSkipped: closeError ?? closed?.skipped ?? closed?.missing ?? true }),
   };
 }
 

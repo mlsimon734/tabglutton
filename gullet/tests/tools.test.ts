@@ -361,6 +361,41 @@ describe("tab-scoped tools", () => {
     expect(payload(result)).not.toHaveProperty("batchId");
   });
 
+  // The note is on disk by the time the close is attempted, so a close that
+  // fails is a partial success — reporting the whole call as an error invites a
+  // re-clip, and Obsidian writes the duplicate.
+  test("tab_clip keeps a verified clip when the close itself fails", async () => {
+    const { call, sent } = caller(
+      [zen],
+      (s) => {
+        if (s.method === "tab_clip") return { file: "Clippings/Note", vault: "test" };
+        throw new BridgeRequestError("not-found", "None of the given tab ids exist.");
+      },
+      { verifyClip: async () => "landed" },
+    );
+    const result = await call("tab_clip", { tabId: 7, close: true });
+    expect(result.isError).toBeUndefined();
+    expect(payload(result)).toMatchObject({
+      clipVerified: true,
+      closed: false,
+      closeSkipped: "None of the given tab ids exist.",
+    });
+    expect(sent.map((s) => s.method)).toEqual(["tab_clip", "tabs_close"]);
+  });
+
+  // The MCP transport does not enforce the advertised schema, and rewriting
+  // `close` before validating it turned a malformed request into a silent
+  // clip-only success.
+  test("tab_clip rejects a non-boolean close instead of rewriting it", async () => {
+    const { call, sent } = caller([zen], () => ({ file: "Clippings/Note", vault: "test" }), {
+      verifyClip: async () => "landed",
+    });
+    const result = await call("tab_clip", { tabId: 7, close: "yes" });
+    expect(result.isError).toBe(true);
+    expect(payload(result)).toMatchObject({ error: "bad-request" });
+    expect(sent).toEqual([]);
+  });
+
   test("tab_clip without close reports whether the note was verified", async () => {
     const { call, sent } = caller([zen], () => ({ file: "Clippings/Note", vault: "test" }), {
       verifyClip: async () => "landed",

@@ -5,6 +5,7 @@ import { dirname, join } from "node:path";
 import {
   createObsidianVaultLookup,
   obsidianRegistryPath,
+  parseObsidianVaultEntries,
   parseObsidianVaultRegistry,
 } from "../src/obsidian-vaults.js";
 
@@ -57,6 +58,17 @@ describe("Obsidian registry parsing", () => {
         "win32",
       ),
     ).toEqual(["Work"]);
+  });
+
+  // A trailing space is a legal directory name on macOS and Linux, so a trimmed
+  // path points at a directory next to the real vault — where a note that landed
+  // is not, and the clip check would call it missing.
+  test("keeps the registry's exact path while deriving a usable name", () => {
+    const entries = parseObsidianVaultEntries(
+      JSON.stringify({ vaults: { first: { path: "/Notes/Main  ", ts: 1 } } }),
+      "darwin",
+    );
+    expect(entries?.get("Main")).toBe("/Notes/Main  ");
   });
 
   test("treats malformed JSON or an unfamiliar shape as cannot-check", () => {

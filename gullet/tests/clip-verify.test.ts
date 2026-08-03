@@ -1,5 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { clipNotePath, createClipVerifier, isClipNoteName } from "../src/clip-verify.js";
+import {
+  clipNotePath,
+  createClipVerifier,
+  isClipNoteName,
+  type DirListing,
+  type FileTime,
+} from "../src/clip-verify.js";
 import type { ObsidianVaultPaths } from "../src/obsidian-vaults.js";
 
 const vaults: ObsidianVaultPaths = async () => new Map([["test", "/vaults/test"]]);
@@ -32,10 +38,9 @@ const SINCE = 1_000_000;
 /** A vault whose Clippings folder holds `entries`, each with the given mtime. */
 function vaultWith(entries: Record<string, number>) {
   return {
-    readDir: async (dir: string) =>
-      dir === "/vaults/test/Clippings" ? Object.keys(entries) : null,
-    modifiedAt: async (p: string) => {
-      if (p === "/vaults/test/Clippings") return SINCE; // the folder itself exists
+    readDir: async (dir: string): Promise<DirListing> =>
+      dir === "/vaults/test/Clippings" ? Object.keys(entries) : "missing",
+    modifiedAt: async (p: string): Promise<FileTime> => {
       const name = p.slice("/vaults/test/Clippings/".length);
       return entries[name] ?? null;
     },
@@ -87,10 +92,7 @@ describe("createClipVerifier", () => {
     const verify = createClipVerifier(vaults, {
       ...fakeClock(),
       readDir: async () => ["Note.md"],
-      modifiedAt: async (p) => {
-        if (p === "/vaults/test/Clippings") return SINCE;
-        return ++calls >= 3 ? SINCE + 10 : null;
-      },
+      modifiedAt: async () => (++calls >= 3 ? SINCE + 10 : null),
     });
     expect(await verify("test", "Clippings/Note", SINCE)).toBe("landed");
     expect(calls).toBe(3);
@@ -149,11 +151,21 @@ describe("createClipVerifier", () => {
   });
 
   // A folder that exists but cannot be listed is "cannot check", not "not written".
-  test("unknown when the clippings folder exists but cannot be listed", async () => {
+  test("unknown when the clippings folder cannot be listed", async () => {
     const verify = createClipVerifier(vaults, {
       ...fakeClock(),
-      readDir: async () => null,
-      modifiedAt: async (p) => (p === "/vaults/test/Clippings" ? SINCE : null),
+      readDir: async () => "unreadable",
+      modifiedAt: async () => null,
+    });
+    expect(await verify("test", "Clippings/Note", SINCE)).toBe("unknown");
+  });
+
+  // The same failure one level down: listable folder, unstattable note.
+  test("unknown when a matching note cannot be stat'd", async () => {
+    const verify = createClipVerifier(vaults, {
+      ...fakeClock(),
+      readDir: async () => ["Note.md"],
+      modifiedAt: async () => "unreadable",
     });
     expect(await verify("test", "Clippings/Note", SINCE)).toBe("unknown");
   });
@@ -162,9 +174,53 @@ describe("createClipVerifier", () => {
   test("missing when the clippings folder does not exist at all", async () => {
     const verify = createClipVerifier(vaults, {
       ...fakeClock(),
-      readDir: async () => null,
+      readDir: async () => "missing",
       modifiedAt: async () => null,
     });
     expect(await verify("test", "Clippings/Note", SINCE)).toBe("missing");
+  });
+
+  // Two pages with the same title clipped at once produce one requested name.
+  // If one handoff is dropped, the single fresh note must not vouch for both —
+  // the second verification would close a tab whose content was never saved.
+  test("one note vouches for one clip, even with both verifications in flight", async () => {
+    const verify = createClipVerifier(vaults, {
+      ...fakeClock(),
+      ...vaultWith({ "Note.md": SINCE + 50 }),
+    });
+    const [first, second] = await Promise.all([
+      verify("test", "Clippings/Note", SINCE),
+      verify("test", "Clippings/Note", SINCE),
+    ]);
+    expect([first, second].sort()).toEqual(["landed", "missing"]);
+  });
+
+  // Both really landed: Obsidian sidesteps the collision, so there are two notes
+  // and both verifications have their own proof.
+  test("two notes vouch for two clips", async () => {
+    const verify = createClipVerifier(vaults, {
+      ...fakeClock(),
+      ...vaultWith({ "Note.md": SINCE + 50, "Note 1.md": SINCE + 60 }),
+    });
+    const verdicts = await Promise.all([
+      verify("test", "Clippings/Note", SINCE),
+      verify("test", "Clippings/Note", SINCE),
+    ]);
+    expect(verdicts).toEqual(["landed", "landed"]);
+  });
+
+  // A claim is on that write, not on the path: deleting the note and re-filing
+  // the page writes "Note.md" again, and that is a real clip.
+  test("a newer write to a claimed path vouches for the next clip", async () => {
+    const mtimes: Record<string, number> = { "Note.md": SINCE + 50 };
+    const verify = createClipVerifier(vaults, {
+      ...fakeClock(),
+      readDir: async () => Object.keys(mtimes),
+      modifiedAt: async (p): Promise<FileTime> =>
+        mtimes[p.slice("/vaults/test/Clippings/".length)] ?? null,
+    });
+    expect(await verify("test", "Clippings/Note", SINCE)).toBe("landed");
+    mtimes["Note.md"] = SINCE + 500;
+    expect(await verify("test", "Clippings/Note", SINCE + 400)).toBe("landed");
   });
 });
