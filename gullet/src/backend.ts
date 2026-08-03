@@ -124,13 +124,13 @@ export class Supervisor implements BridgeBackend {
     // the constructor's placeholder resolved promise and mistake it for an
     // election that finished with no backend.
     if (!this.token) {
-      if (!(await this.acquireToken())) {
-        void this.retryToken();
-        const fault = this.tokenFault;
-        throw new BridgeRequestError(
-          fault?.code ?? "unauthorized",
-          fault?.message ?? "Tabglutton's bridge has no token.",
-        );
+      const fault = await this.acquireToken();
+      if (fault) {
+        // Only a configured source can heal; with none, acquireToken's answer is
+        // fixed at construction time and a retry loop would wake the event loop
+        // forever to re-derive it.
+        if (this.options.resolveToken) void this.retryToken();
+        throw new BridgeRequestError(fault.code, fault.message);
       }
     }
     this.settling = this.elect();
@@ -168,8 +168,8 @@ export class Supervisor implements BridgeBackend {
    * secret manager, or the token file may not have been created yet; neither is
    * a reason to kill the MCP transport before it can explain the problem.
    */
-  private async acquireToken(): Promise<boolean> {
-    if (this.token) return true;
+  private async acquireToken(): Promise<BridgeError | null> {
+    if (this.token) return null;
     if (!this.options.resolveToken) {
       this.tokenFault = {
         code: "unauthorized",
@@ -177,20 +177,17 @@ export class Supervisor implements BridgeBackend {
           "Tabglutton's bridge has no token. Open Tabglutton's settings, enable the " +
           "agent bridge, generate a token, and copy the setup command.",
       };
-      return false;
+      return this.tokenFault;
     }
     try {
       const token = (await this.options.resolveToken()).trim();
       if (!token) throw new Error("The configured token source returned an empty token.");
       this.token = token;
       this.tokenFault = null;
-      return true;
+      return null;
     } catch (err) {
-      this.tokenFault = {
-        code: "unauthorized",
-        message: errorMessage(err),
-      };
-      return false;
+      this.tokenFault = { code: "unauthorized", message: errorMessage(err) };
+      return this.tokenFault;
     }
   }
 
@@ -200,7 +197,7 @@ export class Supervisor implements BridgeBackend {
     while (!this.stopped) {
       await delay(gap);
       if (this.stopped) return;
-      if (await this.acquireToken()) {
+      if (!(await this.acquireToken())) {
         console.error("[gullet] token source became available; starting bridge election");
         this.settling = this.elect();
         void this.settling.catch((err) =>

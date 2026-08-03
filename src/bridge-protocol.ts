@@ -63,6 +63,16 @@ export const DEFAULT_BRIDGE_PORT = 4589;
 export const BRIDGE_PORT_CANDIDATES = [4589, 20317, 17483, 27613, 24193] as const;
 
 /**
+ * Where Gullet keeps its global settings, under `$XDG_CONFIG_HOME` (or
+ * `~/.config`). Shared because the options page renders the setup command that
+ * *creates* this file while `gullet/src/config.ts` is what reads it — the two
+ * must agree exactly, and renaming either one otherwise typechecks cleanly
+ * while silently breaking the only documented way to install a token.
+ */
+export const CONFIG_DIR_NAME = "tabglutton";
+export const DEFAULT_TOKEN_FILE_NAME = "token";
+
+/**
  * Marker Gullet returns on any non-upgrade request, so a probe can tell "the
  * sidecar is here" from "something else owns this port". Both are HTTP
  * responses and used to be indistinguishable, which is the whole problem: see

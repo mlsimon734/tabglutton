@@ -2,7 +2,13 @@
 
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
-import { isBridgePort } from "../../src/bridge-protocol.js";
+import {
+  asRecord,
+  CONFIG_DIR_NAME,
+  DEFAULT_TOKEN_FILE_NAME,
+  errorMessage,
+  isBridgePort,
+} from "../../src/bridge-protocol.js";
 
 export type TokenResolver = () => Promise<string>;
 
@@ -41,9 +47,7 @@ environment: process arguments are visible to other local users.`;
 
 interface ParsedFlags {
   port?: string;
-  portSet: boolean;
   token?: string;
-  tokenSet: boolean;
 }
 
 interface FileConfig {
@@ -72,22 +76,6 @@ export interface ConfigRuntime {
   ) => Promise<TokenCommandResult>;
 }
 
-/**
- * The old pure CLI/env surface remains useful to callers and unit tests. File
- * access lives in loadConfig(), which main uses.
- */
-export function parseConfig(
-  argv: readonly string[],
-  env: Readonly<Record<string, string | undefined>>,
-): GulletConfig {
-  const flags = parseFlags(argv);
-  const port = flags.portSet ? flags.port : firstDefined(env, "TABGLUTTON_PORT", "GULLET_PORT");
-  const token = flags.tokenSet
-    ? flags.token
-    : firstDefined(env, "TABGLUTTON_TOKEN", "GULLET_TOKEN");
-  return assembleConfig(parsePort(port), (token ?? "").trim());
-}
-
 /** Read the global settings and select a token source without executing it. */
 export async function loadConfig(
   argv: readonly string[],
@@ -98,21 +86,20 @@ export async function loadConfig(
   const paths = configPaths(env, runtime.cwd);
   const fileConfig = await readFileConfig(paths.configFile, runtime);
 
-  const rawPort = flags.portSet
-    ? flags.port
-    : (firstDefined(env, "TABGLUTTON_PORT", "GULLET_PORT") ?? fileConfig.port);
+  const rawPort =
+    flags.port ?? firstDefined(env, "TABGLUTTON_PORT", "GULLET_PORT") ?? fileConfig.port;
   const selection = parsePort(rawPort);
 
-  const directToken = flags.tokenSet
-    ? { set: true, value: flags.token }
-    : definedEnv(env, "TABGLUTTON_TOKEN", "GULLET_TOKEN");
-  if (directToken.set) return assembleConfig(selection, (directToken.value ?? "").trim());
+  // A flag or variable that is present but empty still counts as "the token was
+  // configured here", so it stops the search rather than falling through to the
+  // file sources — hence `!== undefined` rather than a truthiness check.
+  const directToken = flags.token ?? firstDefined(env, "TABGLUTTON_TOKEN", "GULLET_TOKEN");
+  if (directToken !== undefined) return assembleConfig(selection, directToken.trim());
 
   const dotEnv = await readOptionalFile(join(runtime.cwd, ".env"), runtime);
   if (dotEnv !== null) {
-    const values = parseDotEnv(dotEnv);
-    const token = definedEnv(values, "TABGLUTTON_TOKEN", "GULLET_TOKEN");
-    if (token.set) return assembleConfig(selection, (token.value ?? "").trim());
+    const token = firstDefined(parseDotEnv(dotEnv), "TABGLUTTON_TOKEN", "GULLET_TOKEN");
+    if (token !== undefined) return assembleConfig(selection, token.trim());
   }
 
   if (fileConfig.tokenCommand !== undefined) {
@@ -137,25 +124,22 @@ function assembleConfig(
   token: string,
   resolveToken?: TokenResolver,
 ): GulletConfig {
-  const tokenConfig = resolveToken === undefined ? { token } : { token, resolveToken };
   return selection === "auto"
-    ? { portMode: "auto", ...tokenConfig }
-    : { portMode: "fixed", port: selection, ...tokenConfig };
+    ? { portMode: "auto", token, resolveToken }
+    : { portMode: "fixed", port: selection, token, resolveToken };
 }
 
 function parseFlags(argv: readonly string[]): ParsedFlags {
-  const parsed: ParsedFlags = { portSet: false, tokenSet: false };
+  const parsed: ParsedFlags = {};
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     const [flag, inline] = splitFlag(arg);
     switch (flag) {
       case "--port":
         parsed.port = inline ?? requireValue(flag, argv[++i]);
-        parsed.portSet = true;
         break;
       case "--token":
         parsed.token = inline ?? requireValue(flag, argv[++i]);
-        parsed.tokenSet = true;
         break;
       default:
         throw new ConfigError(`Unknown argument ${arg}.\n\n${USAGE}`);
@@ -198,16 +182,6 @@ function firstDefined(
   return values[primary] !== undefined ? values[primary] : values[alias];
 }
 
-function definedEnv(
-  values: Readonly<Record<string, string | undefined>>,
-  primary: string,
-  alias: string,
-): { set: boolean; value?: string } {
-  if (values[primary] !== undefined) return { set: true, value: values[primary] };
-  if (values[alias] !== undefined) return { set: true, value: values[alias] };
-  return { set: false };
-}
-
 function configPaths(
   env: Readonly<Record<string, string | undefined>>,
   cwd: string,
@@ -217,10 +191,10 @@ function configPaths(
   const root = configuredRoot
     ? resolveConfigPath(configuredRoot, cwd, home)
     : join(home, ".config");
-  const directory = join(root, "tabglutton");
+  const directory = join(root, CONFIG_DIR_NAME);
   return {
     configFile: join(directory, "config.json"),
-    defaultTokenFile: join(directory, "token"),
+    defaultTokenFile: join(directory, DEFAULT_TOKEN_FILE_NAME),
     home,
   };
 }
@@ -241,10 +215,11 @@ async function readFileConfig(path: string, runtime: ConfigRuntime): Promise<Fil
     // secret-manager command or keep a trailing comma without a preprocessor.
     parsed = Bun.JSONC.parse(text);
   } catch (err) {
-    throw new ConfigError(`Could not parse ${path}: ${messageOf(err)}`);
+    throw new ConfigError(`Could not parse ${path}: ${errorMessage(err)}`);
   }
-  if (!isRecord(parsed)) throw new ConfigError(`${path} must contain a JSON object.`);
-  if (Object.hasOwn(parsed, "token")) {
+  const parsedConfig = asRecord(parsed);
+  if (!parsedConfig) throw new ConfigError(`${path} must contain a JSON object.`);
+  if (Object.hasOwn(parsedConfig, "token")) {
     throw new ConfigError(
       `${path} may not contain "token". Put the secret in the default token file, ` +
         `or configure "tokenFile" or "tokenCommand" instead.`,
@@ -252,28 +227,27 @@ async function readFileConfig(path: string, runtime: ConfigRuntime): Promise<Fil
   }
 
   const allowed = new Set(["port", "tokenFile", "tokenCommand"]);
-  const unknown = Object.keys(parsed).find((key) => !allowed.has(key));
+  const unknown = Object.keys(parsedConfig).find((key) => !allowed.has(key));
   if (unknown !== undefined) throw new ConfigError(`Unknown key "${unknown}" in ${path}.`);
 
+  const nonEmptyString = (key: "tokenFile" | "tokenCommand", noun: string): string | undefined => {
+    const value = parsedConfig[key];
+    if (value === undefined) return undefined;
+    if (typeof value !== "string" || value.trim() === "") {
+      throw new ConfigError(`"${key}" in ${path} must be a non-empty ${noun}.`);
+    }
+    return value;
+  };
+
   const config: FileConfig = {};
-  if (parsed.port !== undefined) {
-    if (typeof parsed.port !== "string" && typeof parsed.port !== "number") {
+  if (parsedConfig.port !== undefined) {
+    if (typeof parsedConfig.port !== "string" && typeof parsedConfig.port !== "number") {
       throw new ConfigError(`"port" in ${path} must be "auto" or a number.`);
     }
-    config.port = parsed.port;
+    config.port = parsedConfig.port;
   }
-  if (parsed.tokenFile !== undefined) {
-    if (typeof parsed.tokenFile !== "string" || parsed.tokenFile.trim() === "") {
-      throw new ConfigError(`"tokenFile" in ${path} must be a non-empty path.`);
-    }
-    config.tokenFile = parsed.tokenFile;
-  }
-  if (parsed.tokenCommand !== undefined) {
-    if (typeof parsed.tokenCommand !== "string" || parsed.tokenCommand.trim() === "") {
-      throw new ConfigError(`"tokenCommand" in ${path} must be a non-empty command.`);
-    }
-    config.tokenCommand = parsed.tokenCommand;
-  }
+  config.tokenFile = nonEmptyString("tokenFile", "path");
+  config.tokenCommand = nonEmptyString("tokenCommand", "command");
   if (config.tokenFile !== undefined && config.tokenCommand !== undefined) {
     throw new ConfigError(`${path} must choose either "tokenFile" or "tokenCommand", not both.`);
   }
@@ -287,7 +261,7 @@ function tokenFileResolver(path: string, runtime: ConfigRuntime): TokenResolver 
       token = (await runtime.readFile(path)).trim();
     } catch (err) {
       throw new ConfigError(
-        `Could not read Tabglutton's token file at ${path}: ${messageOf(err)}. ` +
+        `Could not read Tabglutton's token file at ${path}: ${errorMessage(err)}. ` +
           `Open Tabglutton's settings and copy the setup command again.`,
       );
     }
@@ -334,7 +308,7 @@ async function readOptionalFile(path: string, runtime: ConfigRuntime): Promise<s
     return await runtime.readFile(path);
   } catch (err) {
     if (isNotFound(err)) return null;
-    throw new ConfigError(`Could not read ${path}: ${messageOf(err)}`);
+    throw new ConfigError(`Could not read ${path}: ${errorMessage(err)}`);
   }
 }
 
@@ -418,14 +392,6 @@ export async function runTokenCommand(
   return { ...drained, exitCode: -1, timedOut: true };
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 function isNotFound(err: unknown): boolean {
-  return isRecord(err) && err.code === "ENOENT";
-}
-
-function messageOf(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
+  return asRecord(err)?.code === "ENOENT";
 }
