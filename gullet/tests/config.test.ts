@@ -1,5 +1,35 @@
 import { describe, test, expect } from "bun:test";
-import { ConfigError, parseConfig } from "../src/config.js";
+import {
+  ConfigError,
+  loadConfig,
+  parseConfig,
+  TOKEN_COMMAND_TIMEOUT_MS,
+  type ConfigRuntime,
+} from "../src/config.js";
+
+function missing(path: string): Error & { code: string } {
+  return Object.assign(new Error(`ENOENT: ${path}`), { code: "ENOENT" });
+}
+
+function runtime(
+  files: Readonly<Record<string, string>>,
+  runTokenCommand: ConfigRuntime["runTokenCommand"] = async () => ({
+    exitCode: 0,
+    stdout: "command-token\n",
+    stderr: "",
+    timedOut: false,
+  }),
+): ConfigRuntime {
+  return {
+    cwd: "/workspace",
+    readFile: async (path) => {
+      const value = files[path];
+      if (value === undefined) throw missing(path);
+      return value;
+    },
+    runTokenCommand,
+  };
+}
 
 describe("parseConfig()", () => {
   test("defaults to automatic discovery and no token", () => {
@@ -100,5 +130,144 @@ describe("flags with no value", () => {
   test("still accepts an explicitly empty value", () => {
     // `--token=` is a deliberate override of an inherited environment variable.
     expect(parseConfig(["--token="], { TABGLUTTON_TOKEN: "inherited" }).token).toBe("");
+  });
+});
+
+describe("loadConfig()", () => {
+  test("uses XDG_CONFIG_HOME for settings and the default token file", async () => {
+    const config = await loadConfig(
+      [],
+      { HOME: "/home/michael", XDG_CONFIG_HOME: "/xdg" },
+      runtime({
+        "/xdg/tabglutton/config.json": '{"port": 5003}',
+        "/xdg/tabglutton/token": " file-token\n",
+      }),
+    );
+    expect(config).toMatchObject({ portMode: "fixed", port: 5003, token: "" });
+    expect(await config.resolveToken?.()).toBe("file-token");
+  });
+
+  test("resolves a relative tokenFile from the config directory", async () => {
+    const config = await loadConfig(
+      [],
+      { HOME: "/home/michael" },
+      runtime({
+        "/home/michael/.config/tabglutton/config.json": '{"tokenFile":"secret/token"}',
+        "/home/michael/.config/tabglutton/secret/token": "abc",
+      }),
+    );
+    expect(await config.resolveToken?.()).toBe("abc");
+  });
+
+  test("accepts comments and trailing commas in the global settings", async () => {
+    const config = await loadConfig(
+      [],
+      { HOME: "/home/michael" },
+      runtime({
+        "/home/michael/.config/tabglutton/config.json": `{
+          // Safe to commit: the secret stays in the referenced file.
+          "port": "auto",
+          "tokenFile": "token",
+        }`,
+        "/home/michael/.config/tabglutton/token": "abc",
+      }),
+    );
+    expect(await config.resolveToken?.()).toBe("abc");
+  });
+
+  test("uses CLI, environment, and .env tokens in precedence order", async () => {
+    const files = {
+      "/workspace/.env": "GULLET_TOKEN=dot-env\nTABGLUTTON_TOKEN='dot-primary'\n",
+      "/home/michael/.config/tabglutton/config.json":
+        '{"tokenCommand":"secret command","port":5004}',
+    };
+    const fromDotEnv = await loadConfig([], { HOME: "/home/michael" }, runtime(files));
+    expect(fromDotEnv).toEqual({ portMode: "fixed", port: 5004, token: "dot-primary" });
+
+    const fromEnv = await loadConfig(
+      [],
+      { HOME: "/home/michael", TABGLUTTON_TOKEN: "env" },
+      runtime(files),
+    );
+    expect(fromEnv.token).toBe("env");
+
+    const fromFlag = await loadConfig(
+      ["--token", "flag"],
+      { HOME: "/home/michael", TABGLUTTON_TOKEN: "env" },
+      runtime(files),
+    );
+    expect(fromFlag.token).toBe("flag");
+  });
+
+  test("executes tokenCommand lazily with a bounded wait and config-directory cwd", async () => {
+    let call: { command: string; cwd: string; timeoutMs: number } | undefined;
+    const config = await loadConfig(
+      [],
+      { HOME: "/home/michael" },
+      runtime(
+        {
+          "/home/michael/.config/tabglutton/config.json":
+            '{"tokenCommand":"op read op://Private/Tabglutton/token"}',
+        },
+        async (command, options) => {
+          call = { command, cwd: options.cwd, timeoutMs: options.timeoutMs };
+          return { exitCode: 0, stdout: "from-op\n", stderr: "", timedOut: false };
+        },
+      ),
+    );
+
+    expect(call).toBeUndefined();
+    expect(await config.resolveToken?.()).toBe("from-op");
+    expect(call).toEqual({
+      command: "op read op://Private/Tabglutton/token",
+      cwd: "/home/michael/.config/tabglutton",
+      timeoutMs: TOKEN_COMMAND_TIMEOUT_MS,
+    });
+  });
+
+  test("attaches tokenCommand stderr to timeout and exit errors", async () => {
+    const config = await loadConfig(
+      [],
+      { HOME: "/home/michael" },
+      runtime(
+        {
+          "/home/michael/.config/tabglutton/config.json": '{"tokenCommand":"op read item"}',
+        },
+        async () => ({
+          exitCode: -1,
+          stdout: "",
+          stderr: "1Password is locked",
+          timedOut: true,
+        }),
+      ),
+    );
+    await expect(config.resolveToken?.()).rejects.toThrow(
+      `timed out after ${TOKEN_COMMAND_TIMEOUT_MS}ms. Stderr: 1Password is locked`,
+    );
+  });
+
+  test("rejects an inline token even when a higher-precedence token is present", async () => {
+    await expect(
+      loadConfig(
+        ["--token", "safe-elsewhere"],
+        { HOME: "/home/michael" },
+        runtime({
+          "/home/michael/.config/tabglutton/config.json": '{"token":"must-not-be-here"}',
+        }),
+      ),
+    ).rejects.toThrow(/may not contain "token".*tokenFile.*tokenCommand/);
+  });
+
+  test("rejects simultaneous tokenFile and tokenCommand sources", async () => {
+    await expect(
+      loadConfig(
+        [],
+        { HOME: "/home/michael" },
+        runtime({
+          "/home/michael/.config/tabglutton/config.json":
+            '{"tokenFile":"token","tokenCommand":"op read item"}',
+        }),
+      ),
+    ).rejects.toThrow(/either "tokenFile" or "tokenCommand"/);
   });
 });

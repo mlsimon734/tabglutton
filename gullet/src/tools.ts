@@ -19,7 +19,7 @@ import {
   type BridgeMethod,
   type BridgeTab,
 } from "../../src/bridge-protocol.js";
-import { renderTabs, TAB_TITLE_MAX } from "../../src/tabs-view.js";
+import { renderTabs, TAB_TITLE_MAX } from "./tabs-view.js";
 import type { McpTool, McpToolResult } from "./mcp.js";
 import { selectAll, selectOne, type ConnectionSummary } from "./select.js";
 

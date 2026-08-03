@@ -266,7 +266,11 @@ bridgeTokenCopy.addEventListener("click", () => {
 });
 
 bridgeSnippetCopy.addEventListener("click", () => {
-  void copyText(bridgeSnippetText(false), "Config copied");
+  if (!bridgeToken.value) {
+    flashStatus("No token yet");
+    return;
+  }
+  void copyText(bridgeSnippetText(false), "Setup command copied");
 });
 
 async function copyText(text: string, okMessage: string): Promise<void> {
@@ -281,32 +285,22 @@ async function copyText(text: string, okMessage: string): Promise<void> {
 
 /**
  * @param masked render the token as dots rather than the secret itself. The
- * displayed snippet is masked unless the eye is open; "Copy config" always
- * passes `false`, so the clipboard gets a config that actually works.
+ * displayed snippet is masked unless the eye is open; "Copy setup command"
+ * always passes `false`, so the clipboard gets a command that actually works.
  */
 function bridgeSnippetText(masked: boolean): string {
-  const port = parsePort(bridgePort.value);
   const real = bridgeToken.value || "<generate or paste a token above>";
   const token = masked && bridgeToken.value ? "•".repeat(24) : real;
-  // Named "tabglutton" rather than "gullet": this key becomes the tool
-  // namespace the agent sees, and users know the product by one name.
-  return JSON.stringify(
-    {
-      mcpServers: {
-        tabglutton: {
-          command: "bun",
-          args: [
-            "run",
-            "/path/to/tabglutton/gullet/gullet.ts",
-            ...(selectedBridgePortMode() === "fixed" ? ["--port", String(port)] : []),
-          ],
-          env: { TABGLUTTON_TOKEN: token },
-        },
-      },
-    },
-    null,
-    2,
+  return (
+    'config_dir="${XDG_CONFIG_HOME:-$HOME/.config}/tabglutton"\n' +
+    'mkdir -p "$config_dir" && chmod 700 "$config_dir" &&\n' +
+    `(umask 077; printf '%s\\n' ${shellQuote(token)} > "$config_dir/token")`
   );
+}
+
+/** Single-quote arbitrary pasted tokens without giving the shell code to run. */
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", `'"'"'`)}'`;
 }
 
 function updateBridgeSnippet(): void {

@@ -3,8 +3,8 @@
 // with Gullet, which is the only caller: see below for why this runs once at the
 // end rather than in the extension's pass.
 
-import type { BridgeTab } from "./bridge-protocol.js";
-import { isTrackingParam } from "./normalize.js";
+import type { BridgeTab } from "../../src/bridge-protocol.js";
+import { isTrackingParam } from "../../src/normalize.js";
 
 /**
  * Titles are clipped, not summarised. 120 is where the curve turns: measured

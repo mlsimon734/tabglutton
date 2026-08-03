@@ -274,6 +274,37 @@ describe("hub/peer election", () => {
     expect(await sup.connections()).toEqual([]);
   }, 10_000);
 
+  test("a token source failure is published and heals without a restart", async () => {
+    const port = freePort();
+    let attempts = 0;
+    const sup = track(
+      new Supervisor({
+        port,
+        token: "",
+        connectWaitMs: 0,
+        resolveToken: async () => {
+          attempts += 1;
+          if (attempts === 1) throw new Error("1Password is locked (stderr from op)");
+          return TOKEN;
+        },
+      }),
+    );
+
+    await expect(sup.start()).rejects.toThrow("1Password is locked");
+    expect(sup.fault()).toEqual({
+      code: "unauthorized",
+      message: "1Password is locked (stderr from op)",
+    });
+
+    for (let i = 0; i < 30 && sup.fault() !== null; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    expect(sup.fault()).toBeNull();
+    const browser = await fakeBrowser(port, null);
+    expect(await sup.connections()).toHaveLength(1);
+    browser.close();
+  }, 5_000);
+
   test("automatic exhaustion heals when any candidate becomes free", async () => {
     const candidates = [freePort(), freePort()];
     const strangers = candidates.map((port, index) =>

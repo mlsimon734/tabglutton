@@ -40,6 +40,9 @@ jobs:
       - name: Package
         run: bun run package
 
+      - name: Package Gullet
+        run: bun run package:gullet
+
       - name: Upload extension zip
         uses: actions/upload-artifact@v7
         with:

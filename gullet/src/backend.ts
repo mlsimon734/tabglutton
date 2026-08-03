@@ -20,6 +20,7 @@ import {
   type BridgeProbeIdentity,
 } from "../../src/bridge-protocol.js";
 import { delay } from "../../src/serialize.js";
+import type { TokenResolver } from "./config.js";
 import { Hub } from "./hub.js";
 import { PeerClient } from "./peer.js";
 import type { ConnectionSummary } from "./select.js";
@@ -52,6 +53,10 @@ const ELECTION_RETRY_MS = 400;
  */
 const ELECTION_RETRY_MAX_MS = 5_000;
 
+/** Secret-manager and token-file retries back off independently of election. */
+const TOKEN_RETRY_MS = 1_000;
+const TOKEN_RETRY_MAX_MS = 30_000;
+
 /**
  * How long `start()` waits for the first election before reporting a fault.
  *
@@ -73,6 +78,8 @@ export interface SupervisorOptions {
   /** Automatic candidates; injectable so socket tests use ephemeral ports. */
   candidates?: readonly number[];
   token: string;
+  /** A global file or command source. Retried after a transient startup failure. */
+  resolveToken?: TokenResolver;
   /** Surfaced in logs only; the MCP half is deliberately unaware of the role. */
   onRoleChange?: (role: BackendRole) => void;
   /** Overrides ELECTION_START_TIMEOUT_MS. Exists so the give-up path is testable. */
@@ -88,6 +95,8 @@ export class Supervisor implements BridgeBackend {
   private activePort: number | null = null;
   private role: BackendRole = "electing";
   private stopped = false;
+  private token: string;
+  private tokenFault: BridgeError | null = null;
   /** Resolves when the current election settles; awaited by calls that arrive mid-swap. */
   private settling: Promise<void> = Promise.resolve();
   /**
@@ -99,6 +108,7 @@ export class Supervisor implements BridgeBackend {
 
   constructor(options: SupervisorOptions) {
     this.options = options;
+    this.token = options.token.trim();
     if (this.candidatePorts().length === 0) {
       throw new Error("Gullet needs at least one valid bridge port candidate.");
     }
@@ -109,6 +119,20 @@ export class Supervisor implements BridgeBackend {
    * settled by then — the election keeps going, and `fault()` tracks it.
    */
   async start(): Promise<void> {
+    // Preserve the original synchronous handoff to `settling` for an already
+    // resolved token. Calls may arrive concurrently with start(); none may see
+    // the constructor's placeholder resolved promise and mistake it for an
+    // election that finished with no backend.
+    if (!this.token) {
+      if (!(await this.acquireToken())) {
+        void this.retryToken();
+        const fault = this.tokenFault;
+        throw new BridgeRequestError(
+          fault?.code ?? "unauthorized",
+          fault?.message ?? "Tabglutton's bridge has no token.",
+        );
+      }
+    }
     this.settling = this.elect();
     await this.waitForSettling();
   }
@@ -136,7 +160,56 @@ export class Supervisor implements BridgeBackend {
   }
 
   fault(): BridgeError | null {
-    return this.electionFault;
+    return this.tokenFault ?? this.electionFault;
+  }
+
+  /**
+   * Resolve one configured token source. A command may be waiting on a locked
+   * secret manager, or the token file may not have been created yet; neither is
+   * a reason to kill the MCP transport before it can explain the problem.
+   */
+  private async acquireToken(): Promise<boolean> {
+    if (this.token) return true;
+    if (!this.options.resolveToken) {
+      this.tokenFault = {
+        code: "unauthorized",
+        message:
+          "Tabglutton's bridge has no token. Open Tabglutton's settings, enable the " +
+          "agent bridge, generate a token, and copy the setup command.",
+      };
+      return false;
+    }
+    try {
+      const token = (await this.options.resolveToken()).trim();
+      if (!token) throw new Error("The configured token source returned an empty token.");
+      this.token = token;
+      this.tokenFault = null;
+      return true;
+    } catch (err) {
+      this.tokenFault = {
+        code: "unauthorized",
+        message: errorMessage(err),
+      };
+      return false;
+    }
+  }
+
+  /** Keep trying after initialize is unblocked; success starts election in place. */
+  private async retryToken(): Promise<void> {
+    let gap = TOKEN_RETRY_MS;
+    while (!this.stopped) {
+      await delay(gap);
+      if (this.stopped) return;
+      if (await this.acquireToken()) {
+        console.error("[gullet] token source became available; starting bridge election");
+        this.settling = this.elect();
+        void this.settling.catch((err) =>
+          console.error(`[gullet] election after token recovery failed: ${errorMessage(err)}`),
+        );
+        return;
+      }
+      gap = Math.min(gap * 2, TOKEN_RETRY_MAX_MS);
+    }
   }
 
   private async elect(): Promise<void> {
@@ -162,7 +235,7 @@ export class Supervisor implements BridgeBackend {
         if (this.stopped) return;
         // Binding is still the atomic election. The only new rule is that a
         // loser re-checks the exact port it lost before considering the next.
-        const hub = new Hub({ port, token: this.options.token });
+        const hub = new Hub({ port, token: this.token });
         try {
           hub.listen();
           this.hub = hub;
@@ -213,7 +286,7 @@ export class Supervisor implements BridgeBackend {
 
     const peer = new PeerClient({
       port,
-      token: this.options.token,
+      token: this.token,
       onLost: () => this.reelect(),
     });
     try {

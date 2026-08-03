@@ -674,9 +674,11 @@ Strategy, in order:
 - No new host permissions (`*://*/*` already covers the clipper).
 - `gullet/` is a sibling package with its own `tsconfig.json`, sharing
   `src/bridge-protocol.ts` and the repo's check pipeline (`bun run typecheck` covers both
-  projects; `bun test` picks up `gullet/tests/`). It has no dependencies of its own —
-  Bun's built-in WebSocket server and a hand-rolled tools-only MCP server are enough, so
-  `bun run gullet/gullet.ts` works with nothing installed.
+  projects; `bun test` picks up `gullet/tests/`). Its agent-only tab renderer now lives in
+  `gullet/src/tabs-view.ts`, so it no longer compiles into either extension target. The
+  package has no dependencies of its own — Bun's built-in WebSocket server and a hand-rolled
+  tools-only MCP server are enough — and bundles those shared sources into the published
+  `tabglutton-gullet` executable for `bunx` / `npx` use without a checkout.
 - `build.ts` gains nothing target-specific: the bridge module is shared source; the only
   Chrome divergence is the keepalive note above. `gullet/` is outside the extension
   tsconfig's `include`, so it never lands in `dist-*`.

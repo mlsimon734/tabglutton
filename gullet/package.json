@@ -1,13 +1,36 @@
 {
-  "name": "gullet",
+  "name": "tabglutton-gullet",
   "version": "0.1.0",
-  "private": true,
   "description": "Tabglutton's agent bridge: an MCP server over stdio, a WebSocket hub on loopback.",
-  "bin": {
-    "gullet": "./gullet.ts"
+  "keywords": [
+    "browser",
+    "mcp",
+    "obsidian",
+    "tabglutton",
+    "tabs"
+  ],
+  "homepage": "https://github.com/mlsimon734/tabglutton/tree/main/gullet#readme",
+  "bugs": "https://github.com/mlsimon734/tabglutton/issues",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mlsimon734/tabglutton.git",
+    "directory": "gullet"
   },
+  "bin": {
+    "tabglutton-gullet": "./dist/gullet.js"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
   "type": "module",
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
+    "build": "bun build ./gullet.ts --target=bun --outfile=dist/gullet.js",
+    "prepack": "bun run build",
     "typecheck": "bunx tsc --noEmit -p tsconfig.json"
   }
 }

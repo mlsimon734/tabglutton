@@ -75,8 +75,9 @@ throughout — `j`/`k` to move, `space` to toggle, `d` to devour, `x` to close, 
 
 This is the part that isn't like other tab extensions.
 
-Tabglutton ships **Gullet**, a local MCP server. Turn the bridge on in settings, point
-Claude Code or Codex at it, and your agent can work your actual open tabs:
+Tabglutton ships **Gullet**, a local MCP server. Turn the bridge on in settings, run its
+one-time token setup command, and point Claude Code or Codex at
+`bunx tabglutton-gullet`; your agent can then work your actual open tabs:
 
 | Tool         | What it does                                            |
 | ------------ | ------------------------------------------------------- |

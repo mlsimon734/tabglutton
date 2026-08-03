@@ -43,7 +43,9 @@ This is a Bun-powered TypeScript WebExtension for Zen Browser, Firefox, and Chro
 
 ## Gullet (agent bridge sidecar)
 
-`gullet/` is a sibling package, not part of the extension bundle: an MCP server over stdio on one side, a loopback WebSocket hub on the other. It shares `src/bridge-protocol.ts` with the extension so both ends are typechecked against one definition, has its own `gullet/tsconfig.json` (`lib: ES2022`, `types: bun-types` — no DOM, no `browser`), and has zero dependencies. It is excluded from the extension `tsconfig.json`'s `include`, so it never reaches `dist-*`. Setup and troubleshooting live in `gullet/README.md`.
+`gullet/` is a sibling package, not part of the extension bundle: an MCP server over stdio on one side, a loopback WebSocket hub on the other. It shares `src/bridge-protocol.ts` with the extension so both ends are typechecked against one definition; its agent-only listing renderer is `gullet/src/tabs-view.ts`, not extension source. It has its own `gullet/tsconfig.json` (`lib: ES2022`, `types: bun-types` — no DOM, no `browser`) and zero dependencies. It is excluded from the extension `tsconfig.json`'s `include`, so it never reaches `dist-*`; `bun run build:gullet` instead bundles the executable and shared modules for the `tabglutton-gullet` npm package. Setup and troubleshooting live in `gullet/README.md`.
+
+Global Gullet settings live at `${XDG_CONFIG_HOME:-$HOME/.config}/tabglutton/config.json`, with the token in a separate `0600` file by default. The config is deliberately safe to commit: an inline `"token"` key is rejected even when a CLI or environment token would otherwise win. Keep the additive token precedence (`--token` → env → `./.env` → `tokenCommand` → `tokenFile` → default file). `tokenCommand` is bounded and lazy; its timeout/nonzero error, including stderr, goes through `Supervisor.fault()`, and the supervisor retries with backoff so unlocking a secret manager heals the existing MCP session. Do not move command execution ahead of that recoverable startup path.
 
 Tests that stand up a real socket bind to port 0 for an ephemeral port. Diagnostics in gullet go to **stderr only** — stdout is the MCP transport and a stray `console.log` corrupts the session.
 
@@ -57,6 +59,7 @@ The election must **settle, or say why**. `main` awaits `backend.start()` before
 
 - `bun install`: install dependencies.
 - `bun run build`: build both `dist-firefox/` and `dist-chrome/`.
+- `bun run build:gullet`: bundle the publishable `tabglutton-gullet` executable.
 - `bun run build:firefox` / `build:chrome`: single-target builds.
 - `bun run typecheck`: typecheck the extension (`typecheck:ext`, `tsconfig.test.json` over `src/` + `tests/`) then the sidecar (`typecheck:gullet`).
 - `bun run test`: run the Bun test suite under `tests/` and `gullet/tests/`.
@@ -67,6 +70,7 @@ The election must **settle, or say why**. `main` awaits `backend.start()` before
 - `bun run start:firefox`: build firefox and launch regular Firefox with a persistent dev profile.
 - `bun run start:chrome`: build chrome and launch Chromium via `web-ext --target=chromium`.
 - `bun run package`: produce both `tabglutton-firefox-<version>.zip` and `tabglutton-chrome-<version>.zip` in `web-ext-artifacts/`.
+- `bun run package:gullet`: build and dry-run the publishable `tabglutton-gullet` package.
 
 ## Coding Style & Naming Conventions
 

@@ -1,11 +1,8 @@
 {
   "mcpServers": {
     "tabglutton": {
-      "command": "bash",
-      "args": [
-        "-c",
-        "export TABGLUTTON_TOKEN=\"$(grep -m1 '^TABGLUTTON_TOKEN=' .env | cut -d= -f2-)\"; exec bun run ./gullet/gullet.ts"
-      ]
+      "command": "bun",
+      "args": ["run", "./gullet/gullet.ts"]
     }
   }
 }

@@ -6,6 +6,7 @@
   "type": "module",
   "scripts": {
     "build": "bun run build:firefox && bun run build:chrome",
+    "build:gullet": "bun run --cwd gullet build",
     "build:firefox": "bun build.ts --target=firefox",
     "build:chrome": "bun build.ts --target=chrome",
     "watch": "bunx tsc --watch --preserveWatchOutput",
@@ -26,6 +27,7 @@
     "start:firefox": "bun run build:firefox && bunx web-ext run --source-dir=dist-firefox --firefox-profile=./.dev-profile-firefox --profile-create-if-missing --keep-profile-changes --pref=network.protocol-handler.warn-external.obsidian=false --pref=network.protocol-handler.external.obsidian=true",
     "start:chrome": "bun run build:chrome && bunx web-ext run --target=chromium --source-dir=dist-chrome --chromium-profile=./.dev-profile-chrome --keep-profile-changes",
     "package": "bun run package:firefox && bun run package:chrome && bun scripts/package-source.ts",
+    "package:gullet": "bun --cwd=gullet pm pack --dry-run",
     "package:firefox": "bun run build:firefox && bunx web-ext build --source-dir=dist-firefox --artifacts-dir=web-ext-artifacts --filename=tabglutton-firefox-{version}.zip --overwrite-dest",
     "package:chrome": "bun run build:chrome && bunx web-ext build --source-dir=dist-chrome --artifacts-dir=web-ext-artifacts --filename=tabglutton-chrome-{version}.zip --overwrite-dest",
     "sign": "bun scripts/sign.ts",
