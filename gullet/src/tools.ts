@@ -60,6 +60,10 @@ It answers with "matched" and "truncated", so you can always tell a complete ans
 a truncated one. If a listing comes back truncated, narrow the query — do not raise the
 limit and do not page through the whole backlog.
 
+On Zen, every listing is scoped to the active workspace, and nothing in the result says
+which one that is. Treat counts as "this workspace", never "your tabs", and expect the
+same call to answer differently after the user switches workspace.
+
 Most tabs in a large backlog are discarded (unloaded), and tab_read and tab_clip cannot
 reach those. Wake them with tabs_load first — one call for every survivor you mean to read
 (up to 20), not one call per tab. If tabs_load reports not-enabled, the user has not turned
@@ -76,7 +80,8 @@ export const GULLET_TOOLS: readonly McpTool[] = [
     name: "tabs_list",
     title: "List open tabs",
     description:
-      `List the user's open tabs with metadata only — id, title, url, lastAccessed, and the flags discarded, pinned, active and (Firefox/Zen) hidden. **Flags appear only when true**: no \`discarded\` key means the tab is loaded. \`discarded: true\` means the tab is unloaded and cannot be read until tabs_load wakes it; \`hidden: true\` on Zen usually means the tab lives in another Zen workspace. \`windowId\` appears at the top level when every tab shares one window, and per tab otherwise.\n\n` +
+      `List the user's open tabs with metadata only — id, title, url, lastAccessed, and the flags discarded, pinned, active and (Firefox/Zen) hidden. **Flags appear only when true**: no \`discarded\` key means the tab is loaded. \`discarded: true\` means the tab is unloaded and cannot be read until tabs_load wakes it. \`windowId\` appears at the top level when every tab shares one window, and per tab otherwise.\n\n` +
+      `**On Zen, a listing covers the active workspace only.** Tabs in other workspaces are not returned at all — not flagged, absent — so \`matched\` counts that workspace, not the browser. Never tell the user how many tabs they have "in total" from this; say which workspace you looked at. Switching workspace changes the answer completely.\n\n` +
       `Titles longer than ${TAB_TITLE_MAX} characters are clipped with a trailing "…", and URLs are shortened (tracking parameters and \`www.\` dropped). \`query\` always matches against the **full** title and URL, so a term that was clipped away still finds its tab. Use tab_read for a tab's real content.\n\n` +
       `Backlogs are large, so this returns the ${TABS_LIST_DEFAULT_LIMIT} most recently accessed tabs by default and reports \`matched\` (how many the filter actually hit) plus \`truncated: true\` when there were more. Narrow with \`query\` rather than raising \`limit\` — a full listing of a thousand tabs will not fit in your context.\n\n` +
       `Start a triage run with \`groupBy: "domain"\`: it returns one row per domain with tab and discarded counts instead of any tabs, which is a few hundred bytes for the whole backlog and tells you what to pass as \`query\` next.`,

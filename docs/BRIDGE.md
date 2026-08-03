@@ -371,14 +371,14 @@ extension and Gullet so the contract is typechecked from one definition.
 
 ## Tool surface (v1)
 
-| MCP tool     | Backing APIs                                           | Notes                                                                                                                                                                                                                                                                                     |
-| ------------ | ------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `tabs_list`  | `tabs.query`                                           | id, title, url, `windowId`, `index`, and — only when true — `lastAccessed`, `discarded`, `pinned`, `active`, and on Firefox `hidden` (≈ other Zen workspaces). Filtered with `query`, ordered with `sort`, capped by `limit`, or collapsed to counts with `groupBy: "domain"`. See below. |
-| `tabs_load`  | `tabs.reload` + `tabs.onUpdated`                       | Wakes discarded tabs so they can be read. Batched (≤20), three at a time, under a 30s deadline; per-tab `ready`/`pending`/`failed`. Gated on a settings toggle, default off — answers `not-enabled` until then.                                                                           |
-| `tab_read`   | `scripting.executeScript` + existing `clip-current.ts` | Returns Defuddle markdown + metadata. Fails cleanly on discarded tabs (see below).                                                                                                                                                                                                        |
-| `tab_clip`   | existing `clip-format.ts` + `obsidian://new` handoff   | Files into the vault exactly as manual Devour does, including the Chrome redirect-page dance.                                                                                                                                                                                             |
-| `tabs_close` | `tabs.remove`                                          | Batched, ids deduplicated. Entries (title, url, pinned, window, index, private) are recorded in an undo log in `storage.local` _before_ the removal, and the batch id comes back with the result.                                                                                         |
-| `undo_close` | reopen from the log                                    | Safety valve for the one destructive act. Omit the batch id to undo the most recent.                                                                                                                                                                                                      |
+| MCP tool     | Backing APIs                                           | Notes                                                                                                                                                                                                                                                                                                        |
+| ------------ | ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `tabs_list`  | `tabs.query`                                           | id, title, url, `windowId` (hoisted when shared), and — only when true — `lastAccessed`, `discarded`, `pinned`, `active`, `hidden`. Filtered with `query`, ordered with `sort`, capped by `limit`, or collapsed to counts with `groupBy: "domain"`. **On Zen, covers the active workspace only.** See below. |
+| `tabs_load`  | `tabs.reload` + `tabs.onUpdated`                       | Wakes discarded tabs so they can be read. Batched (≤20), three at a time, under a 30s deadline; per-tab `ready`/`pending`/`failed`. Gated on a settings toggle, default off — answers `not-enabled` until then.                                                                                              |
+| `tab_read`   | `scripting.executeScript` + existing `clip-current.ts` | Returns Defuddle markdown + metadata. Fails cleanly on discarded tabs (see below).                                                                                                                                                                                                                           |
+| `tab_clip`   | existing `clip-format.ts` + `obsidian://new` handoff   | Files into the vault exactly as manual Devour does, including the Chrome redirect-page dance.                                                                                                                                                                                                                |
+| `tabs_close` | `tabs.remove`                                          | Batched, ids deduplicated. Entries (title, url, pinned, window, index, private) are recorded in an undo log in `storage.local` _before_ the removal, and the batch id comes back with the result.                                                                                                            |
+| `undo_close` | reopen from the log                                    | Safety valve for the one destructive act. Omit the batch id to undo the most recent.                                                                                                                                                                                                                         |
 
 Deliberately absent: navigate, click, type, evaluate.
 
@@ -516,6 +516,29 @@ _disabled_, or it is only ever exercised as a no-op.
 extension guarantees both, but a version-skewed one does not, and one malformed entry must
 not destroy a listing of eight hundred — the same reason `tabs_list` keeps a failing
 browser's partner.
+
+▸ **A Zen listing is the active workspace, and `hidden` does not tell you otherwise.**
+Measured live on the 874-tab browser: `groupBy: "domain"` answered `matched: 874,
+domains: 298`; after a workspace switch the same call answered `matched: 160, domains: 66`
+with a disjoint set of domains, and `includeHidden: false` changed neither number. So tabs
+in a non-active workspace are **absent from `tabs.query`, not flagged `hidden`** — the
+condition `probeHeuristic` in `background.ts` was written to detect (`allInWindow.length
+=== visibleInWindow.length`) is simply true here. Both readings hoisted the same
+`windowId`, so this is one window enumerating differently, not a second window appearing.
+
+This is accepted behaviour, not a bug to fix: Zen exposes no workspace API (see AGENTS.md),
+and active-workspace scope is the reasonable contract. What was wrong was the _claim_ —
+`tabs_list` told agents `hidden: true` meant "another workspace", so an agent seeing 160
+tabs would report them as the user's whole backlog with no hedge, and `matched` reads as
+authoritative either way. The tool description and `GULLET_INSTRUCTIONS` now state the
+scoping outright.
+
+The honest remaining gap is that **nothing in the result says which workspace it is**, so
+two listings taken minutes apart are not comparable and nothing in the payload reveals it.
+Naming the workspace is impossible without an API Zen does not have; the available half-
+measure is for the extension to surface `probeHeuristic`'s verdict on the listing itself,
+which is a wire change and is not made here. It only became visible at all because the
+payload work made two listings small enough to compare at a glance.
 
 ▸ **This may also settle the first-`tabs_list` timeout** in the open questions below.
 _Response size_ is one of the two live hypotheses for it, and a first call that used to
