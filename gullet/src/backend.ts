@@ -29,6 +29,8 @@ export interface BridgeBackend {
   request(connectionId: string, method: BridgeMethod, params: unknown): Promise<unknown>;
   /** Why nothing can be served right now, or null. Re-read on every call. */
   fault(): BridgeError | null;
+  /** Candidate ports held by another Tabglutton hub. Diagnosis, not routing. */
+  rivalHubs(): Promise<number[]>;
   stop(): void;
 }
 
@@ -263,6 +265,18 @@ export class Supervisor implements BridgeBackend {
   // Both roles wait the same first-call window: a peer inherits it inside the
   // hub it is attached to, a hub applies it here. No caller gets a knob — the
   // wait lives at the layer that owns it, so the roles cannot diverge.
+  /**
+   * Another Tabglutton hub holding one of the candidate ports, if any.
+   *
+   * Exists because "the extension says connected" and "no browser is connected"
+   * are both true when two hubs run with different tokens, and that pair of
+   * facts reads as a broken bridge rather than as the split it is. Costs a few
+   * loopback probes and is only ever called to explain a failure.
+   */
+  async rivalHubs(): Promise<number[]> {
+    return rivalHubPorts(this.candidatePorts(), this.activePort);
+  }
+
   async connections(): Promise<ConnectionSummary[]> {
     await this.waitForSettling();
     if (this.peer) return this.peer.connections();
@@ -285,6 +299,26 @@ export class Supervisor implements BridgeBackend {
     this.hub = null;
     this.activePort = null;
   }
+}
+
+/**
+ * Candidate ports answering as a Tabglutton hub that is **not** this process.
+ *
+ * Only ever asked on the "no browser is connected" path, so the probes cost
+ * nothing that matters and are done live rather than read from the election's
+ * observations — a rival can appear long after we settled, which is exactly the
+ * case worth catching.
+ *
+ * A compatible answer here almost always means a token mismatch: a hub sharing
+ * our token would have been joined as a peer instead of left running beside us.
+ * That is the diagnosis the caller turns into advice.
+ */
+async function rivalHubPorts(candidates: number[], activePort: number | null): Promise<number[]> {
+  const others = candidates.filter((port) => port !== activePort);
+  const probes = await Promise.all(
+    others.map(async (port) => ((await probeCandidate(port)) === "compatible" ? port : null)),
+  );
+  return probes.filter((port): port is number => port !== null);
 }
 
 type CandidateProbe = BridgeProbeIdentity | "silent";

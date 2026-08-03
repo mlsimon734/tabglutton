@@ -38,6 +38,12 @@ export interface ToolContext {
    * on refusing calls the backend had since become able to serve.
    */
   startupError: () => BridgeError | null;
+  /**
+   * Candidate ports held by another Tabglutton hub, asked only when there is no
+   * browser to serve. Optional so tests and any future embedding can omit it —
+   * it explains a failure, it never changes one.
+   */
+  rivalHubs?: () => Promise<number[]>;
 }
 
 const BROWSER_PROPERTY = {
@@ -247,7 +253,7 @@ export function createToolCaller(
       if (fault) throw new BridgeRequestError(fault.code, fault.message);
       return ok(await route(ctx, name, args));
     } catch (err) {
-      return toolError(err);
+      return toolError(await explainNoConnection(ctx, err));
     }
   };
 }
@@ -399,6 +405,43 @@ async function tabsList(
 // model's context, and a 300-tab listing does not need indentation.
 function ok(value: unknown): McpToolResult {
   return { content: [{ type: "text", text: JSON.stringify(value) }] };
+}
+
+/**
+ * Name the split when "no browser is connected" is true here and false in the
+ * browser, which is what two hubs with different tokens produce.
+ *
+ * The user sees Tabglutton's badge lit and reports the port it names, while
+ * every tool call insists nothing is attached — a pair of facts that reads as a
+ * broken bridge rather than as two sidecars that could not join each other. The
+ * hub election already handles this correctly (a mismatched token must never be
+ * handed a proof, so it binds elsewhere); all that was missing was saying so.
+ *
+ * Observed for real: an older agent session held 4589 with the token from before
+ * a reinstall, this one bound 20317 with the new one, and the browser attached
+ * to whichever it found first.
+ *
+ * Best-effort by construction — the probes are loopback and this is already the
+ * failure path, so a throw here must not replace the real error with its own.
+ */
+async function explainNoConnection(ctx: ToolContext, err: unknown): Promise<unknown> {
+  if (!(err instanceof BridgeRequestError) || err.code !== "no-connection" || !ctx.rivalHubs) {
+    return err;
+  }
+  try {
+    const ports = await ctx.rivalHubs();
+    if (ports.length === 0) return err;
+    return new BridgeRequestError(
+      err.code,
+      `${err.message} Another Tabglutton sidecar is already running on ` +
+        `127.0.0.1:${ports.join(", ")} and the browser may be attached to that one instead. ` +
+        `They could not merge, which means their tokens differ: check that this project's ` +
+        `TABGLUTTON_TOKEN matches the token in Tabglutton's settings, then restart the other ` +
+        `agent session (or this one) so they share a single connection.`,
+    );
+  } catch {
+    return err;
+  }
 }
 
 function toolError(err: unknown): McpToolResult {

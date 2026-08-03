@@ -309,6 +309,46 @@ describe("tab-scoped tools", () => {
   });
 });
 
+describe("no-connection diagnosis", () => {
+  // The pair of facts that produced this: the browser's badge said connected on
+  // 20317 while every tool call here said nothing was attached.
+  test("names the rival sidecar and points at the token", async () => {
+    const { call } = caller([], () => ({}), { rivalHubs: async () => [4589] });
+    const result = await call("tabs_list", {});
+    expect(result.isError).toBe(true);
+    const { message } = payload(result) as { message: string };
+    expect(message).toContain("127.0.0.1:4589");
+    expect(message).toContain("TABGLUTTON_TOKEN");
+  });
+
+  test("stays quiet when this really is the only sidecar", async () => {
+    const { call } = caller([], () => ({}), { rivalHubs: async () => [] });
+    const { message } = payload(await call("tabs_list", {})) as { message: string };
+    expect(message).not.toContain("127.0.0.1");
+  });
+
+  // The diagnosis is a courtesy on a path that has already failed; it must never
+  // replace the real error with a failure of its own.
+  test("survives a probe that throws", async () => {
+    const { call } = caller([], () => ({}), {
+      rivalHubs: () => Promise.reject(new Error("loopback refused")),
+    });
+    const result = await call("tabs_list", {});
+    expect(payload(result)).toMatchObject({ error: "no-connection" });
+    expect((payload(result) as { message: string }).message).not.toContain("loopback refused");
+  });
+
+  test("leaves every other failure untouched", async () => {
+    const { call } = caller([zen], () => {
+      throw new BridgeRequestError("timeout", "tabs_list timed out.");
+    });
+    const probed = caller([zen], () => ({}), { rivalHubs: async () => [4589] });
+    expect(payload(await call("tabs_list", {}))).toMatchObject({ error: "timeout" });
+    // A healthy browser never consults the diagnosis at all.
+    expect(payload(await probed.call("tabs_list", {}))).not.toHaveProperty("error");
+  });
+});
+
 describe("error handling", () => {
   test("no connected browser is reported, not swallowed", async () => {
     const { call } = caller([], () => ({}));
