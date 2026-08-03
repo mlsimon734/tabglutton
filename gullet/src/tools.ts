@@ -1,16 +1,25 @@
-// The MCP tool surface (docs/BRIDGE.md "Tool surface (v1)") and its mapping onto
+// The MCP tool surface (docs/BRIDGE.md "Tool surface (v2)") and its mapping onto
 // bridge methods. Read + file + close, and nothing else: no navigation, no
 // clicking, no typing, no arbitrary script execution.
 
 import {
   asRecord,
   BridgeRequestError,
+  filterTabs,
+  groupTabsByDomain,
   isBridgeMethod,
+  parseTabsListParams,
+  selectTabs,
+  TABS_LIST_DEFAULT_GROUP_LIMIT,
+  TABS_LIST_DEFAULT_LIMIT,
+  TABS_LIST_MAX_LIMIT,
   TABS_LOAD_MAX_BATCH,
   toBridgeError,
   type BridgeError,
   type BridgeMethod,
+  type BridgeTab,
 } from "../../src/bridge-protocol.js";
+import { renderTabs, TAB_TITLE_MAX } from "../../src/tabs-view.js";
 import type { McpTool, McpToolResult } from "./mcp.js";
 import { selectAll, selectOne, type ConnectionSummary } from "./select.js";
 
@@ -29,6 +38,12 @@ export interface ToolContext {
    * on refusing calls the backend had since become able to serve.
    */
   startupError: () => BridgeError | null;
+  /**
+   * Candidate ports held by another Tabglutton hub, asked only when there is no
+   * browser to serve. Optional so tests and any future embedding can omit it —
+   * it explains a failure, it never changes one.
+   */
+  rivalHubs?: () => Promise<number[]>;
 }
 
 const BROWSER_PROPERTY = {
@@ -41,9 +56,19 @@ const BROWSER_PROPERTY = {
 
 export const GULLET_INSTRUCTIONS = `Tabglutton's bridge to the user's open browser tabs.
 
-Triage cheaply: tabs_list returns metadata only and is affordable across hundreds of
-tabs, so cut on title, URL, and lastAccessed BEFORE reading anything. Only call tab_read
-on the survivors.
+Narrow before you list. A backlog here is hundreds to thousands of tabs and a full
+listing will not fit in your context, so work down: tabs_list with groupBy: "domain"
+first to see what the backlog is made of, then tabs_list with a query to pull just the
+tabs you want. tabs_list is metadata only — cut on title, URL, and lastAccessed BEFORE
+reading anything, and only call tab_read on the survivors.
+
+It answers with "matched" and "truncated", so you can always tell a complete answer from
+a truncated one. If a listing comes back truncated, narrow the query — do not raise the
+limit and do not page through the whole backlog.
+
+On Zen, every listing is scoped to the active workspace, and nothing in the result says
+which one that is. Treat counts as "this workspace", never "your tabs", and expect the
+same call to answer differently after the user switches workspace.
 
 Most tabs in a large backlog are discarded (unloaded), and tab_read and tab_clip cannot
 reach those. Wake them with tabs_load first — one call for every survivor you mean to read
@@ -61,11 +86,38 @@ export const GULLET_TOOLS: readonly McpTool[] = [
     name: "tabs_list",
     title: "List open tabs",
     description:
-      "List the user's open tabs with metadata only — id, title, url, lastAccessed, discarded, pinned, active, window, and (Firefox/Zen) hidden. Cheap enough to run across hundreds of tabs; do your triage here before reading any page. `hidden: true` on Zen usually means the tab lives in another workspace. `discarded: true` means the tab is unloaded and cannot be read.",
+      `List the user's open tabs with metadata only — id, title, url, lastAccessed, and the flags discarded, pinned, active and (Firefox/Zen) hidden. **Flags appear only when true**: no \`discarded\` key means the tab is loaded. \`discarded: true\` means the tab is unloaded and cannot be read until tabs_load wakes it. \`windowId\` appears at the top level when every tab shares one window, and per tab otherwise.\n\n` +
+      `**On Zen, a listing covers the active workspace only.** Tabs in other workspaces are not returned at all — not flagged, absent — so \`matched\` counts that workspace, not the browser. Never tell the user how many tabs they have "in total" from this; say which workspace you looked at. Switching workspace changes the answer completely.\n\n` +
+      `Titles longer than ${TAB_TITLE_MAX} characters are clipped with a trailing "…", and URLs are shortened (tracking parameters and \`www.\` dropped). \`query\` always matches against the **full** title and URL, so a term that was clipped away still finds its tab. Use tab_read for a tab's real content.\n\n` +
+      `Backlogs are large, so this returns the ${TABS_LIST_DEFAULT_LIMIT} most recently accessed tabs by default and reports \`matched\` (how many the filter actually hit) plus \`truncated: true\` when there were more. Narrow with \`query\` rather than raising \`limit\` — a full listing of a thousand tabs will not fit in your context.\n\n` +
+      `Start a triage run with \`groupBy: "domain"\`: it returns one row per domain with tab and discarded counts instead of any tabs, which is a few hundred bytes for the whole backlog and tells you what to pass as \`query\` next.`,
     inputSchema: {
       type: "object",
       properties: {
         ...BROWSER_PROPERTY,
+        query: {
+          type: "string",
+          description:
+            'Case-insensitive filter over title and URL. Whitespace splits it into terms that must all match, in either field — "github pull" matches a tab titled "Pull request" at github.com. Do this before raising limit.',
+        },
+        limit: {
+          type: "integer",
+          minimum: 1,
+          maximum: TABS_LIST_MAX_LIMIT,
+          description: `Max rows to return. Defaults to ${TABS_LIST_DEFAULT_LIMIT} tabs, or ${TABS_LIST_DEFAULT_GROUP_LIMIT} when groupBy is set — a domain histogram has a long tail of one-tab domains.`,
+        },
+        sort: {
+          type: "string",
+          enum: ["recent", "oldest", "window"],
+          description:
+            'Order: "recent" (default, most recently accessed first), "oldest" (stale tabs first), or "window" (the order the user sees them in). Combined with limit, "recent" keeps what they were last working on and "oldest" surfaces closing candidates.',
+        },
+        groupBy: {
+          type: "string",
+          enum: ["domain"],
+          description:
+            "Return per-domain counts instead of tabs: { domain, tabs, discarded, newest }, most tabs first. Honours query, so you can count one slice of the backlog. Answers with `domains` (distinct domains matched) and `matched` (tabs behind them). The cheap first call for triaging a backlog you have not seen.",
+        },
         scope: {
           type: "string",
           enum: ["all", "current-window"],
@@ -131,7 +183,7 @@ export const GULLET_TOOLS: readonly McpTool[] = [
     name: "tab_clip",
     title: "File a tab into Obsidian",
     description:
-      "Save a tab into the user's Obsidian vault as a markdown note with frontmatter — exactly what the Tabglutton popup's Devour does, including per-site subfolders. Requires a vault configured in Tabglutton's settings. Set close: true to close the tab afterwards; that close is undoable via the returned batchId. Filing alone changes nothing in the browser — the tool is annotated destructive because close: true removes the tab.",
+      "Save a tab into the user's Obsidian vault as a markdown note with frontmatter — exactly what the Tabglutton popup's Devour does, including per-site subfolders. Requires a vault configured in Tabglutton's settings. Set close: true to close the tab afterwards; that close is undoable via the returned batchId. Filing alone changes nothing in the browser — the tool is annotated destructive because close: true removes the tab. The result reports the vault it filed into.",
     inputSchema: {
       type: "object",
       properties: {
@@ -140,6 +192,11 @@ export const GULLET_TOOLS: readonly McpTool[] = [
         close: {
           type: "boolean",
           description: "Close the tab once Obsidian has the note. Defaults to false.",
+        },
+        vault: {
+          type: "string",
+          description:
+            "File into this vault instead of the configured one, for this call only — nothing is saved. Use ONLY when the user names a destination vault themselves; never choose one on your own, and never guess at a name. Tabglutton cannot check that the vault exists, so a name Obsidian does not recognise fails inside Obsidian, where neither of us can see it, and this tool still reports success. Pass the name from Obsidian's vault switcher, not a path.",
         },
       },
       required: ["tabId"],
@@ -201,7 +258,7 @@ export function createToolCaller(
       if (fault) throw new BridgeRequestError(fault.code, fault.message);
       return ok(await route(ctx, name, args));
     } catch (err) {
-      return toolError(err);
+      return toolError(await explainNoConnection(ctx, err));
     }
   };
 }
@@ -221,53 +278,7 @@ async function route(
   const { browser: _browser, ...params } = args;
   const summaries = await ctx.connections();
 
-  if (name === "tabs_list") {
-    // Read-only and id-free, so fanning out over every browser is safe and
-    // saves the agent a round trip to discover what is connected.
-    const targets = selectAll(summaries, target);
-    // Each request carries its own catch, so this Promise.all can never reject:
-    // one browser timing out must not throw away the listing another already
-    // returned. A half-answer the agent can see the shape of beats no answer,
-    // and with two browsers attached the healthy one is usually the one being
-    // triaged anyway.
-    const perBrowser = await Promise.all(
-      targets.map(async (conn) => {
-        try {
-          const result = (await ctx.request(conn.connectionId, "tabs_list", params)) as {
-            tabs?: Array<Record<string, unknown>>;
-          };
-          const tabs = (result?.tabs ?? []).map((tab) => ({
-            ...tab,
-            browser: conn.label,
-            connectionId: conn.connectionId,
-          }));
-          return { tabs };
-        } catch (err) {
-          const { code, message } = toBridgeError(err);
-          return {
-            tabs: [],
-            failure: { connectionId: conn.connectionId, browser: conn.label, error: code, message },
-          };
-        }
-      }),
-    );
-    const failures = perBrowser.map((r) => r.failure).filter((f) => f !== undefined);
-    // Every browser failed: there is no partial answer to give, and an empty
-    // `tabs` array would read as "the user has no tabs" rather than as a fault.
-    if (failures.length === targets.length) {
-      const first = failures[0];
-      throw new BridgeRequestError(
-        first?.error ?? "internal",
-        first?.message ?? "tabs_list failed.",
-      );
-    }
-    // Tabs carry their origin so ids from two browsers can never be confused.
-    return {
-      browsers: targets,
-      tabs: perBrowser.flatMap((r) => r.tabs),
-      ...(failures.length > 0 ? { failures } : {}),
-    };
-  }
+  if (name === "tabs_list") return tabsList(ctx, summaries, target, params);
 
   // Everything else is tab-scoped: ids only mean something inside one browser.
   const conn = selectOne(summaries, target);
@@ -280,10 +291,166 @@ async function route(
   };
 }
 
+/**
+ * Fan a listing out over every connected browser and merge the answers.
+ *
+ * Read-only and id-free, so fanning out is safe and saves the agent a round trip
+ * to discover what is connected. The filter/sort/limit pipeline then runs a
+ * second time here, over the merged set: a limit applied per browser is not the
+ * limit the agent asked for, and re-running it is also what lets an older
+ * extension that ignores `query` still produce a filtered answer.
+ */
+async function tabsList(
+  ctx: ToolContext,
+  summaries: ConnectionSummary[],
+  target: string | undefined,
+  params: Record<string, unknown>,
+): Promise<unknown> {
+  const listParams = parseTabsListParams(params);
+  const targets = selectAll(summaries, target);
+  // Each request carries its own catch, so this Promise.all can never reject:
+  // one browser timing out must not throw away the listing another already
+  // returned. A half-answer the agent can see the shape of beats no answer, and
+  // with two browsers attached the healthy one is usually the one being triaged.
+  const perBrowser = await Promise.all(
+    targets.map(async (conn) => {
+      try {
+        const result = (await ctx.request(conn.connectionId, "tabs_list", params)) as {
+          tabs?: BridgeTab[];
+          matched?: number;
+        };
+        // `matched` is kept, not recomputed. A current extension truncates to
+        // `limit` before sending, so the tabs that arrive are not the tabs that
+        // matched, and its `matched` is the only place the real total survives.
+        // Recomputing it here reported the size of the page as the size of the
+        // result — the agent's one signal that it had not seen everything, lost
+        // exactly when there was more to see. An older extension sends no
+        // `matched`; that is what `undefined` means, and it is counted below.
+        return {
+          conn,
+          tabs: result?.tabs ?? [],
+          matched: typeof result?.matched === "number" ? result.matched : undefined,
+        };
+      } catch (err) {
+        const { code, message } = toBridgeError(err);
+        const failure = {
+          connectionId: conn.connectionId,
+          browser: conn.label,
+          error: code,
+          message,
+        };
+        return { conn, tabs: [] as BridgeTab[], matched: undefined, failure };
+      }
+    }),
+  );
+  const failures = perBrowser.map((r) => r.failure).filter((f) => f !== undefined);
+  // Every browser failed: there is no partial answer to give, and an empty
+  // `tabs` array would read as "the user has no tabs" rather than as a fault.
+  if (failures.length === targets.length) {
+    const first = failures[0];
+    throw new BridgeRequestError(first?.error ?? "internal", first?.message ?? "tabs_list failed.");
+  }
+
+  // Which browser a tab came from is tracked beside the tabs rather than stamped
+  // on them: with one browser connected — the normal case — the top-level
+  // `browsers` entry already says it, and repeating a constant string once per
+  // tab cost 13% of the listing that started this.
+  const origin = new WeakMap<BridgeTab, ConnectionSummary>();
+  const merged: BridgeTab[] = [];
+  for (const { conn, tabs } of perBrowser) {
+    for (const tab of tabs) {
+      origin.set(tab, conn);
+      merged.push(tab);
+    }
+  }
+  const head = { browsers: targets, ...(failures.length > 0 ? { failures } : {}) };
+
+  if (listParams.groupBy === "domain") {
+    // filterTabs, not `merged`: the extension may be older than this Gullet and
+    // ignore `query` entirely, and grouping the unfiltered set would answer a
+    // question nobody asked.
+    return { ...head, ...groupTabsByDomain(filterTabs(merged, listParams), listParams.limit) };
+  }
+  const selected = selectTabs(merged, listParams);
+  // Window ids collide across browsers — two can each call their window `1` —
+  // so one is only worth hoisting when a single browser actually contributed.
+  const contributors = perBrowser.filter((r) => r.tabs.length > 0).length;
+  // Rendering happens here and only here — after every filter has seen the whole
+  // strings. renderTabs preserves order one-for-one, which is what lets the
+  // origin lookup stay keyed on the tabs that went in.
+  const view = renderTabs(selected.tabs, { hoistWindow: contributors <= 1 });
+  // Ids only mean something inside one browser, so every tab needs its origin
+  // whenever more than one was targeted: the listing merged those id spaces
+  // even if only one of them came back with matches. Targeted, not
+  // `contributors` — the follow-up tab-scoped call has to name a browser either
+  // way, and the tabs from the one browser that answered are exactly the ids it
+  // will name it for. connectionId rather than the label, because labels are
+  // self-reported and two can share one.
+  const tabs =
+    targets.length > 1
+      ? view.tabs.map((tab, i) => ({
+          ...tab,
+          connectionId: origin.get(selected.tabs[i] as BridgeTab)?.connectionId,
+        }))
+      : view.tabs;
+  // Per browser: its own `matched` when it filtered, otherwise what our filter
+  // made of everything it sent. Mixing the two is normal — one browser can be
+  // newer than the other — so this is resolved per connection and then summed,
+  // never taken from the merged set as a whole.
+  const matched = perBrowser.reduce(
+    (sum, r) => sum + (r.matched ?? filterTabs(r.tabs, listParams).length),
+    0,
+  );
+  return {
+    ...head,
+    ...(view.windowId === undefined ? {} : { windowId: view.windowId }),
+    tabs,
+    matched,
+    ...(matched > tabs.length ? { truncated: true } : {}),
+  };
+}
+
 // Compact JSON, not pretty-printed: every one of these results goes into a
 // model's context, and a 300-tab listing does not need indentation.
 function ok(value: unknown): McpToolResult {
   return { content: [{ type: "text", text: JSON.stringify(value) }] };
+}
+
+/**
+ * Name the split when "no browser is connected" is true here and false in the
+ * browser, which is what two hubs with different tokens produce.
+ *
+ * The user sees Tabglutton's badge lit and reports the port it names, while
+ * every tool call insists nothing is attached — a pair of facts that reads as a
+ * broken bridge rather than as two sidecars that could not join each other. The
+ * hub election already handles this correctly (a mismatched token must never be
+ * handed a proof, so it binds elsewhere); all that was missing was saying so.
+ *
+ * Observed for real: an older agent session held 4589 with the token from before
+ * a reinstall, this one bound 20317 with the new one, and the browser attached
+ * to whichever it found first.
+ *
+ * Best-effort by construction — the probes are loopback and this is already the
+ * failure path, so a throw here must not replace the real error with its own.
+ */
+async function explainNoConnection(ctx: ToolContext, err: unknown): Promise<unknown> {
+  if (!(err instanceof BridgeRequestError) || err.code !== "no-connection" || !ctx.rivalHubs) {
+    return err;
+  }
+  try {
+    const ports = await ctx.rivalHubs();
+    if (ports.length === 0) return err;
+    return new BridgeRequestError(
+      err.code,
+      `${err.message} Another Tabglutton sidecar is already running on ` +
+        `127.0.0.1:${ports.join(", ")} and the browser may be attached to that one instead. ` +
+        `They could not merge, which means their tokens differ: check that this project's ` +
+        `TABGLUTTON_TOKEN matches the token in Tabglutton's settings, then restart the other ` +
+        `agent session (or this one) so they share a single connection.`,
+    );
+  } catch {
+    return err;
+  }
 }
 
 function toolError(err: unknown): McpToolResult {

@@ -6,7 +6,14 @@
 // One JSON object per WebSocket frame — the frame is the delimiter, so no
 // newline framing is needed on top of it.
 
-export const BRIDGE_PROTO = 1;
+// The one import, and it stays pure by the rule above: shared so an agent's
+// vault override is rejected for exactly the reasons the options page warns
+// about, rather than by a second, drifting copy of the same rules.
+import { vaultWarningFor } from "./vault-warning.js";
+
+// Protocol 2 makes tabs_list's default limit and tab_clip's vault override
+// mandatory on both ends. Protocol 1 peers cannot safely ignore either field.
+export const BRIDGE_PROTO = 2;
 
 /**
  * Chosen by elimination rather than by liking the number (2026-07-29). Three
@@ -333,31 +340,228 @@ export function isBridgeMethod(value: unknown): value is BridgeMethod {
   return typeof value === "string" && (BRIDGE_METHODS as readonly string[]).includes(value);
 }
 
+/**
+ * One tab as an agent sees it. Every field that is false or unknown is
+ * **omitted**, not sent — this object is repeated once per tab into a model's
+ * context, and on a real backlog the boilerplate outweighed the signal:
+ * measured over 874 tabs, `discarded`/`hidden`/`active`/`pinned` cost 17.6% of
+ * a 306 KB listing while carrying eleven true values between them. Absent means
+ * false; absent `lastAccessed` means the browser did not report one.
+ */
 export interface BridgeTab {
   id: number;
   title: string;
   url: string;
-  /** Epoch ms of last activation; 0 when the browser does not report it. */
-  lastAccessed: number;
+  /** Epoch ms of last activation. Omitted when the browser does not report it. */
+  lastAccessed?: number;
   /** Unloaded tab — `tab_read`/`tab_clip` cannot run a content script in it. */
-  discarded: boolean;
-  pinned: boolean;
-  active: boolean;
+  discarded?: boolean;
+  pinned?: boolean;
+  active?: boolean;
   windowId: number;
   index: number;
   /** Firefox only. On Zen this approximates "belongs to another workspace". */
   hidden?: boolean;
 }
 
+/**
+ * - `recent` (default): most recently accessed first. The triage order, and the
+ *   one that makes `limit` mean something — the truncated tail is the tabs the
+ *   user touched longest ago, not an arbitrary slice.
+ * - `oldest`: the reverse, for finding stale tabs directly.
+ * - `window`: browser order (window, then position), which is what the user sees.
+ */
+export type TabsListSort = "recent" | "oldest" | "window";
+
+/**
+ * Default ceiling on tabs returned. A listing is the one bridge result whose
+ * size scales with the user's backlog, and it lands whole in a model's context:
+ * 874 tabs came back as 306 KB and blew past the client's tool-result limit, so
+ * the agent got nothing at all. Truncating is strictly better than that — and
+ * always reported, via `matched` and `truncated`, so an agent can see it did not
+ * get everything and narrow with `query` instead of guessing.
+ */
+export const TABS_LIST_DEFAULT_LIMIT = 200;
+
+/** Ceiling on an explicit `limit`. Above this a listing is not triage material. */
+export const TABS_LIST_MAX_LIMIT = 2000;
+
+/**
+ * Default ceiling on `groupBy: "domain"` rows, which is much tighter than the
+ * tab default because a domain histogram has a long, uninformative tail. A real
+ * 874-tab backlog held 298 distinct domains, and everything past roughly the
+ * fiftieth was a single tab — 250 rows of noise around the ~20 that describe the
+ * backlog. `domains` still reports the true count, so the tail is visible
+ * without being spelled out.
+ */
+export const TABS_LIST_DEFAULT_GROUP_LIMIT = 50;
+
 export interface TabsListParams {
   /** Default "all": every window. "current-window" narrows to the focused one. */
   scope?: "all" | "current-window";
   /** Firefox: include tabs hidden by another Zen workspace. Default true. */
   includeHidden?: boolean;
+  /**
+   * Case-insensitive filter over title and URL. Whitespace splits it into terms
+   * that must **all** match, in either field — "github pull" finds a PR tab
+   * whose title says "Pull request" and whose URL says github.com.
+   */
+  query?: string;
+  /** Max tabs (or domain groups) returned. Default {@link TABS_LIST_DEFAULT_LIMIT}. */
+  limit?: number;
+  /** Default "recent". */
+  sort?: TabsListSort;
+  /** Return per-domain counts instead of tabs. `sort` and per-tab fields do not apply. */
+  groupBy?: "domain";
+}
+
+/** `TabsListParams` with every default filled in, as both ends act on it. */
+export interface ResolvedTabsListParams extends TabsListParams {
+  scope: "all" | "current-window";
+  includeHidden: boolean;
+  sort: TabsListSort;
+  limit: number;
 }
 
 export interface TabsListResult {
   tabs: BridgeTab[];
+  /** Tabs matching `query` before `limit` was applied. */
+  matched: number;
+  /** True exactly when `matched > tabs.length`. Omitted otherwise. */
+  truncated?: boolean;
+}
+
+/** One domain's share of the backlog, from `tabs_list` with `groupBy: "domain"`. */
+export interface TabDomainGroup {
+  /** Hostname with a leading `www.` dropped; the scheme for schemeless URLs. */
+  domain: string;
+  tabs: number;
+  /** How many of them are unloaded, so `tabs_load` is needed before reading. */
+  discarded: number;
+  /** Most recent `lastAccessed` in the group. Omitted when none reported one. */
+  newest?: number;
+}
+
+export interface TabsListGroupResult {
+  groups: TabDomainGroup[];
+  /** Distinct domains matched, before `limit`. */
+  domains: number;
+  /** Tabs matched across every domain, including groups `limit` cut. */
+  matched: number;
+  truncated?: boolean;
+}
+
+/**
+ * The domain a tab is filed under for `groupBy`. Deliberately the hostname
+ * rather than the registrable domain: eTLD+1 needs the Public Suffix List,
+ * which is a dependency this protocol module cannot take and a table that goes
+ * stale, and for triage `docs.google.com` vs `mail.google.com` is the
+ * distinction that matters anyway.
+ */
+export function tabDomain(url: string): string {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return "";
+  }
+  const host = parsed.hostname;
+  if (!host) return parsed.protocol.replace(/:$/, "");
+  return host.startsWith("www.") ? host.slice(4) : host;
+}
+
+/** All whitespace-separated terms present in the title or the URL, ignoring case. */
+export function matchesTabQuery(tab: BridgeTab, query: string): boolean {
+  const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
+  if (terms.length === 0) return true;
+  const haystack = `${tab.title}\n${tab.url}`.toLowerCase();
+  return terms.every((term) => haystack.includes(term));
+}
+
+function compareTabs(sort: TabsListSort): (a: BridgeTab, b: BridgeTab) => number {
+  if (sort === "window") return (a, b) => a.windowId - b.windowId || a.index - b.index;
+  return (a, b) => {
+    const x = a.lastAccessed;
+    const y = b.lastAccessed;
+    // A tab with no reported lastAccessed sorts last under *both* time orders:
+    // it is unknown, not ancient, and floating unknowns to the head of "oldest"
+    // would hand an agent hunting stale tabs a page it knows nothing about. Two
+    // unknowns tie, and `sort` is stable, so they keep browser order.
+    if (x === undefined || y === undefined) {
+      return x === y ? 0 : x === undefined ? 1 : -1;
+    }
+    return sort === "recent" ? y - x : x - y;
+  };
+}
+
+/**
+ * The `query` and `includeHidden` cut, on its own.
+ *
+ * Split out of `selectTabs` because `groupBy` needs the same filter but none of
+ * the sorting or truncation, and folding it into `selectTabs` meant the grouping
+ * path silently skipped it: `tabs_list { query: "x.com", groupBy: "domain" }`
+ * counted the whole backlog. Caught against a real 874-tab browser, where the
+ * extension was older than Gullet and so did not pre-filter — which is exactly
+ * the version skew the second pass exists to cover, so a newer extension would
+ * have hidden the bug rather than prevented it. Returns a new array; callers
+ * sort it in place.
+ */
+export function filterTabs(tabs: readonly BridgeTab[], params: TabsListParams): BridgeTab[] {
+  const includeHidden = params.includeHidden ?? true;
+  const query = params.query?.trim() ?? "";
+  return tabs.filter(
+    (tab) =>
+      (includeHidden || tab.hidden !== true) && (query === "" || matchesTabQuery(tab, query)),
+  );
+}
+
+/**
+ * Filter, sort, and truncate a listing. Pure and shared, because it runs
+ * **twice**: in the extension, so a backlog never crosses the socket in full,
+ * and again in Gullet over the merged results of every connected browser, where
+ * a per-browser limit would not be the limit the agent asked for. Running it
+ * again also means an older extension that ignores `query` still yields a
+ * filtered answer rather than a flood.
+ */
+export function selectTabs(tabs: BridgeTab[], params: TabsListParams): TabsListResult {
+  const matches = filterTabs(tabs, params);
+  matches.sort(compareTabs(params.sort ?? "recent"));
+  const limit = params.limit ?? TABS_LIST_DEFAULT_LIMIT;
+  const result: TabsListResult = { tabs: matches.slice(0, limit), matched: matches.length };
+  if (matches.length > result.tabs.length) result.truncated = true;
+  return result;
+}
+
+/**
+ * Collapse a listing to per-domain counts — the cheap first call of a triage
+ * run, which tells an agent what the backlog is made of for a few hundred bytes
+ * instead of a few hundred kilobytes, and what to then pass as `query`.
+ */
+export function groupTabsByDomain(tabs: BridgeTab[], limit: number): TabsListGroupResult {
+  const byDomain = new Map<string, TabDomainGroup>();
+  for (const tab of tabs) {
+    const domain = tabDomain(tab.url);
+    let group = byDomain.get(domain);
+    if (!group) {
+      group = { domain, tabs: 0, discarded: 0 };
+      byDomain.set(domain, group);
+    }
+    group.tabs += 1;
+    if (tab.discarded) group.discarded += 1;
+    if (tab.lastAccessed !== undefined && tab.lastAccessed > (group.newest ?? -1)) {
+      group.newest = tab.lastAccessed;
+    }
+  }
+  const groups = [...byDomain.values()].sort(
+    (a, b) => b.tabs - a.tabs || a.domain.localeCompare(b.domain),
+  );
+  const result: TabsListGroupResult = {
+    groups: groups.slice(0, limit),
+    domains: groups.length,
+    matched: tabs.length,
+  };
+  if (groups.length > result.groups.length) result.truncated = true;
+  return result;
 }
 
 /**
@@ -427,6 +631,11 @@ export interface TabClipParams {
   tabId: number;
   /** Close the tab once Obsidian has been handed the note. Default false. */
   close?: boolean;
+  /**
+   * File into this vault instead of the configured one, for this call only.
+   * Nothing is persisted — the next clip goes back to settings.
+   */
+  vault?: string;
 }
 
 export interface TabClipResult {
@@ -435,6 +644,11 @@ export interface TabClipResult {
   url: string;
   /** Vault-relative note path the clip was filed under. */
   file: string;
+  /**
+   * Vault the note was handed to. Always reported, so a clip that used an
+   * override says so rather than leaving the agent to assume it worked.
+   */
+  vault: string;
   closed: boolean;
   /** Present when `close` was honoured — pass to `undo_close` to reopen. */
   batchId?: string;
@@ -558,7 +772,7 @@ function badRequest(message: string): never {
   throw new BridgeRequestError("bad-request", message);
 }
 
-export function parseTabsListParams(raw: unknown): TabsListParams {
+export function parseTabsListParams(raw: unknown): ResolvedTabsListParams {
   const obj = asRecord(raw) ?? {};
   const scope = obj.scope;
   if (scope !== undefined && scope !== "all" && scope !== "current-window") {
@@ -568,7 +782,33 @@ export function parseTabsListParams(raw: unknown): TabsListParams {
   if (includeHidden !== undefined && typeof includeHidden !== "boolean") {
     badRequest("includeHidden must be a boolean");
   }
-  return { scope: scope ?? "all", includeHidden: includeHidden ?? true };
+  const query = obj.query;
+  if (query !== undefined && typeof query !== "string") badRequest("query must be a string");
+  const sort = obj.sort;
+  if (sort !== undefined && sort !== "recent" && sort !== "oldest" && sort !== "window") {
+    badRequest(`sort must be "recent", "oldest", or "window"`);
+  }
+  const groupBy = obj.groupBy;
+  if (groupBy !== undefined && groupBy !== "domain") badRequest(`groupBy must be "domain"`);
+  const limit = obj.limit;
+  if (limit !== undefined) {
+    if (typeof limit !== "number" || !Number.isInteger(limit) || limit < 1) {
+      badRequest("limit must be a positive integer");
+    }
+    if (limit > TABS_LIST_MAX_LIMIT) {
+      badRequest(`limit must be at most ${TABS_LIST_MAX_LIMIT}; narrow with query instead`);
+    }
+  }
+  return {
+    scope: scope ?? "all",
+    includeHidden: includeHidden ?? true,
+    sort: sort ?? "recent",
+    // The default depends on what is being counted; an explicit limit governs both.
+    limit:
+      limit ?? (groupBy === "domain" ? TABS_LIST_DEFAULT_GROUP_LIMIT : TABS_LIST_DEFAULT_LIMIT),
+    ...(query !== undefined && query.trim() !== "" ? { query: query.trim() } : {}),
+    ...(groupBy !== undefined ? { groupBy } : {}),
+  };
 }
 
 function requireTabId(raw: unknown): number {
@@ -589,7 +829,26 @@ export function parseTabClipParams(raw: unknown): TabClipParams {
   if (obj.close !== undefined && typeof obj.close !== "boolean") {
     badRequest("close must be a boolean");
   }
-  return { tabId: requireTabId(raw), close: obj.close ?? false };
+  return { tabId: requireTabId(raw), close: obj.close ?? false, ...parseVaultOverride(obj.vault) };
+}
+
+/**
+ * A vault override is absent or a usable name — never an empty string.
+ *
+ * `""` would otherwise reach `obsidianClipRequest`, which appends `&vault=` only
+ * for a truthy value, so a blank override would silently mean "whichever vault
+ * Obsidian has open" instead of the configured one. Falling back to settings on
+ * a blank is the wrong repair too: the agent asked for a specific destination
+ * and would be told it got one. Refusing is the only answer that cannot mislead.
+ */
+function parseVaultOverride(raw: unknown): { vault?: string } {
+  if (raw === undefined) return {};
+  if (typeof raw !== "string") badRequest("vault must be a string");
+  const vault = raw.trim();
+  if (!vault) badRequest("vault must not be empty — omit it to use the configured vault");
+  const warning = vaultWarningFor(vault);
+  if (warning) badRequest(warning);
+  return { vault };
 }
 
 /**

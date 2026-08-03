@@ -145,44 +145,32 @@ The implementation is an **automatic candidate mode**, not an arbitrary port sca
 contiguous numeric range. The fixed-port path remains for debugging, policy, and deliberate
 isolation.
 
-### User and configuration contract
+### Configuration contract
 
-- The options page offers **Automatic (recommended)** and **Fixed port**. Automatic is the
-  default for new installs; the numeric input is shown only for the fixed mode.
-- Extension storage keeps the concerns separate:
-  - `bridgePortMode: "auto" | "fixed"` is the user's setting.
-  - `bridgePort` is authoritative only in fixed mode.
-  - `bridgeLastPort` is a separate, non-setting `storage.local` cache of the last
-    authenticated automatic endpoint. It is excluded from settings change handling, may
-    improve ordering, and must never narrow the candidate set or become configuration.
-- Gullet mirrors that contract. No `--port` flag and no `TABGLUTTON_PORT` means automatic
-  mode. A numeric `--port` or environment value pins exactly that port. `--port auto` may be
-  accepted for explicitness, but generated snippets should simply omit the flag.
-- Existing numeric MCP configurations stay fixed: Gullet cannot tell whether an explicit
-  `--port 4588` was once copied as a default or deliberately chosen. Entering automatic mode
-  requires removing that flag or environment value. The options page's automatic-mode
-  snippet must not put it back.
-- The token remains the bridge realm. Browsers and sidecars with the same token converge on
-  one hub and can be selected by `browser` / `connectionId`; a different token may establish
-  a separate hub on another candidate without gaining access to the first.
+- The options page offers **Automatic (recommended)** and **Fixed port**; the numeric input
+  belongs to fixed mode only. Extension storage keeps `bridgePortMode` (the user's setting)
+  apart from `bridgePort` (authoritative only in fixed mode) and from `bridgeLastPort` — a
+  non-setting `storage.local` cache of the last authenticated automatic endpoint, excluded
+  from settings change handling, which may improve ordering but must never narrow the
+  candidate set or become configuration.
+- Gullet mirrors it: no `--port` and no `TABGLUTTON_PORT` means automatic mode, a numeric
+  value pins exactly that port, and `--port auto` is accepted for explicitness though
+  generated snippets simply omit the flag.
+- **Existing numeric MCP configurations stay fixed.** Gullet cannot tell whether an explicit
+  `--port 4588` was copied from a shipped default or deliberately chosen, so entering
+  automatic mode means removing the flag or environment value — and the options page's
+  automatic-mode snippet must not put it back.
+- The token is the bridge realm. Same-token browsers and sidecars converge on one hub and are
+  selected by `browser` / `connectionId`; a different token may hold another candidate
+  without gaining access to the first.
 
-### Settings migration
-
-The extension _can_ distinguish historical defaults from likely custom choices, so its
-one-time migration is:
-
-1. If `bridgePortMode` already exists, preserve it.
-2. If it is absent and `bridgePort` is a known historical default (`4588` or `4589`), persist
-   automatic mode.
-3. If it is absent and `bridgePort` is any other valid value, persist fixed mode with that
-   value unchanged.
-4. Preserve the token, enablement, and load permission exactly; changing discovery mode is
-   not token rotation.
-
-This intentionally treats someone who manually chose a number that was also a shipped
-default as automatic. There is no evidence in the old schema that can recover that intent,
-and retaining the stale-default failure for every existing install would defeat the
-migration. Fixed mode remains one click away.
+The extension's one-time settings migration (`storage.ts`, pinned in `tests/storage.test.ts`)
+reads an absent `bridgePortMode` as automatic when `bridgePort` is a historical default
+(`4588` or `4589`) and as fixed at that value otherwise, preserving the token, enablement, and
+load permission — changing discovery mode is not token rotation. It therefore treats someone
+who manually chose a number that was also a shipped default as automatic. There is no evidence
+in the old schema that can recover that intent, and retaining the stale-default failure for
+every existing install would defeat the migration. Fixed mode remains one click away.
 
 ### Candidate-set contract
 
@@ -246,30 +234,26 @@ automatic ports neither require nor imply a daemon.
 
 ### Extension discovery across candidates
 
-Fixed mode keeps today's single-port behaviour. Automatic mode follows these rules:
-
-1. Order the scan with `bridgeLastPort` first when it is still a candidate, followed by the
-   remaining canonical candidates without duplication.
-2. On startup, an explicit settings sync, an alarm wake, or an `IDLE_PROBE_MS` tick, probe
-   one candidate and advance the in-memory cursor. While the background page remains awake,
-   this completes a full five-port rotation in about 15 seconds. One trigger never becomes
-   N probes or N blind WebSocket dials.
-3. A probe is positive only when the response carries Gullet's marker with a supported
-   protocol. Foreign listeners are skipped. A marked endpoint gets a WebSocket handshake;
-   token mismatch or protocol rejection advances to the next marked candidate rather than
-   latching a global conflict.
-4. Cache a candidate only after mutual token proof reaches `hello-ack`. Clear or replace the
-   cache after a successful connection elsewhere; a cached silent/foreign endpoint is merely
-   tried first and never blocks fallback.
-5. Keep at most one WebSocket dial in flight. The first authenticated connection wins the
-   pass and cancels the remaining probe work.
+Fixed mode keeps today's single-port behaviour. In automatic mode the extension orders the
+scan with `bridgeLastPort` first when it is still a candidate, then the remaining canonical
+candidates without duplication, and each trigger — startup, an explicit settings sync, an
+alarm wake, an `IDLE_PROBE_MS` tick — probes **one** candidate and advances an in-memory
+cursor. A full five-port rotation therefore takes about 15 seconds while the page is awake,
+and one trigger never becomes N probes or N blind dials. A probe is positive only when the
+response carries Gullet's marker with a supported protocol: foreign listeners are skipped, and
+a marked endpoint that then fails the token or protocol check advances to the next marked
+candidate rather than latching a global conflict. Only mutual proof reaching `hello-ack`
+caches a candidate — a cached silent or foreign endpoint is merely tried first and never
+blocks fallback — at most one dial is in flight, and the first authenticated connection wins
+the pass and cancels the remaining probe work.
 
 The HTTP probe remains a safety device, not an absolute gate. A future browser rule could
 block loopback `fetch` while still allowing WebSockets, so the current blind-dial escape
 valve survives with a strict bound: after the same instance-only counted misses, an eligible
 non-idle tick may blind-dial **one** candidate, rotating from the last-known/default choice.
 The 3s idle loop never increments that counter, and one tick never bursts across the set.
-Automatic discovery must not turn one Gecko `FailDelayManager` input into N.
+Automatic discovery must not turn one Gecko `FailDelayManager` input into N — which is also
+why that counter dies with the page rather than persisting; see Open questions.
 
 An unmarked legacy Gullet is indistinguishable from another generic local HTTP service and
 is therefore foreign. Automatic mode does not weaken the marker check for compatibility;
@@ -288,6 +272,31 @@ the old agent session is the upgrade path.
   side logs the token, its proof, or a token-derived stable identifier.
 - The options-page config snippet omits the port in automatic mode and includes the numeric
   flag only in fixed mode.
+
+▸ **"Connected on \<port\>" and "no browser is connected" can both be true at once.** When
+the token changes while an older agent session is still running, the two sidecars are in
+different realms: the newer one cannot peer with the older hub — a mismatched token must
+never be handed a proof — so it binds a different candidate, and the browser attaches to
+whichever realm it finds first. If that is the older one, the extension's badge reports a
+healthy connection on a real port while every tool call in the new session insists nothing
+is attached. Every component behaves exactly as designed and the pair of facts still reads
+as a broken bridge. Observed live; it cost real time to unpick.
+
+The election already knew: `tryExistingHub` records a compatible-marker candidate it could
+not join. `Backend.rivalHubs()` now re-probes the candidates on the "no browser" path —
+live rather than from those recorded observations, since a rival can appear long after we
+settled — and the tool error names the endpoint it found and points at the token as the
+reason two sidecars did not merge. Best-effort by construction: a throw inside the
+diagnosis must never replace the error it was explaining.
+
+**A normal extension update does not cause this.** `bridgeToken` is minted only by an
+explicit action in the options page (default `""`, never auto-regenerated) and
+`bridgeLastPort` is written to `storage.local` and put first by
+`orderedBridgePortCandidates` on the next start — both survive an update. Only an
+_uninstall_ clears `storage.local`. That is the path that produced this: a
+delete-and-reinstall regenerated the token, and the new token, not the reinstall, is what
+split the realms. Worth stating because the endpoint moving looks like update fragility and
+is not.
 
 A filesystem rendezvous file is not part of this design. Gullet, Claude, and Codex could all
 read one, but a WebExtension cannot read an arbitrary config directory. Such a file may be
@@ -311,43 +320,27 @@ without native messaging or another fixed bootstrap service.
   tears it down and starts a fresh full discovery pass; a candidate change alone is not
   revocation.
 
-### Acceptance and test matrix
+### Verification
 
-The feature is not complete until all of these discriminate against the old implementation:
+Candidate ordering, migration, election, and probe classification are unit-tested behind
+injectable probes and candidate arrays; socket tests bind ephemeral ports, so nothing depends
+on the production numbers being free, and those numbers are validated separately against the
+selection criteria above.
 
-- **Historical split:** an unmarked legacy listener occupies 4588, current Gullet serves
-  4589, and an extension migrated from stored 4588 automatically connects to 4589.
-- **Many browsers:** Zen and Chrome with one token connect to the same auto-selected hub;
-  `tabs_list` returns both and a tab-scoped call without `browser` is ambiguous.
-- **Many sessions:** two same-token Gullet processes launched concurrently produce one hub
-  and one peer, including when the first production candidate is foreign.
-- **No late compaction split:** a same-token hub on a later candidate is joined even after an
-  earlier candidate becomes free.
-- **Separate realms:** two tokens can occupy different candidates; each browser and MCP
-  client sees only its matching realm.
-- **Failover:** killing the hub makes peers re-elect on an available candidate and extensions
-  rediscover it without settings changes.
-- **Probe discipline:** markerless foreign services receive HTTP only; normal automatic
-  discovery makes no blind WebSocket attempts; the blocked-fetch escape valve makes at most
-  one per eligible tick and keeps its counter instance-only.
-- **Migration:** historical defaults become automatic, custom values remain fixed, and an
-  explicit CLI/env port remains fixed.
-- **Exhaustion and recovery:** all candidates occupied yields an actionable MCP fault, then
-  heals after one becomes available without restarting the client.
-- **Live engines:** repeat the shared-hub and failover scenarios on current Chrome and Zen,
-  since event-page suspension, alarm cadence, and Gecko reconnect delay are not faithfully
-  represented by unit tests.
-
-Pure candidate ordering, migration, and election decisions should be extracted behind
-injectable probes/candidate arrays. Socket tests bind ephemeral ports; production candidate
-numbers are validated separately against the documented selection criteria.
+Three properties are not faithfully represented by any of that, because event-page
+suspension, alarm cadence, and Gecko's reconnect delay are not, and are worth re-running on
+current Chrome and Zen after changes here: two same-token browsers sharing one auto-selected
+hub (with a tab-scoped call refusing to guess between them), hub loss followed by peer
+re-election and extension rediscovery without a settings change, and candidate exhaustion
+healing in place — an actionable MCP fault while every candidate is occupied, then a normal
+session once one frees, with no client restart.
 
 ## Wire protocol
 
 One JSON object per WebSocket frame (the frame is the delimiter), versioned:
 
-- Sidecar → extension on connect: `{ type: "challenge", proto: 1, server, nonce }`.
-- Extension → sidecar: `{ type: "hello", proto: 1, browser: "firefox" | "chrome",
+- Sidecar → extension on connect: `{ type: "challenge", proto: 2, server, nonce }`.
+- Extension → sidecar: `{ type: "hello", proto: 2, browser: "firefox" | "chrome",
 extVersion, label, nonce, proof }`.
 - Sidecar → extension: `{ type: "hello-ack", proto, connectionId, proof }`, or
   `{ type: "hello-error", error }`.
@@ -357,6 +350,21 @@ extVersion, label, nonce, proof }`.
   control frames. On Chrome this doubles as the MV3 service-worker keepalive (socket
   activity extends worker lifetime since Chrome 116, below our
   `minimum_chrome_version`) — control frames the browser answers itself would not.
+
+Protocol 2 is an intentional compatibility boundary. Protocol 1 predates both the default
+`tabs_list` limit and `tab_clip`'s `vault` override: an old Gullet would omit the limit and
+silently lose tabs when talking to a new extension, while an old extension would ignore the
+vault and file into the configured destination. The handshake rejects both mixed-version
+pairings instead of allowing either call to appear successful with the wrong result.
+
+The bump is not the default for a new field, and the test is whether the other end ignoring
+it produces a _wrong_ answer or merely a less precise one. `matched` and `query` are
+tolerated across versions precisely because an extension that ignores them costs nothing
+the sidecar cannot recompute from what it did send — `tabsList` recomputes both. A missing
+`limit` returns tabs that were silently dropped, and a missing `vault` files a clip
+somewhere the caller did not ask for; neither is recoverable downstream, and both are
+reported as success. Recoverable skew is tolerated; a confidently wrong result forces a
+bump.
 
 ▸ **The token is not sent.** The sketch had the extension put its token in the hello and
 the sidecar echo it back, which proves nothing in the return direction. Instead each side
@@ -369,18 +377,43 @@ different token/nonce split.
 Shared request/response types live in `src/bridge-protocol.ts`, imported by both the
 extension and Gullet so the contract is typechecked from one definition.
 
-## Tool surface (v1)
+## Tool surface (v2)
 
-| MCP tool     | Backing APIs                                           | Notes                                                                                                                                                                                                           |
-| ------------ | ------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `tabs_list`  | `tabs.query`                                           | id, title, url, `lastAccessed`, `discarded`, `pinned`; on Firefox also `hidden` (≈ other Zen workspaces). Metadata only — cheap over hundreds of tabs.                                                          |
-| `tabs_load`  | `tabs.reload` + `tabs.onUpdated`                       | Wakes discarded tabs so they can be read. Batched (≤20), three at a time, under a 30s deadline; per-tab `ready`/`pending`/`failed`. Gated on a settings toggle, default off — answers `not-enabled` until then. |
-| `tab_read`   | `scripting.executeScript` + existing `clip-current.ts` | Returns Defuddle markdown + metadata. Fails cleanly on discarded tabs (see below).                                                                                                                              |
-| `tab_clip`   | existing `clip-format.ts` + `obsidian://new` handoff   | Files into the vault exactly as manual Devour does, including the Chrome redirect-page dance.                                                                                                                   |
-| `tabs_close` | `tabs.remove`                                          | Batched, ids deduplicated. Entries (title, url, pinned, window, index, private) are recorded in an undo log in `storage.local` _before_ the removal, and the batch id comes back with the result.               |
-| `undo_close` | reopen from the log                                    | Safety valve for the one destructive act. Omit the batch id to undo the most recent.                                                                                                                            |
+| MCP tool     | Backing APIs                                           | Notes                                                                                                                                                                                                                                                                                                        |
+| ------------ | ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `tabs_list`  | `tabs.query`                                           | id, title, url, `windowId` (hoisted when shared), and — only when true — `lastAccessed`, `discarded`, `pinned`, `active`, `hidden`. Filtered with `query`, ordered with `sort`, capped by `limit`, or collapsed to counts with `groupBy: "domain"`. **On Zen, covers the active workspace only.** See below. |
+| `tabs_load`  | `tabs.reload` + `tabs.onUpdated`                       | Wakes discarded tabs so they can be read. Batched (≤20), three at a time, under a 30s deadline; per-tab `ready`/`pending`/`failed`. Gated on a settings toggle, default off — answers `not-enabled` until then.                                                                                              |
+| `tab_read`   | `scripting.executeScript` + existing `clip-current.ts` | Returns Defuddle markdown + metadata. Fails cleanly on discarded tabs (see below).                                                                                                                                                                                                                           |
+| `tab_clip`   | existing `clip-format.ts` + `obsidian://new` handoff   | Files into the vault exactly as manual Devour does, including the Chrome redirect-page dance. An optional `vault` overrides the destination for that one call. See below.                                                                                                                                    |
+| `tabs_close` | `tabs.remove`                                          | Batched, ids deduplicated. Entries (title, url, pinned, window, index, private) are recorded in an undo log in `storage.local` _before_ the removal, and the batch id comes back with the result.                                                                                                            |
+| `undo_close` | reopen from the log                                    | Safety valve for the one destructive act. Omit the batch id to undo the most recent.                                                                                                                                                                                                                         |
 
 Deliberately absent: navigate, click, type, evaluate.
+
+▸ **`tab_clip`'s `vault` overrides a destination, it does not change a setting.** The
+motivating case is a two-vault user: an agent-managed vault that agents file into by
+default, and a main vault that occasionally deserves something directly, without a
+staging hop it would only have to be moved out of later. The tempting shape for that is a
+tool that writes `obsidianVault` — and it is the wrong one. Settings are the user's, edited
+in a UI they can see; a tool that mutates one leaves the extension describing a destination
+the user never chose, silently, for every clip after it, including the ones from the popup.
+A per-call parameter expresses the same intent and expires by construction, so the blast
+radius of an agent's mistake is exactly one note. The tool description therefore says to use
+it **only when the user names a vault**, and the result reports the `vault` it filed into on
+every clip, override or not — an agent that cannot see where a note went cannot tell the
+user, and this is precisely the call where that matters.
+
+Two things it deliberately does not do. It does not fall back to the configured vault on a
+blank string: `obsidianClipRequest` appends `&vault=` only for a truthy value, so a blank
+reaching Obsidian means "whichever vault is open" — but silently substituting settings would
+report a destination the caller did not ask for. Both readings are wrong, so `""` is a
+`bad-request`. And it does not validate that the vault exists, because nothing in a
+WebExtension can: the handoff is a URL handed to the OS. An unrecognised name fails inside
+Obsidian, where neither end of the bridge can observe it, and the call still reports success
+— which is why the parameter's description warns against guessing at a name rather than
+relying on an error that will never arrive. What it does check is the one class of mistake
+that is decidable from the string alone, via the same `vaultWarningFor` the options page
+uses: a filesystem path where a vault name belongs.
 
 ▸ **`tab_load` shipped as `tabs_load`, plural.** It was sketched as a per-tab v1.1 tool.
 But loading is dominated by the network wait, not by IPC, and the workflow that needs it —
@@ -404,10 +437,167 @@ default off, surfaced as **Agent bridge → "Let agents load unloaded tabs"**. A
 returns the `not-enabled` code — distinct from `unsupported` because this one has a fix the
 agent can state to the user.
 
-`tabs_list` with no `browser` argument fans out over every connected browser and tags each
-tab with its origin, so discovering what is connected costs no extra round trip. The
-tab-scoped tools refuse to guess between two browsers, because ids only mean something
-within one.
+`tabs_list` with no `browser` argument fans out over every connected browser, so
+discovering what is connected costs no extra round trip. The tab-scoped tools refuse to
+guess between two browsers, because ids only mean something within one — and for the same
+reason a listing targeting two stamps `connectionId` on each returned tab, even when only
+one browser matched. It is omitted only when one browser was targeted, because the
+top-level `browsers` entry already identifies every returned id then.
+
+▸ **A listing is budgeted against a model's context, not against the socket.** The
+measurement that drove this, from a real 874-tab Zen: 306 KB of JSON in one tool result,
+which is past the client's tool-result ceiling — so the agent got _nothing_, and there was
+no narrower call available to fall back to. `browser` and `connectionId` were constants
+repeated once per tab (13%). `discarded`, `hidden`, `active`, and `pinned` were 17.6%
+while carrying eleven `true` values between them — `hidden` was `false` on all 874.
+
+**Deleting the boilerplate was not enough, and that is the point.** Reconstructing that
+listing from its reported per-field byte totals (within 0.5% of the original) and applying
+the shape changes alone lands at **215 KB, 252 bytes a tab** — a 29% cut that is still far
+past the ceiling, so the call still fails and the agent still gets nothing. What makes it
+usable is narrowing. Measured over the same 874 tabs:
+
+|                                                                 | whole backlog | per tab | at the default limit |
+| --------------------------------------------------------------- | ------------- | ------- | -------------------- |
+| original                                                        | 306 KB        | 363 B   | — (no limit existed) |
+| constants hoisted, false flags dropped                          | 215 KB        | 252 B   | 49 KB                |
+| `index` dropped, `windowId` hoisted, title clipped, URL trimmed | 158 KB        | 185 B   | **36 KB**            |
+| `groupBy: "domain"`                                             | **0.4 KB**    | —       | —                    |
+
+So the shape work is worth having — it halved the per-tab cost, and per-tab cost is what
+decides how many tabs fit under a given limit — but it is a constant factor on something
+that scales with the user's backlog. Only the filter changes the shape of the problem.
+
+Five changes, in the order they matter:
+
+1. **`query`, `limit`, `sort`.** The one that actually mattered: the session that produced
+   the measurement wanted "the x.com tabs" and had to ask for all 874 to find them.
+   `query` is a case-insensitive AND over whitespace-separated terms, matched against title
+   and URL together, so "github pull" finds a tab whose title and URL each carry one term.
+   Deliberately not a regex: an agent-authored regex is an unbounded backtracking risk on a
+   thousand strings, and substring terms are what triage actually needs.
+2. **`groupBy: "domain"`** — counts only, no tabs. The real triage primitive: one cheap
+   call says what the backlog is made of and what to pass as `query` next. It honours
+   `query` too, so it can count one slice rather than the whole backlog, and it gets its
+   own tighter default limit (`TABS_LIST_DEFAULT_GROUP_LIMIT`, 50): the real 874-tab
+   browser held **298 distinct domains**, and everything past roughly the fiftieth was a
+   single tab — 250 rows of noise around the ~20 that describe the backlog. The domain is
+   the hostname minus `www.`, not the registrable domain: eTLD+1 needs the Public Suffix
+   List, which `bridge-protocol.ts` cannot take as a dependency and which goes stale, and
+   `mail.google.com` vs `docs.google.com` is the distinction triage wants anyway.
+3. **False and unknown fields are omitted**, not sent. Absent means false; absent
+   `lastAccessed` means the browser reported none.
+4. **Constants are hoisted** out of the tabs — `browser`/`connectionId` into the existing
+   top-level `browsers` array per the stamping rule above, and `windowId` to the top level
+   whenever every tab shares one window, which on a single-window Zen is all of them.
+   `index` is gone outright: it duplicated the array order under `sort: "window"`, meant
+   nothing under the others, and nothing consumed it — the undo log takes position from
+   the live `browser.tabs.Tab`, not from a listing.
+5. **Titles are clipped and URLs trimmed** (`src/tabs-view.ts`). Titles at
+   `TAB_TITLE_MAX` (120) with a trailing `…`; there is no gentler cap, because the mean
+   title in that backlog was ~104 characters, so anything tighter cuts into the body of
+   the distribution rather than its tail. What a clipped title loses is cheap — titles are
+   front-loaded and the tail is usually the site suffix (`" | GitHub"`) the URL already
+   gives you.
+
+   URLs are **not** clipped by default, because a URL cut mid-string stops being a URL:
+   it cannot be handed back to the user, and two distinct tabs can clip to the same prefix
+   and read as duplicates. They are trimmed structurally instead — `displayUrl` drops the
+   click-tracking params (sharing `isTrackingParam` with `normalizeUrl`, so there is one
+   list), the `www.`, and the trailing slash, which is where long URLs get long. It keeps
+   the scheme, so the result is still copyable, and keeps the fragment, which for an SPA
+   is the entire page identity. `TAB_URL_MAX` (200) is a backstop for data: URIs and
+   pathological paths, not the mechanism.
+
+Two things about `limit` are load-bearing. It **defaults** to `TABS_LIST_DEFAULT_LIMIT`
+(200) rather than being opt-in, because the failure it prevents is total — an unbounded
+listing returns nothing usable — and truncation is always visible: `matched` counts what
+the filter hit, `truncated` says the answer is partial. And the default `sort` is `recent`
+rather than the browser's own window order, which is what makes truncation defensible: the
+tail that gets cut is the tabs the user touched longest ago, not an arbitrary slice.
+
+The filter/sort/limit pipeline (`selectTabs`) lives in `bridge-protocol.ts` and runs
+**twice**. In the extension, so a backlog never crosses the socket whole; and again in
+Gullet over the merged results, because a limit applied per browser is not the limit the
+agent asked for. Running it a second time also means an older extension that ignores
+`query` still yields a filtered answer instead of a flood. `groupBy` is the exception:
+Gullet asks the extension for the full filtered set and groups it there, since a limit
+applied before grouping would corrupt the counts — and the full list crossing loopback
+costs nothing, which is the whole point of where the budget actually is.
+
+**Selection and rendering are separate passes for a reason.** `renderTabs`
+(`src/tabs-view.ts`) runs _once_, in Gullet, at the very end — never in the extension,
+even though clipping there would shrink the socket frame. Gullet re-applies `query` over
+the merged results, and a query matching text that clipping had already removed would
+silently drop the exact tab the agent asked for. So every filter sees whole strings and
+only the bytes handed to the model are trimmed. This is the same trade as `groupBy`: the
+socket is loopback, and loopback bytes are not the budget anyone is spending.
+
+▸ **`matched` is the browser's, not Gullet's, and recomputing it was a silent lie.**
+Gullet read only `tabs` from each browser's reply and let its second `selectTabs` pass
+derive `matched` from what arrived. But a current extension truncates to `limit` _before_
+sending, so the tabs that arrive are not the tabs that matched: 200 of 874 came back and
+were reported as `matched: 200` with no `truncated` — the agent's one signal that it had
+not seen everything, destroyed exactly when there was more to see. It now keeps each
+browser's reported `matched`, falling back to its own count only when a browser sends none
+(which is how an older extension identifies itself), resolved per connection and summed —
+two attached browsers can be different versions.
+
+This one was **invisible in live testing**, because the browser it was tested against was
+0.2.0 and sends everything unfiltered, so page size and match count were the same number.
+It would have appeared on first contact with the very build that fixes the loopback cost.
+Found by reading the path rather than running it, which is the argument for tracing a
+change end to end before signing a build, not after. (The question that prompted the trace
+— whether the `Number.POSITIVE_INFINITY` limit used for `groupBy` survives the wire — was
+a non-issue: it is spent on a `slice` inside the extension and never reaches
+`TabsListResult`, so `JSON.stringify` never gets the chance to turn it into `null`.)
+
+▸ **The second pass hid a bug from itself, and only a stale extension exposed it.**
+`groupBy` grouped the _unfiltered_ merge: `tabs_list { query: "x.com", groupBy: "domain" }`
+answered `matched: 874, domains: 298` — the whole backlog, identical to the unfiltered
+call. The filter lived inside `selectTabs`, and the grouping branch skipped `selectTabs`
+entirely. Against a **current** extension this was invisible, because the extension had
+already applied `query` before sending; it only surfaced against a real browser running
+0.2.0, which ignores `query` and hands over everything. So the version-skew tolerance that
+the second pass exists to provide is exactly what stopped the bug being noticed, and the
+skew itself is what revealed it. The filter is now `filterTabs`, called by both paths.
+The lesson generalises: a redundant safety pass has to be tested with the primary pass
+_disabled_, or it is only ever exercised as a no-op.
+
+`renderTabs` also tolerates a tab missing `title` or `url` rather than throwing. The
+extension guarantees both, but a version-skewed one does not, and one malformed entry must
+not destroy a listing of eight hundred — the same reason `tabs_list` keeps a failing
+browser's partner.
+
+▸ **A Zen listing is the active workspace, and `hidden` does not tell you otherwise.**
+Measured live on the 874-tab browser: `groupBy: "domain"` answered `matched: 874,
+domains: 298`; after a workspace switch the same call answered `matched: 160, domains: 66`
+with a disjoint set of domains, and `includeHidden: false` changed neither number. So tabs
+in a non-active workspace are **absent from `tabs.query`, not flagged `hidden`** — the
+condition `probeHeuristic` in `background.ts` was written to detect (`allInWindow.length
+=== visibleInWindow.length`) is simply true here. Both readings hoisted the same
+`windowId`, so this is one window enumerating differently, not a second window appearing.
+
+This is accepted behaviour, not a bug to fix: Zen exposes no workspace API (see AGENTS.md),
+and active-workspace scope is the reasonable contract. What was wrong was the _claim_ —
+`tabs_list` told agents `hidden: true` meant "another workspace", so an agent seeing 160
+tabs would report them as the user's whole backlog with no hedge, and `matched` reads as
+authoritative either way. The tool description and `GULLET_INSTRUCTIONS` now state the
+scoping outright.
+
+The honest remaining gap is that **nothing in the result says which workspace it is**, so
+two listings taken minutes apart are not comparable and nothing in the payload reveals it.
+Naming the workspace is impossible without an API Zen does not have; the available half-
+measure is for the extension to surface `probeHeuristic`'s verdict on the listing itself,
+which is a wire change and is not made here. It only became visible at all because the
+payload work made two listings small enough to compare at a glance.
+
+▸ **This may also settle the first-`tabs_list` timeout** in the open questions below.
+_Response size_ is one of the two live hypotheses for it, and a first call that used to
+serialise ~300 KB into one WebSocket frame now serialises ~36 KB. That is not a fix, and
+it is not evidence — but it does mean the symptom recurring at the new size would rule
+response size out and leave startup contention, which is the discriminating test that was
+otherwise awkward to run.
 
 **Restoring is exact where it can be and safe where it cannot.** A batch is recreated in
 ascending index order within each window; inserting a low index after a high one would

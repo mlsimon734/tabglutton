@@ -211,8 +211,9 @@
             <strong>Access token</strong>
             <small>
               Shared secret proving the sidecar is yours. It is never sent over the socket — both
-              sides prove they know it. Copy it into Gullet's environment; regenerating it
-              disconnects any sidecar still using the old one.
+              sides prove they know it. Copy it into Gullet's environment, or paste in one you
+              already have to match another browser or machine. Changing it disconnects any sidecar
+              still using the old one.
             </small>
           </div>
           <div class="setting-control">
@@ -223,7 +224,19 @@
                    puts it, so it reads as belonging to the token rather than as a
                    third action alongside Copy and Generate. -->
               <div class="input-affix">
-                <input type="password" id="bridgeToken" readonly placeholder="No token yet" />
+                <!-- Editable, not readonly: the token is a shared secret, and the
+                     other end may be where it already exists — a second browser,
+                     a machine already configured, a password manager. Generate is
+                     the convenience, not the only door. -->
+                <input
+                  type="password"
+                  id="bridgeToken"
+                  placeholder="Generate or paste a token"
+                  autocomplete="off"
+                  autocapitalize="off"
+                  autocorrect="off"
+                  spellcheck="false"
+                />
                 <button
                   type="button"
                   id="bridgeTokenReveal"

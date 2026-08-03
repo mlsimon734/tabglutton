@@ -66,18 +66,80 @@ describe("tool definitions", () => {
 });
 
 describe("tabs_list", () => {
-  test("fans out over every browser and tags each tab with its origin", async () => {
-    const { call } = caller([zen, chrome], ({ connectionId }) => ({
-      tabs: [{ id: connectionId === "conn-1" ? 1 : 2 }],
-    }));
-    const result = await call("tabs_list", {});
-    expect(payload(result)).toEqual({
+  const tab = (
+    id: number,
+    url: string,
+    lastAccessed?: number,
+    windowId = 1,
+  ): Record<string, unknown> => ({
+    id,
+    title: `tab ${id}`,
+    url,
+    windowId,
+    index: id,
+    ...(lastAccessed === undefined ? {} : { lastAccessed }),
+  });
+  /** A tab as it comes back out: index dropped, windowId hoisted, url trimmed. */
+  const shown = (id: number, url: string): Record<string, unknown> => ({
+    id,
+    title: `tab ${id}`,
+    url,
+  });
+
+  test("fans out over every browser and stamps origin when multiple are targeted", async () => {
+    const { call } = caller([zen, chrome], ({ connectionId }) =>
+      connectionId === "conn-1"
+        ? { tabs: [tab(1, "https://a.test/")] }
+        : { tabs: [tab(2, "https://b.test/")] },
+    );
+    expect(payload(await call("tabs_list", {}))).toEqual({
       browsers: [zen, chrome],
+      // No hoisted windowId: both browsers call their window 1, and claiming a
+      // single shared window across two browsers would be a lie.
       tabs: [
-        { id: 1, browser: "Zen", connectionId: "conn-1" },
-        { id: 2, browser: "Chrome", connectionId: "conn-2" },
+        { ...shown(1, "https://a.test"), windowId: 1, connectionId: "conn-1" },
+        { ...shown(2, "https://b.test"), windowId: 1, connectionId: "conn-2" },
       ],
+      matched: 2,
     });
+  });
+
+  test("leaves the origin off when only one browser is connected", async () => {
+    const { call } = caller([zen], () => ({ tabs: [tab(1, "https://a.test/")] }));
+    // The constants used to be repeated once per tab; `browsers` and the hoisted
+    // `windowId` already say both.
+    expect(payload(await call("tabs_list", {}))).toEqual({
+      browsers: [zen],
+      windowId: 1,
+      tabs: [shown(1, "https://a.test")],
+      matched: 1,
+    });
+  });
+
+  test("keeps the origin when only one of two browsers has matches", async () => {
+    const { call } = caller([zen, chrome], ({ connectionId }) =>
+      connectionId === zen.connectionId ? { tabs: [tab(1, "https://a.test/")] } : { tabs: [] },
+    );
+    expect(payload(await call("tabs_list", {}))).toEqual({
+      browsers: [zen, chrome],
+      windowId: 1,
+      tabs: [{ ...shown(1, "https://a.test"), connectionId: zen.connectionId }],
+      matched: 1,
+    });
+  });
+
+  test("clips a long title but still matches a query against the full one", async () => {
+    const buried = `${"x".repeat(200)} needle`;
+    const { call } = caller([zen], () => ({
+      tabs: [{ ...tab(1, "https://a.test/"), title: buried }],
+    }));
+    const result = payload(await call("tabs_list", { query: "needle" })) as {
+      tabs: Array<{ title: string }>;
+      matched: number;
+    };
+    expect(result.matched).toBe(1);
+    expect(result.tabs[0]?.title).toEndWith("…");
+    expect(result.tabs[0]?.title).not.toContain("needle");
   });
 
   test("narrows to the named browser", async () => {
@@ -88,13 +150,111 @@ describe("tabs_list", () => {
 
   test("forwards its own params but not the routing field", async () => {
     const { call, sent } = caller([zen], () => ({ tabs: [] }));
-    await call("tabs_list", { browser: "Zen", scope: "current-window", includeHidden: false });
-    expect(sent[0]?.params).toEqual({ scope: "current-window", includeHidden: false });
+    await call("tabs_list", { browser: "Zen", scope: "current-window", query: "x" });
+    expect(sent[0]?.params).toEqual({ scope: "current-window", query: "x" });
   });
 
   test("tolerates a browser that returns no tabs field", async () => {
     const { call } = caller([zen], () => ({}));
     expect(payload(await call("tabs_list", {}))).toMatchObject({ tabs: [] });
+  });
+
+  test("rejects bad arguments before dialling any browser", async () => {
+    const { call, sent } = caller([zen], () => ({ tabs: [] }));
+    const result = await call("tabs_list", { sort: "alphabetical" });
+    expect(result.isError).toBe(true);
+    expect(payload(result)).toMatchObject({ error: "bad-request" });
+    expect(sent).toEqual([]);
+  });
+
+  // Filtering and truncation run again here, over the merged set: an extension
+  // that ignored `query` must not flood the agent anyway, and a per-browser
+  // limit is not the limit the agent asked for.
+  test("re-applies query and limit across browsers that ignored them", async () => {
+    const { call } = caller([zen, chrome], ({ connectionId }) =>
+      connectionId === "conn-1"
+        ? { tabs: [tab(1, "https://x.com/a", 100), tab(2, "https://other.test/", 400)] }
+        : { tabs: [tab(3, "https://x.com/b", 300), tab(4, "https://x.com/c", 200)] },
+    );
+    const result = payload(await call("tabs_list", { query: "x.com", limit: 2 })) as {
+      tabs: Array<{ id: number }>;
+      matched: number;
+      truncated: boolean;
+    };
+    expect(result.tabs.map((t) => t.id)).toEqual([3, 4]);
+    expect(result).toMatchObject({ matched: 3, truncated: true });
+  });
+
+  // A current extension truncates before sending, so the page that arrives is
+  // not the match count. Recomputing `matched` here reported 2 of 900 as
+  // "matched: 2" with no `truncated` — the agent's only signal that more
+  // existed, lost precisely when it did. Invisible against an extension that
+  // sends everything, which is why it survived a live run.
+  test("keeps the browser's matched when the browser truncated for us", async () => {
+    const { call } = caller([zen], () => ({
+      tabs: [tab(1, "https://x.com/a", 400), tab(2, "https://x.com/b", 300)],
+      matched: 900,
+      truncated: true,
+    }));
+    const result = payload(await call("tabs_list", { query: "x.com", limit: 2 }));
+    expect(result).toMatchObject({ matched: 900, truncated: true });
+  });
+
+  test("falls back to its own count for a browser that sent no matched", async () => {
+    const { call } = caller([zen], () => ({
+      tabs: [tab(1, "https://x.com/a"), tab(2, "https://x.com/b"), tab(3, "https://other.test/")],
+    }));
+    // No `matched` on the wire means the browser did not filter, so the honest
+    // total is what our own filter kept — not the three tabs it handed over.
+    expect(payload(await call("tabs_list", { query: "x.com" }))).toMatchObject({ matched: 2 });
+  });
+
+  test("sums matched across browsers of different vintages", async () => {
+    const { call } = caller([zen, chrome], ({ connectionId }) =>
+      connectionId === "conn-1"
+        ? { tabs: [tab(1, "https://x.com/a", 400)], matched: 500 }
+        : { tabs: [tab(2, "https://x.com/b", 300), tab(3, "https://no.test/")] },
+    );
+    // 500 reported by the new one, plus the single tab our filter keeps from
+    // the old one's three.
+    expect(payload(await call("tabs_list", { query: "x.com" }))).toMatchObject({
+      matched: 501,
+      truncated: true,
+    });
+  });
+
+  // Regression, caught live: grouping ran on the unfiltered merge, so a query
+  // plus groupBy counted the whole backlog. The browser here ignores `query`
+  // entirely, which is the version skew that exposed it — a newer extension
+  // pre-filters and would have hidden the bug rather than prevented it.
+  test("groupBy honours query even when the browser ignored it", async () => {
+    const { call } = caller([zen], () => ({
+      tabs: [tab(1, "https://x.com/a"), tab(2, "https://x.com/b"), tab(3, "https://other.test/c")],
+    }));
+    const result = payload(await call("tabs_list", { query: "x.com", groupBy: "domain" }));
+    expect(result).toMatchObject({
+      groups: [{ domain: "x.com", tabs: 2, discarded: 0 }],
+      domains: 1,
+      matched: 2,
+    });
+  });
+
+  test("groupBy: domain answers with counts across every browser and no tabs", async () => {
+    const { call } = caller([zen, chrome], ({ connectionId }) =>
+      connectionId === "conn-1"
+        ? { tabs: [tab(1, "https://x.com/a"), tab(2, "https://www.x.com/b")] }
+        : { tabs: [tab(3, "https://x.com/c"), tab(4, "https://other.test/")] },
+    );
+    const result = payload(await call("tabs_list", { groupBy: "domain" }));
+    expect(result).toEqual({
+      browsers: [zen, chrome],
+      groups: [
+        { domain: "x.com", tabs: 3, discarded: 0 },
+        { domain: "other.test", tabs: 1, discarded: 0 },
+      ],
+      domains: 2,
+      matched: 4,
+    });
   });
 });
 
@@ -158,6 +318,46 @@ describe("tab-scoped tools", () => {
     const { call, sent } = caller([zen], () => ({ restored: 2 }));
     await call("undo_close", {});
     expect(sent[0]?.params).toEqual({});
+  });
+});
+
+describe("no-connection diagnosis", () => {
+  // The pair of facts that produced this: the browser's badge said connected on
+  // 20317 while every tool call here said nothing was attached.
+  test("names the rival sidecar and points at the token", async () => {
+    const { call } = caller([], () => ({}), { rivalHubs: async () => [4589] });
+    const result = await call("tabs_list", {});
+    expect(result.isError).toBe(true);
+    const { message } = payload(result) as { message: string };
+    expect(message).toContain("127.0.0.1:4589");
+    expect(message).toContain("TABGLUTTON_TOKEN");
+  });
+
+  test("stays quiet when this really is the only sidecar", async () => {
+    const { call } = caller([], () => ({}), { rivalHubs: async () => [] });
+    const { message } = payload(await call("tabs_list", {})) as { message: string };
+    expect(message).not.toContain("127.0.0.1");
+  });
+
+  // The diagnosis is a courtesy on a path that has already failed; it must never
+  // replace the real error with a failure of its own.
+  test("survives a probe that throws", async () => {
+    const { call } = caller([], () => ({}), {
+      rivalHubs: () => Promise.reject(new Error("loopback refused")),
+    });
+    const result = await call("tabs_list", {});
+    expect(payload(result)).toMatchObject({ error: "no-connection" });
+    expect((payload(result) as { message: string }).message).not.toContain("loopback refused");
+  });
+
+  test("leaves every other failure untouched", async () => {
+    const { call } = caller([zen], () => {
+      throw new BridgeRequestError("timeout", "tabs_list timed out.");
+    });
+    const probed = caller([zen], () => ({}), { rivalHubs: async () => [4589] });
+    expect(payload(await call("tabs_list", {}))).toMatchObject({ error: "timeout" });
+    // A healthy browser never consults the diagnosis at all.
+    expect(payload(await probed.call("tabs_list", {}))).not.toHaveProperty("error");
   });
 });
 
@@ -235,8 +435,12 @@ describe("tabs_list with a browser that fails", () => {
       tabs: Array<Record<string, unknown>>;
       failures: Array<Record<string, unknown>>;
     };
+    // Chrome is still a connected target even though its request failed, so the
+    // surviving tab needs an origin for the follow-up tab-scoped call. This tab
+    // also has no url — a malformed entry renders empty rather than throwing
+    // away the listing around it.
     expect(result.tabs).toEqual([
-      { id: 1, title: "kept", browser: zen.label, connectionId: zen.connectionId },
+      { id: 1, title: "kept", url: "", connectionId: zen.connectionId },
     ]);
     expect(result.failures).toEqual([
       {

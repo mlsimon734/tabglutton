@@ -82,6 +82,7 @@ export async function main(
       // A port we never bound is the more proximate problem, and fixing the
       // token would not make this process serve anything either way.
       startupError: () => backend.fault() ?? tokenError,
+      rivalHubs: () => backend.rivalHubs(),
     }),
   });
 
