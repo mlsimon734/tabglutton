@@ -66,11 +66,24 @@ describe("tool definitions", () => {
 });
 
 describe("tabs_list", () => {
-  const tab = (id: number, url: string, lastAccessed?: number): Record<string, unknown> => ({
+  const tab = (
+    id: number,
+    url: string,
+    lastAccessed?: number,
+    windowId = 1,
+  ): Record<string, unknown> => ({
     id,
     title: `tab ${id}`,
     url,
+    windowId,
+    index: id,
     ...(lastAccessed === undefined ? {} : { lastAccessed }),
+  });
+  /** A tab as it comes back out: index dropped, windowId hoisted, url trimmed. */
+  const shown = (id: number, url: string): Record<string, unknown> => ({
+    id,
+    title: `tab ${id}`,
+    url,
   });
 
   test("fans out over every browser and stamps origin only on a merged listing", async () => {
@@ -81,9 +94,11 @@ describe("tabs_list", () => {
     );
     expect(payload(await call("tabs_list", {}))).toEqual({
       browsers: [zen, chrome],
+      // No hoisted windowId: both browsers call their window 1, and claiming a
+      // single shared window across two browsers would be a lie.
       tabs: [
-        { ...tab(1, "https://a.test/"), connectionId: "conn-1" },
-        { ...tab(2, "https://b.test/"), connectionId: "conn-2" },
+        { ...shown(1, "https://a.test"), windowId: 1, connectionId: "conn-1" },
+        { ...shown(2, "https://b.test"), windowId: 1, connectionId: "conn-2" },
       ],
       matched: 2,
     });
@@ -91,12 +106,28 @@ describe("tabs_list", () => {
 
   test("leaves the origin off when only one browser is connected", async () => {
     const { call } = caller([zen], () => ({ tabs: [tab(1, "https://a.test/")] }));
-    // The constant used to be repeated once per tab; `browsers` already says it.
+    // The constants used to be repeated once per tab; `browsers` and the hoisted
+    // `windowId` already say both.
     expect(payload(await call("tabs_list", {}))).toEqual({
       browsers: [zen],
-      tabs: [tab(1, "https://a.test/")],
+      windowId: 1,
+      tabs: [shown(1, "https://a.test")],
       matched: 1,
     });
+  });
+
+  test("clips a long title but still matches a query against the full one", async () => {
+    const buried = `${"x".repeat(200)} needle`;
+    const { call } = caller([zen], () => ({
+      tabs: [{ ...tab(1, "https://a.test/"), title: buried }],
+    }));
+    const result = payload(await call("tabs_list", { query: "needle" })) as {
+      tabs: Array<{ title: string }>;
+      matched: number;
+    };
+    expect(result.matched).toBe(1);
+    expect(result.tabs[0]?.title).toEndWith("…");
+    expect(result.tabs[0]?.title).not.toContain("needle");
   });
 
   test("narrows to the named browser", async () => {
@@ -299,8 +330,9 @@ describe("tabs_list with a browser that fails", () => {
       failures: Array<Record<string, unknown>>;
     };
     // Only Zen answered, so it is the sole entry in `browsers` and the tab needs
-    // no per-tab origin stamped on it.
-    expect(result.tabs).toEqual([{ id: 1, title: "kept" }]);
+    // no per-tab origin stamped on it. This tab also has no url — a malformed
+    // entry renders empty rather than throwing away the listing around it.
+    expect(result.tabs).toEqual([{ id: 1, title: "kept", url: "" }]);
     expect(result.failures).toEqual([
       {
         connectionId: chrome.connectionId,

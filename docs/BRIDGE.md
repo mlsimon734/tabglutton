@@ -419,15 +419,23 @@ repeated once per tab (13%). `discarded`, `hidden`, `active`, and `pinned` were 
 while carrying eleven `true` values between them — `hidden` was `false` on all 874.
 
 **Deleting the boilerplate was not enough, and that is the point.** Reconstructing that
-listing from its reported per-field byte totals (304.4 KB, within 0.5% of the original)
-and applying the shape changes alone lands at **215 KB** — a 29% cut that is still far
+listing from its reported per-field byte totals (within 0.5% of the original) and applying
+the shape changes alone lands at **215 KB, 252 bytes a tab** — a 29% cut that is still far
 past the ceiling, so the call still fails and the agent still gets nothing. What makes it
-usable is narrowing: the default limit brings the same listing to **49 KB**, `query:
-"x.com"` to **43 KB**, and `groupBy: "domain"` to **0.4 KB**. So the hoisting and the
-omission are worth having, but they are a constant factor on something that scales with
-the user's backlog; only the filter changes the shape of the problem.
+usable is narrowing. Measured over the same 874 tabs:
 
-Four changes, in the order they matter:
+|                                                                 | whole backlog | per tab | at the default limit |
+| --------------------------------------------------------------- | ------------- | ------- | -------------------- |
+| original                                                        | 306 KB        | 363 B   | — (no limit existed) |
+| constants hoisted, false flags dropped                          | 215 KB        | 252 B   | 49 KB                |
+| `index` dropped, `windowId` hoisted, title clipped, URL trimmed | 158 KB        | 185 B   | **36 KB**            |
+| `groupBy: "domain"`                                             | **0.4 KB**    | —       | —                    |
+
+So the shape work is worth having — it halved the per-tab cost, and per-tab cost is what
+decides how many tabs fit under a given limit — but it is a constant factor on something
+that scales with the user's backlog. Only the filter changes the shape of the problem.
+
+Five changes, in the order they matter:
 
 1. **`query`, `limit`, `sort`.** The one that actually mattered: the session that produced
    the measurement wanted "the x.com tabs" and had to ask for all 874 to find them.
@@ -442,8 +450,27 @@ Four changes, in the order they matter:
    `mail.google.com` vs `docs.google.com` is the distinction triage wants anyway.
 3. **False and unknown fields are omitted**, not sent. Absent means false; absent
    `lastAccessed` means the browser reported none.
-4. **Constants are hoisted** out of the tabs and into the existing top-level `browsers`
-   array, per the stamping rule above.
+4. **Constants are hoisted** out of the tabs — `browser`/`connectionId` into the existing
+   top-level `browsers` array per the stamping rule above, and `windowId` to the top level
+   whenever every tab shares one window, which on a single-window Zen is all of them.
+   `index` is gone outright: it duplicated the array order under `sort: "window"`, meant
+   nothing under the others, and nothing consumed it — the undo log takes position from
+   the live `browser.tabs.Tab`, not from a listing.
+5. **Titles are clipped and URLs trimmed** (`src/tabs-view.ts`). Titles at
+   `TAB_TITLE_MAX` (120) with a trailing `…`; there is no gentler cap, because the mean
+   title in that backlog was ~104 characters, so anything tighter cuts into the body of
+   the distribution rather than its tail. What a clipped title loses is cheap — titles are
+   front-loaded and the tail is usually the site suffix (`" | GitHub"`) the URL already
+   gives you.
+
+   URLs are **not** clipped by default, because a URL cut mid-string stops being a URL:
+   it cannot be handed back to the user, and two distinct tabs can clip to the same prefix
+   and read as duplicates. They are trimmed structurally instead — `displayUrl` drops the
+   click-tracking params (sharing `isTrackingParam` with `normalizeUrl`, so there is one
+   list), the `www.`, and the trailing slash, which is where long URLs get long. It keeps
+   the scheme, so the result is still copyable, and keeps the fragment, which for an SPA
+   is the entire page identity. `TAB_URL_MAX` (200) is a backstop for data: URIs and
+   pathological paths, not the mechanism.
 
 Two things about `limit` are load-bearing. It **defaults** to `TABS_LIST_DEFAULT_LIMIT`
 (200) rather than being opt-in, because the failure it prevents is total — an unbounded
@@ -460,6 +487,26 @@ agent asked for. Running it a second time also means an older extension that ign
 Gullet asks the extension for the full filtered set and groups it there, since a limit
 applied before grouping would corrupt the counts — and the full list crossing loopback
 costs nothing, which is the whole point of where the budget actually is.
+
+**Selection and rendering are separate passes for a reason.** `renderTabs`
+(`src/tabs-view.ts`) runs _once_, in Gullet, at the very end — never in the extension,
+even though clipping there would shrink the socket frame. Gullet re-applies `query` over
+the merged results, and a query matching text that clipping had already removed would
+silently drop the exact tab the agent asked for. So every filter sees whole strings and
+only the bytes handed to the model are trimmed. This is the same trade as `groupBy`: the
+socket is loopback, and loopback bytes are not the budget anyone is spending.
+
+`renderTabs` also tolerates a tab missing `title` or `url` rather than throwing. The
+extension guarantees both, but a version-skewed one does not, and one malformed entry must
+not destroy a listing of eight hundred — the same reason `tabs_list` keeps a failing
+browser's partner.
+
+▸ **This may also settle the first-`tabs_list` timeout** in the open questions below.
+_Response size_ is one of the two live hypotheses for it, and a first call that used to
+serialise ~300 KB into one WebSocket frame now serialises ~36 KB. That is not a fix, and
+it is not evidence — but it does mean the symptom recurring at the new size would rule
+response size out and leave startup contention, which is the discriminating test that was
+otherwise awkward to run.
 
 **Restoring is exact where it can be and safe where it cannot.** A batch is recreated in
 ascending index order within each window; inserting a low index after a high one would

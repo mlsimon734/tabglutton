@@ -17,6 +17,7 @@ import {
   type BridgeMethod,
   type BridgeTab,
 } from "../../src/bridge-protocol.js";
+import { renderTabs, TAB_TITLE_MAX } from "../../src/tabs-view.js";
 import type { McpTool, McpToolResult } from "./mcp.js";
 import { selectAll, selectOne, type ConnectionSummary } from "./select.js";
 
@@ -73,7 +74,8 @@ export const GULLET_TOOLS: readonly McpTool[] = [
     name: "tabs_list",
     title: "List open tabs",
     description:
-      `List the user's open tabs with metadata only — id, title, url, lastAccessed, windowId, index, and the flags discarded, pinned, active and (Firefox/Zen) hidden. **Flags appear only when true**: no \`discarded\` key means the tab is loaded. \`discarded: true\` means the tab is unloaded and cannot be read until tabs_load wakes it; \`hidden: true\` on Zen usually means the tab lives in another Zen workspace.\n\n` +
+      `List the user's open tabs with metadata only — id, title, url, lastAccessed, and the flags discarded, pinned, active and (Firefox/Zen) hidden. **Flags appear only when true**: no \`discarded\` key means the tab is loaded. \`discarded: true\` means the tab is unloaded and cannot be read until tabs_load wakes it; \`hidden: true\` on Zen usually means the tab lives in another Zen workspace. \`windowId\` appears at the top level when every tab shares one window, and per tab otherwise.\n\n` +
+      `Titles longer than ${TAB_TITLE_MAX} characters are clipped with a trailing "…", and URLs are shortened (tracking parameters and \`www.\` dropped). \`query\` always matches against the **full** title and URL, so a term that was clipped away still finds its tab. Use tab_read for a tab's real content.\n\n` +
       `Backlogs are large, so this returns the ${TABS_LIST_DEFAULT_LIMIT} most recently accessed tabs by default and reports \`matched\` (how many the filter actually hit) plus \`truncated: true\` when there were more. Narrow with \`query\` rather than raising \`limit\` — a full listing of a thousand tabs will not fit in your context.\n\n` +
       `Start a triage run with \`groupBy: "domain"\`: it returns one row per domain with tab and discarded counts instead of any tabs, which is a few hundred bytes for the whole backlog and tells you what to pass as \`query\` next.`,
     inputSchema: {
@@ -343,11 +345,23 @@ async function tabsList(
   // back empty, and then there is nothing to disambiguate. connectionId rather
   // than the label, because labels are self-reported and two can share one.
   const contributors = perBrowser.filter((r) => r.tabs.length > 0).length;
+  // Rendering happens here and only here — after every filter has seen the whole
+  // strings. renderTabs preserves order one-for-one, which is what lets the
+  // origin lookup stay keyed on the tabs that went in.
+  const view = renderTabs(selected.tabs, { hoistWindow: contributors <= 1 });
   const tabs =
     contributors > 1
-      ? selected.tabs.map((tab) => ({ ...tab, connectionId: origin.get(tab)?.connectionId }))
-      : selected.tabs;
-  return { ...head, ...selected, tabs };
+      ? view.tabs.map((tab, i) => ({
+          ...tab,
+          connectionId: origin.get(selected.tabs[i] as BridgeTab)?.connectionId,
+        }))
+      : view.tabs;
+  return {
+    ...head,
+    ...(view.windowId === undefined ? {} : { windowId: view.windowId }),
+    ...selected,
+    tabs,
+  };
 }
 
 // Compact JSON, not pretty-printed: every one of these results goes into a

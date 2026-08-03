@@ -20,13 +20,19 @@ const TRACKING_PARAMS = new Set([
 
 const TRACKING_PREFIXES = ["utm_"];
 
-function shouldStripParam(key: string, extras: Set<string>): boolean {
+/**
+ * A query parameter that identifies the click, not the page. Exported because
+ * the bridge's listing view trims the same params for a different purpose — it
+ * needs a shorter *displayable* URL, where `normalizeUrl` produces a
+ * scheme-less dedup key — and one list of tracking params is enough.
+ */
+export function isTrackingParam(key: string): boolean {
   if (TRACKING_PARAMS.has(key)) return true;
-  if (extras.has(key)) return true;
-  for (const prefix of TRACKING_PREFIXES) {
-    if (key.startsWith(prefix)) return true;
-  }
-  return false;
+  return TRACKING_PREFIXES.some((prefix) => key.startsWith(prefix));
+}
+
+function shouldStripParam(key: string, extras: Set<string>): boolean {
+  return isTrackingParam(key) || extras.has(key);
 }
 
 export function normalizeUrl(rawUrl: string | undefined, opts: NormalizeOpts = {}): string | null {
