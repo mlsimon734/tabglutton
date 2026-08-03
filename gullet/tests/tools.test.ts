@@ -1,5 +1,6 @@
 import { describe, test, expect } from "bun:test";
 import { BridgeRequestError, type BridgeMethod } from "../../src/bridge-protocol.js";
+import type { ObsidianVaultLookup } from "../src/obsidian-vaults.js";
 import type { ConnectionSummary } from "../src/select.js";
 import { createToolCaller, GULLET_TOOLS, type ToolContext } from "../src/tools.js";
 import { chrome, zen } from "./fixtures.js";
@@ -284,6 +285,46 @@ describe("tab-scoped tools", () => {
     const result = await call("tabs_close", { browser: "chrome", tabIds: [1] });
     expect(sent[0]?.connectionId).toBe("conn-2");
     expect(payload(result)).toMatchObject({ browser: "Chrome", batchId: "b1" });
+  });
+
+  test("tab_clip forwards a vault Obsidian's registry knows", async () => {
+    const { call, sent } = caller([zen], () => ({ file: "Clippings/example.md" }), {
+      knownObsidianVaults: async () => ["Main Vault", "Work"],
+    });
+    expect((await call("tab_clip", { tabId: 7, vault: "Main Vault" })).isError).toBeUndefined();
+    expect(sent[0]).toMatchObject({
+      method: "tab_clip",
+      params: { tabId: 7, vault: "Main Vault" },
+    });
+  });
+
+  test("tab_clip rejects an absent vault and names only the registry's known vaults", async () => {
+    const { call, sent } = caller([zen], () => ({}), {
+      knownObsidianVaults: async () => ["Main Vault", "Work"],
+    });
+    const result = await call("tab_clip", { tabId: 7, vault: "Guessed" });
+    expect(result.isError).toBe(true);
+    expect(payload(result)).toEqual({
+      error: "bad-request",
+      message:
+        'Vault "Guessed" is not in Obsidian\'s local registry. Known vaults in that registry: "Main Vault", "Work". Use an exact name from Obsidian\'s vault switcher, or omit vault to use Tabglutton\'s configured destination.',
+    });
+    expect(sent).toEqual([]);
+  });
+
+  test("tab_clip forwards when the registry cannot be checked", async () => {
+    const lookups: (ObsidianVaultLookup | undefined)[] = [
+      undefined,
+      async () => null,
+      async () => Promise.reject(new Error("permission denied")),
+    ];
+    for (const knownObsidianVaults of lookups) {
+      const { call, sent } = caller([zen], () => ({ file: "Clippings/example.md" }), {
+        knownObsidianVaults,
+      });
+      expect((await call("tab_clip", { tabId: 7, vault: "Unverified" })).isError).toBeUndefined();
+      expect(sent).toHaveLength(1);
+    }
   });
 
   test("tabs_load routes like any tab-scoped tool", async () => {
