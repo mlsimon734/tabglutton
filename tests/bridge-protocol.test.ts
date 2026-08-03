@@ -41,7 +41,7 @@ describe("constants", () => {
     expect(DEFAULT_BRIDGE_PORT).toBe(4589);
     expect(BRIDGE_PORT_CANDIDATES).toEqual([4589, 20317, 17483, 27613, 24193]);
     expect(BRIDGE_PORT_CANDIDATES[0]).toBe(DEFAULT_BRIDGE_PORT);
-    expect(BRIDGE_PROTO).toBe(1);
+    expect(BRIDGE_PROTO).toBe(2);
   });
 });
 
@@ -57,7 +57,7 @@ describe("automatic bridge discovery", () => {
 
   test("requires the current protocol marker before a candidate is compatible", () => {
     expect(classifyBridgeProbe(String(BRIDGE_PROTO), "")).toBe("compatible");
-    expect(classifyBridgeProbe("2", BRIDGE_PROBE_BODY_PREFIX)).toBe("incompatible");
+    expect(classifyBridgeProbe("1", BRIDGE_PROBE_BODY_PREFIX)).toBe("incompatible");
     expect(classifyBridgeProbe(null, `${BRIDGE_PROBE_BODY_PREFIX}\nForbidden`)).toBe("compatible");
     expect(classifyBridgeProbe(null, "tabglutton-bridge\nlegacy")).toBe("incompatible");
     expect(classifyBridgeProbe(null, "some other service")).toBe("foreign");

@@ -86,7 +86,7 @@ export function displayUrl(raw: string): string {
   }
   if (url.protocol !== "http:" && url.protocol !== "https:") return clip(raw, TAB_URL_MAX);
 
-  const host = url.hostname.toLowerCase().replace(/^www\./, "");
+  const host = url.host.toLowerCase().replace(/^www\./, "");
   const path = url.pathname.length > 1 ? url.pathname.replace(/\/$/, "") : "";
   const kept = [...url.searchParams].filter(([key]) => !isTrackingParam(key));
   const search = kept.length

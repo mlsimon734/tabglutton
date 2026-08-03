@@ -86,7 +86,7 @@ describe("tabs_list", () => {
     url,
   });
 
-  test("fans out over every browser and stamps origin only on a merged listing", async () => {
+  test("fans out over every browser and stamps origin when multiple are targeted", async () => {
     const { call } = caller([zen, chrome], ({ connectionId }) =>
       connectionId === "conn-1"
         ? { tabs: [tab(1, "https://a.test/")] }
@@ -112,6 +112,18 @@ describe("tabs_list", () => {
       browsers: [zen],
       windowId: 1,
       tabs: [shown(1, "https://a.test")],
+      matched: 1,
+    });
+  });
+
+  test("keeps the origin when only one of two browsers has matches", async () => {
+    const { call } = caller([zen, chrome], ({ connectionId }) =>
+      connectionId === zen.connectionId ? { tabs: [tab(1, "https://a.test/")] } : { tabs: [] },
+    );
+    expect(payload(await call("tabs_list", {}))).toEqual({
+      browsers: [zen, chrome],
+      windowId: 1,
+      tabs: [{ ...shown(1, "https://a.test"), connectionId: zen.connectionId }],
       matched: 1,
     });
   });
@@ -423,10 +435,13 @@ describe("tabs_list with a browser that fails", () => {
       tabs: Array<Record<string, unknown>>;
       failures: Array<Record<string, unknown>>;
     };
-    // Only Zen answered, so it is the sole entry in `browsers` and the tab needs
-    // no per-tab origin stamped on it. This tab also has no url — a malformed
-    // entry renders empty rather than throwing away the listing around it.
-    expect(result.tabs).toEqual([{ id: 1, title: "kept", url: "" }]);
+    // Chrome is still a connected target even though its request failed, so the
+    // surviving tab needs an origin for the follow-up tab-scoped call. This tab
+    // also has no url — a malformed entry renders empty rather than throwing
+    // away the listing around it.
+    expect(result.tabs).toEqual([
+      { id: 1, title: "kept", url: "", connectionId: zen.connectionId },
+    ]);
     expect(result.failures).toEqual([
       {
         connectionId: chrome.connectionId,

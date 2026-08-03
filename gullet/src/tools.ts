@@ -1,4 +1,4 @@
-// The MCP tool surface (docs/BRIDGE.md "Tool surface (v1)") and its mapping onto
+// The MCP tool surface (docs/BRIDGE.md "Tool surface (v2)") and its mapping onto
 // bridge methods. Read + file + close, and nothing else: no navigation, no
 // clicking, no typing, no arbitrary script execution.
 
@@ -372,23 +372,23 @@ async function tabsList(
     return { ...head, ...groupTabsByDomain(filterTabs(merged, listParams), listParams.limit) };
   }
   const selected = selectTabs(merged, listParams);
-  // Ids only mean something inside one browser, so a listing that actually
-  // merged two has to say which one each tab belongs to. The test is how many
-  // browsers *contributed*, not how many were asked: one of two can fail or come
-  // back empty, and then there is nothing to disambiguate. connectionId rather
-  // than the label, because labels are self-reported and two can share one.
+  // Ids only mean something inside one browser, so every tab needs its origin
+  // whenever more than one browser was targeted. Even if only one browser
+  // returned matches, tab-scoped calls still refuse to guess between all the
+  // connected targets named above. connectionId rather than the label, because
+  // labels are self-reported and two can share one.
   const contributors = perBrowser.filter((r) => r.tabs.length > 0).length;
+  const needsOrigins = targets.length > 1;
   // Rendering happens here and only here — after every filter has seen the whole
   // strings. renderTabs preserves order one-for-one, which is what lets the
   // origin lookup stay keyed on the tabs that went in.
   const view = renderTabs(selected.tabs, { hoistWindow: contributors <= 1 });
-  const tabs =
-    contributors > 1
-      ? view.tabs.map((tab, i) => ({
-          ...tab,
-          connectionId: origin.get(selected.tabs[i] as BridgeTab)?.connectionId,
-        }))
-      : view.tabs;
+  const tabs = needsOrigins
+    ? view.tabs.map((tab, i) => ({
+        ...tab,
+        connectionId: origin.get(selected.tabs[i] as BridgeTab)?.connectionId,
+      }))
+    : view.tabs;
   // Per browser: its own `matched` when it filtered, otherwise what our filter
   // made of everything it sent. Mixing the two is normal — one browser can be
   // newer than the other — so this is resolved per connection and then summed,

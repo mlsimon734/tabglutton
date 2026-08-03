@@ -19,6 +19,11 @@ describe("displayUrl()", () => {
     expect(displayUrl("https://example.com/x")).toStartWith("https://");
   });
 
+  test("keeps a non-default port", () => {
+    expect(displayUrl("http://localhost:3000/app/")).toBe("http://localhost:3000/app");
+    expect(displayUrl("https://www.example.com:8443/path")).toBe("https://example.com:8443/path");
+  });
+
   // For an SPA the fragment is the whole page identity, so stripping it — which
   // normalizeUrl does by default, because it is building a dedup key — would
   // collapse every route of an app into one indistinguishable URL.

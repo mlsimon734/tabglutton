@@ -371,8 +371,8 @@ numbers are validated separately against the documented selection criteria.
 
 One JSON object per WebSocket frame (the frame is the delimiter), versioned:
 
-- Sidecar → extension on connect: `{ type: "challenge", proto: 1, server, nonce }`.
-- Extension → sidecar: `{ type: "hello", proto: 1, browser: "firefox" | "chrome",
+- Sidecar → extension on connect: `{ type: "challenge", proto: 2, server, nonce }`.
+- Extension → sidecar: `{ type: "hello", proto: 2, browser: "firefox" | "chrome",
 extVersion, label, nonce, proof }`.
 - Sidecar → extension: `{ type: "hello-ack", proto, connectionId, proof }`, or
   `{ type: "hello-error", error }`.
@@ -382,6 +382,12 @@ extVersion, label, nonce, proof }`.
   control frames. On Chrome this doubles as the MV3 service-worker keepalive (socket
   activity extends worker lifetime since Chrome 116, below our
   `minimum_chrome_version`) — control frames the browser answers itself would not.
+
+Protocol 2 is an intentional compatibility boundary. Protocol 1 predates both the default
+`tabs_list` limit and `tab_clip`'s `vault` override: an old Gullet would omit the limit and
+silently lose tabs when talking to a new extension, while an old extension would ignore the
+vault and file into the configured destination. The handshake rejects both mixed-version
+pairings instead of allowing either call to appear successful with the wrong result.
 
 ▸ **The token is not sent.** The sketch had the extension put its token in the hello and
 the sidecar echo it back, which proves nothing in the return direction. Instead each side
@@ -394,7 +400,7 @@ different token/nonce split.
 Shared request/response types live in `src/bridge-protocol.ts`, imported by both the
 extension and Gullet so the contract is typechecked from one definition.
 
-## Tool surface (v1)
+## Tool surface (v2)
 
 | MCP tool     | Backing APIs                                           | Notes                                                                                                                                                                                                                                                                                                        |
 | ------------ | ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -457,9 +463,9 @@ agent can state to the user.
 `tabs_list` with no `browser` argument fans out over every connected browser, so
 discovering what is connected costs no extra round trip. The tab-scoped tools refuse to
 guess between two browsers, because ids only mean something within one — and for the same
-reason a listing that actually merged two stamps `connectionId` on each tab. Only then —
-when one browser contributed every tab, the top-level `browsers` entry has already said
-so, and repeating it per tab is pure boilerplate.
+reason a listing targeting two stamps `connectionId` on each returned tab, even when only
+one browser matched. It is omitted only when one browser was targeted, because the
+top-level `browsers` entry already identifies every returned id then.
 
 ▸ **A listing is budgeted against a model's context, not against the socket.** The
 measurement that drove this, from a real 874-tab Zen: 306 KB of JSON in one tool result,

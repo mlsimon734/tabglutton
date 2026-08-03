@@ -11,7 +11,9 @@
 // about, rather than by a second, drifting copy of the same rules.
 import { vaultWarningFor } from "./vault-warning.js";
 
-export const BRIDGE_PROTO = 1;
+// Protocol 2 makes tabs_list's default limit and tab_clip's vault override
+// mandatory on both ends. Protocol 1 peers cannot safely ignore either field.
+export const BRIDGE_PROTO = 2;
 
 /**
  * Chosen by elimination rather than by liking the number (2026-07-29). Three
