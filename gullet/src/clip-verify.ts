@@ -215,6 +215,16 @@ export function createClipVerifier(
    * Process-local, and the reason it is not the primary defence: two Gullets
    * sharing one browser — a hub and a peer — each keep their own map. Attributing
    * by `source` needs no shared state and holds across processes.
+   *
+   * Known and accepted residual: two *processes* clipping the same URL at the
+   * same time, one handoff dropped, both accept the single note. Nothing on disk
+   * separates them — the URL matches and the maps are not shared — so closing
+   * that would take either a per-request marker written into the user's note or
+   * cross-session serialization of the whole handoff. What it costs is bounded
+   * and much smaller than the bug this file exists for: the note on disk holds
+   * that same page, clipped at that same moment, so the closed tab loses only
+   * whatever two tabs of one URL had extracted differently. A tab closed over
+   * *nothing* is the case that is now impossible.
    */
   const claimed = new Map<string, number>();
 
