@@ -312,6 +312,87 @@ describe("tab-scoped tools", () => {
     expect(sent).toEqual([]);
   });
 
+  // The extension cannot see whether Obsidian took the handoff, so a dropped
+  // clip used to read as success — and close: true would then close the tab
+  // over a note that was never written. See clip-verify.ts.
+  test("tab_clip reports a clip that never reached the vault, and leaves the tab open", async () => {
+    const { call, sent } = caller([zen], () => ({ file: "Clippings/Note", vault: "test" }), {
+      verifyClip: async () => "missing",
+    });
+    const result = await call("tab_clip", { tabId: 7, close: true });
+    expect(result.isError).toBe(true);
+    expect(payload(result)).toMatchObject({ error: "not-enabled" });
+    expect(JSON.stringify(payload(result))).toContain("never reached Obsidian");
+    // Exactly one call, and it did not ask the extension to close anything.
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatchObject({ method: "tab_clip", params: { tabId: 7, close: false } });
+  });
+
+  test("tab_clip closes only after the note is confirmed, via tabs_close", async () => {
+    const { call, sent } = caller(
+      [zen],
+      (s) =>
+        s.method === "tab_clip"
+          ? { file: "Clippings/Note", vault: "test" }
+          : { closed: 1, batchId: "b7" },
+      { verifyClip: async () => "landed" },
+    );
+    const result = await call("tab_clip", { tabId: 7, close: true });
+    expect(result.isError).toBeUndefined();
+    // The close is taken away from the extension and done here, after checking.
+    expect(sent.map((s) => s.method)).toEqual(["tab_clip", "tabs_close"]);
+    expect(sent[0]).toMatchObject({ params: { tabId: 7, close: false } });
+    expect(sent[1]).toMatchObject({ params: { tabIds: [7] } });
+    // batchId still comes from tabs_close, so undo_close reverses it as before.
+    expect(payload(result)).toMatchObject({ closed: true, batchId: "b7", clipVerified: true });
+  });
+
+  test("tab_clip never claims a close tabs_close did not confirm", async () => {
+    const { call } = caller(
+      [zen],
+      (s) =>
+        s.method === "tab_clip"
+          ? { file: "Clippings/Note", vault: "test" }
+          : { closed: 0, skipped: [7] },
+      { verifyClip: async () => "landed" },
+    );
+    const result = await call("tab_clip", { tabId: 7, close: true });
+    expect(payload(result)).toMatchObject({ closed: false });
+    expect(payload(result)).not.toHaveProperty("batchId");
+  });
+
+  test("tab_clip without close reports whether the note was verified", async () => {
+    const { call, sent } = caller([zen], () => ({ file: "Clippings/Note", vault: "test" }), {
+      verifyClip: async () => "landed",
+    });
+    expect(payload(await call("tab_clip", { tabId: 7 }))).toMatchObject({ clipVerified: true });
+    expect(sent.map((s) => s.method)).toEqual(["tab_clip"]);
+  });
+
+  // Same soft contract as the vault-override check: an unreadable registry must
+  // never turn a real clip into a reported failure.
+  test("tab_clip still closes when the vault cannot be checked", async () => {
+    const { call, sent } = caller(
+      [zen],
+      (s) =>
+        s.method === "tab_clip"
+          ? { file: "Clippings/Note", vault: "test" }
+          : { closed: 1, batchId: "b9" },
+      { verifyClip: async () => "unknown" },
+    );
+    const result = await call("tab_clip", { tabId: 7, close: true });
+    expect(result.isError).toBeUndefined();
+    expect(payload(result)).toMatchObject({ closed: true, batchId: "b9", clipVerified: false });
+    expect(sent.map((s) => s.method)).toEqual(["tab_clip", "tabs_close"]);
+  });
+
+  test("tab_clip leaves the extension to close when no verifier is configured", async () => {
+    const { call, sent } = caller([zen], () => ({ file: "Clippings/Note", vault: "test" }));
+    await call("tab_clip", { tabId: 7, close: true });
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatchObject({ method: "tab_clip", params: { tabId: 7, close: true } });
+  });
+
   test("tab_clip forwards when the registry cannot be checked", async () => {
     const lookups: (ObsidianVaultLookup | undefined)[] = [
       undefined,

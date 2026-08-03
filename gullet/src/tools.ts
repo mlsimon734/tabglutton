@@ -22,6 +22,7 @@ import {
 } from "../../src/bridge-protocol.js";
 import { renderTabs, TAB_TITLE_MAX } from "./tabs-view.js";
 import type { McpTool, McpToolResult } from "./mcp.js";
+import type { ClipVerifier } from "./clip-verify.js";
 import type { ObsidianVaultLookup } from "./obsidian-vaults.js";
 import { selectAll, selectOne, type ConnectionSummary } from "./select.js";
 
@@ -47,6 +48,13 @@ export interface ToolContext {
    * prove is wrong, but an absent lookup never changes one.
    */
   knownObsidianVaults?: ObsidianVaultLookup;
+  /**
+   * Confirm a clip reached the vault on disk. Optional: without it `tab_clip`
+   * keeps its old behaviour, including letting the extension perform the close.
+   * With it, a clip that cannot be found is reported as a failure and the tab is
+   * never closed over it.
+   */
+  verifyClip?: ClipVerifier;
   /**
    * Candidate ports held by another Tabglutton hub, asked only when there is no
    * browser to serve. Optional so tests and any future embedding can omit it —
@@ -192,7 +200,7 @@ export const GULLET_TOOLS: readonly McpTool[] = [
     name: "tab_clip",
     title: "File a tab into Obsidian",
     description:
-      "Save a tab into the user's Obsidian vault as a markdown note with frontmatter — exactly what the Tabglutton popup's Devour does, including per-site subfolders. Requires a vault configured in Tabglutton's settings. Set close: true to close the tab afterwards; that close is undoable via the returned batchId. Filing alone changes nothing in the browser — the tool is annotated destructive because close: true removes the tab. The result reports the vault it filed into.",
+      "Save a tab into the user's Obsidian vault as a markdown note with frontmatter — exactly what the Tabglutton popup's Devour does, including per-site subfolders. Requires a vault configured in Tabglutton's settings. Set close: true to close the tab afterwards; that close is undoable via the returned batchId. Filing alone changes nothing in the browser — the tool is annotated destructive because close: true removes the tab. The result reports the vault it filed into.\n\nThe note is confirmed on disk before anything is closed. `clipVerified: true` means it was found; a clip that never reached Obsidian is reported as an error and the tab is left open, so a failed handoff can never cost the user the tab. `clipVerified: false` means only that the vault could not be checked — the clip itself was still handed over.",
     inputSchema: {
       type: "object",
       properties: {
@@ -296,12 +304,77 @@ async function route(
 
   // Everything else is tab-scoped: ids only mean something inside one browser.
   const conn = selectOne(summaries, target);
-  const result = await ctx.request(conn.connectionId, name, params);
+  const result =
+    name === "tab_clip"
+      ? await clipAndVerify(ctx, conn.connectionId, params)
+      : await ctx.request(conn.connectionId, name, params);
   // A non-object result would otherwise spread into nothing and vanish.
   return {
     browser: conn.label,
     connectionId: conn.connectionId,
     ...(asRecord(result) ?? { result }),
+  };
+}
+
+/**
+ * Clip, then confirm the note exists before admitting anything happened.
+ *
+ * The extension cannot tell a completed `obsidian://` handoff from a silently
+ * refused one — see clip-verify.ts — so it reports the path it meant to write.
+ * That made a dropped clip look identical to a real one, and `close: true` would
+ * then close the tab over a note that was never saved.
+ *
+ * The close is therefore taken away from the extension and performed here, after
+ * verification: request the clip with `close: false`, check the vault, and only
+ * then close. `tabs_close` writes the undo batch exactly as it would have, so
+ * `batchId` keeps its meaning and `undo_close` still reverses it.
+ */
+async function clipAndVerify(
+  ctx: ToolContext,
+  connectionId: string,
+  params: Record<string, unknown>,
+): Promise<unknown> {
+  const wantsClose = params.close === true;
+  // Without a verifier there is nothing to add, and inventing a second round
+  // trip would only widen the window in which the tab could change.
+  if (!ctx.verifyClip) return ctx.request(connectionId, "tab_clip", params);
+
+  // Sampled before the clip so an already-filed note from an earlier run cannot
+  // vouch for this one.
+  const startedAt = Date.now();
+  const raw = await ctx.request(connectionId, "tab_clip", { ...params, close: false });
+  const result = asRecord(raw);
+  const vault = typeof result?.vault === "string" ? result.vault : "";
+  const file = typeof result?.file === "string" ? result.file : "";
+  if (!result || !vault || !file) return raw;
+
+  const verdict = await ctx.verifyClip(vault, file, startedAt);
+  if (verdict === "missing") {
+    throw new BridgeRequestError(
+      "not-enabled",
+      `The clip never reached Obsidian: no note at ${JSON.stringify(file)} in vault ` +
+        `${JSON.stringify(vault)}. The tab was left open. On Firefox this is usually the ` +
+        `browser silently dropping the obsidian:// handoff — ask the user to set ` +
+        `network.protocol-handler.external.obsidian to true and ` +
+        `network.protocol-handler.warn-external.obsidian to false in about:config, ` +
+        `and to confirm Obsidian's one-time "trust this source" prompt.`,
+    );
+  }
+
+  if (!wantsClose) return { ...result, clipVerified: verdict === "landed" };
+
+  const closed = asRecord(
+    await ctx.request(connectionId, "tabs_close", { tabIds: [params.tabId] }),
+  );
+  // `tabs_close` is the authority on whether the tab actually went, and on the
+  // undo batch that reverses it. Never report a close it did not confirm.
+  const didClose = closed?.closed === 1;
+  return {
+    ...result,
+    clipVerified: verdict === "landed",
+    closed: didClose,
+    ...(didClose && typeof closed?.batchId === "string" ? { batchId: closed.batchId } : {}),
+    ...(didClose ? {} : { closeSkipped: closed?.skipped ?? closed?.missing ?? true }),
   };
 }
 

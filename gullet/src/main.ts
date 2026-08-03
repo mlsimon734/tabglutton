@@ -5,7 +5,8 @@ import { errorMessage } from "../../src/bridge-protocol.js";
 import { Supervisor } from "./backend.js";
 import { ConfigError, loadConfig, USAGE } from "./config.js";
 import { serveStdio } from "./mcp.js";
-import { createObsidianVaultLookup } from "./obsidian-vaults.js";
+import { createClipVerifier } from "./clip-verify.js";
+import { createObsidianVaultLookup, createObsidianVaultPathLookup } from "./obsidian-vaults.js";
 import { createToolCaller, GULLET_INSTRUCTIONS, GULLET_TOOLS } from "./tools.js";
 
 /** Reported to the MCP client on initialize. Keep in step with gullet/package.json. */
@@ -62,6 +63,7 @@ export async function main(
   process.on("SIGTERM", shutdown);
 
   const knownObsidianVaults = createObsidianVaultLookup();
+  const verifyClip = createClipVerifier(createObsidianVaultPathLookup());
 
   await serveStdio({
     // What the agent sees, and what namespaces its tools. Users know this thing
@@ -78,6 +80,7 @@ export async function main(
       // token would not make this process serve anything either way.
       startupError: () => backend.fault(),
       knownObsidianVaults,
+      verifyClip,
       rivalHubs: () => backend.rivalHubs(),
     }),
   });
