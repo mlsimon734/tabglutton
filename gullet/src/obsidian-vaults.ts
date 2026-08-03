@@ -9,6 +9,9 @@ import { asRecord } from "../../src/bridge-protocol.js";
 /** Vault names exactly as `obsidian://new?vault=` accepts them, or null for "cannot check". */
 export type ObsidianVaultLookup = () => Promise<readonly string[] | null>;
 
+/** Vault name → absolute vault directory, or null for "cannot check". */
+export type ObsidianVaultPaths = () => Promise<ReadonlyMap<string, string> | null>;
+
 type Environment = Readonly<Record<string, string | undefined>>;
 
 /** The registry location used by a standard Obsidian install on this platform. */
@@ -42,6 +45,20 @@ export function parseObsidianVaultRegistry(
   raw: string,
   platform: NodeJS.Platform = process.platform,
 ): string[] | null {
+  const entries = parseObsidianVaultEntries(raw, platform);
+  return entries === null ? null : [...entries.keys()].sort((a, b) => a.localeCompare(b));
+}
+
+/**
+ * The same registry read, keeping each vault's directory so a clip can be
+ * confirmed on disk. Two vaults with the same basename are indistinguishable to
+ * `obsidian://new?vault=` as well, so collapsing them loses nothing the URL
+ * could have expressed.
+ */
+export function parseObsidianVaultEntries(
+  raw: string,
+  platform: NodeJS.Platform = process.platform,
+): Map<string, string> | null {
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
@@ -52,17 +69,22 @@ export function parseObsidianVaultRegistry(
   const entries = asRecord(asRecord(parsed)?.vaults);
   if (!entries) return null;
 
-  const names = new Set<string>();
+  const vaults = new Map<string, string>();
   for (const value of Object.values(entries)) {
     const entry = asRecord(value);
     if (!entry || typeof entry.path !== "string") return null;
+    // Trim only the copy the vault *name* is derived from. A trailing space is a
+    // legal directory name on macOS and Linux, so trimming the stored path would
+    // send the clip check to a directory next to the real vault and report a
+    // note that landed as missing.
+    const path = entry.path;
+    const trimmed = path.trim();
     // Use only the host platform's separator; the other is a legal filename character.
-    const basename =
-      platform === "win32" ? win32.basename(entry.path.trim()) : posix.basename(entry.path.trim());
+    const basename = platform === "win32" ? win32.basename(trimmed) : posix.basename(trimmed);
     if (!basename) return null;
-    names.add(basename);
+    vaults.set(basename, path);
   }
-  return names.size === 0 ? null : [...names].sort((a, b) => a.localeCompare(b));
+  return vaults.size === 0 ? null : vaults;
 }
 
 /**
@@ -74,7 +96,22 @@ export function parseObsidianVaultRegistry(
 export function createObsidianVaultLookup(
   path: string | null = obsidianRegistryPath(),
 ): ObsidianVaultLookup {
-  let cached: { signature: string; vaults: string[] | null } | undefined;
+  const entries = createObsidianVaultEntryLookup(path);
+  return async () => {
+    const vaults = await entries();
+    return vaults === null ? null : [...vaults.keys()].sort((a, b) => a.localeCompare(b));
+  };
+}
+
+/** Same cached read, exposing each vault's directory. See {@link createObsidianVaultLookup}. */
+export function createObsidianVaultPathLookup(
+  path: string | null = obsidianRegistryPath(),
+): ObsidianVaultPaths {
+  return createObsidianVaultEntryLookup(path);
+}
+
+function createObsidianVaultEntryLookup(path: string | null): ObsidianVaultPaths {
+  let cached: { signature: string; vaults: Map<string, string> | null } | undefined;
 
   return async () => {
     if (!path) return null;
@@ -84,7 +121,7 @@ export function createObsidianVaultLookup(
       const { mtimeMs, size } = await stat(path);
       const signature = `${mtimeMs}:${size}`;
       if (cached?.signature === signature) return cached.vaults;
-      const vaults = parseObsidianVaultRegistry(await readFile(path, "utf8"));
+      const vaults = parseObsidianVaultEntries(await readFile(path, "utf8"));
       cached = { signature, vaults };
       return vaults;
     } catch {
