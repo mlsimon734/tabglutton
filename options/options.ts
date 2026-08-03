@@ -43,6 +43,7 @@ const bridgeTokenGenerate = document.getElementById("bridgeTokenGenerate") as HT
 const bridgeStatusEl = document.getElementById("bridgeStatus") as HTMLSpanElement;
 const bridgeSnippet = document.getElementById("bridgeSnippet") as HTMLPreElement;
 const bridgeSnippetCopy = document.getElementById("bridgeSnippetCopy") as HTMLButtonElement;
+const bridgeLaunchCommand = document.getElementById("bridgeLaunchCommand") as HTMLElement;
 
 function parseParams(text: string): string[] {
   return text
@@ -294,7 +295,8 @@ function bridgeSnippetText(masked: boolean): string {
   return (
     'config_dir="${XDG_CONFIG_HOME:-$HOME/.config}/tabglutton"\n' +
     'mkdir -p "$config_dir" && chmod 700 "$config_dir" &&\n' +
-    `(umask 077; printf '%s\\n' ${shellQuote(token)} > "$config_dir/token")`
+    `(umask 077; printf '%s\\n' ${shellQuote(token)} > "$config_dir/token") && ` +
+    'chmod 600 "$config_dir/token"'
   );
 }
 
@@ -306,6 +308,10 @@ function shellQuote(value: string): string {
 function updateBridgeSnippet(): void {
   const code = bridgeSnippet.querySelector("code");
   if (code) code.textContent = bridgeSnippetText(!tokenRevealed());
+  bridgeLaunchCommand.textContent =
+    selectedBridgePortMode() === "fixed"
+      ? `bunx tabglutton-gullet --port ${parsePort(bridgePort.value)}`
+      : "bunx tabglutton-gullet";
 }
 
 const BRIDGE_STATUS_LABELS: Record<BridgeStatus, string> = {

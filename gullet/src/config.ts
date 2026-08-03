@@ -52,7 +52,7 @@ interface FileConfig {
   tokenCommand?: string;
 }
 
-interface TokenCommandResult {
+export interface TokenCommandResult {
   exitCode: number;
   stdout: string;
   stderr: string;
@@ -365,7 +365,7 @@ function defaultRuntime(): ConfigRuntime {
   };
 }
 
-async function runTokenCommand(
+export async function runTokenCommand(
   command: string,
   options: {
     cwd: string;
@@ -392,22 +392,30 @@ async function runTokenCommand(
   const stdout = new Response(subprocess.stdout).text();
   const stderr = new Response(subprocess.stderr).text();
   let timer: ReturnType<typeof setTimeout> | undefined;
+  const completed = Promise.all([subprocess.exited, stdout, stderr]).then(
+    ([exitCode, stdout, stderr]) => ({ exitCode, stdout, stderr, timedOut: false as const }),
+  );
   const outcome = await Promise.race([
-    subprocess.exited.then((exitCode) => ({ exitCode, timedOut: false })),
-    new Promise<{ exitCode: number; timedOut: true }>((resolve) => {
-      timer = setTimeout(() => resolve({ exitCode: -1, timedOut: true }), options.timeoutMs);
+    completed,
+    new Promise<{ timedOut: true }>((resolve) => {
+      timer = setTimeout(() => resolve({ timedOut: true }), options.timeoutMs);
     }),
   ]);
-  if (timer !== undefined) clearTimeout(timer);
-  if (outcome.timedOut) {
-    try {
-      process.kill(-subprocess.pid, "SIGKILL");
-    } catch {
-      subprocess.kill("SIGKILL");
-    }
-    await subprocess.exited;
+  if (!outcome.timedOut) {
+    if (timer !== undefined) clearTimeout(timer);
+    return outcome;
   }
-  return { ...outcome, stdout: await stdout, stderr: await stderr };
+
+  // The shell can exit while a background child keeps its output pipes open.
+  // The deadline therefore covers process exit *and* pipe drain; kill the
+  // detached process group so those inherited descriptors close as well.
+  try {
+    process.kill(-subprocess.pid, "SIGKILL");
+  } catch {
+    subprocess.kill("SIGKILL");
+  }
+  const drained = await completed;
+  return { ...drained, exitCode: -1, timedOut: true };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

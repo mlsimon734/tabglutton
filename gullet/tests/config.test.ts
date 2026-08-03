@@ -3,6 +3,7 @@ import {
   ConfigError,
   loadConfig,
   parseConfig,
+  runTokenCommand,
   TOKEN_COMMAND_TIMEOUT_MS,
   type ConfigRuntime,
 } from "../src/config.js";
@@ -270,4 +271,19 @@ describe("loadConfig()", () => {
       ),
     ).rejects.toThrow(/either "tokenFile" or "tokenCommand"/);
   });
+});
+
+describe("runTokenCommand()", () => {
+  test("keeps the deadline active while a background child holds the output pipes", async () => {
+    const started = performance.now();
+    const result = await runTokenCommand("sleep 30 & printf token", {
+      cwd: process.cwd(),
+      env: { PATH: Bun.env.PATH },
+      timeoutMs: 100,
+    });
+
+    expect(result.timedOut).toBeTrue();
+    expect(result.stdout).toBe("token");
+    expect(performance.now() - started).toBeLessThan(1_500);
+  }, 2_000);
 });
