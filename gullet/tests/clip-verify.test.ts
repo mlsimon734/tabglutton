@@ -35,6 +35,16 @@ describe("clipNotePath", () => {
 
 const SINCE = 1_000_000;
 
+/**
+ * A note as `markdownForClip` writes one. Hand-built rather than imported: that
+ * module's import graph reaches browser-typed code and this suite has no DOM.
+ * `tests/clip-source.test.ts` pins the two formats together from the side that
+ * owns the format.
+ */
+function clipNote(source: string): string {
+  return `---\ntitle: "A Post"\nsource: "${source}"\ntags:\n  - "clippings"\n---\nBody.`;
+}
+
 /** A vault whose Clippings folder holds `entries`, each with the given mtime. */
 function vaultWith(entries: Record<string, number>) {
   return {
@@ -193,6 +203,72 @@ describe("createClipVerifier", () => {
       verify("test", "Clippings/Note", SINCE),
     ]);
     expect([first, second].sort()).toEqual(["landed", "missing"]);
+  });
+
+  // And the note goes to the clip that actually wrote it, not to whichever
+  // verification looked first: the dropped one must be the one told "missing".
+  // Freshness cannot do this — both timestamps precede the single write — so the
+  // note's own recorded source is what decides.
+  test("the landed verdict follows the handoff that wrote the note", async () => {
+    const verify = createClipVerifier(vaults, {
+      ...fakeClock(),
+      ...vaultWith({ "Note.md": SINCE + 50 }),
+      readNote: async () => clipNote("https://b.example/post"),
+    });
+    // Clip A is dropped and looks first; clip B is the one Obsidian filed.
+    const [a, b] = await Promise.all([
+      verify("test", "Clippings/Note", SINCE, "https://a.example/post"),
+      verify("test", "Clippings/Note", SINCE, "https://b.example/post"),
+    ]);
+    expect(a).toBe("missing");
+    expect(b).toBe("landed");
+  });
+
+  // Two Gullets sharing a browser keep separate claim maps, so attribution has
+  // to hold with no shared state: a verifier that has never seen the other's
+  // request still refuses a note belonging to it.
+  test("a note recording another page never vouches for this clip", async () => {
+    const verify = createClipVerifier(vaults, {
+      ...fakeClock(),
+      ...vaultWith({ "Note.md": SINCE + 50 }),
+      readNote: async () => clipNote("https://elsewhere.example/post"),
+    });
+    expect(await verify("test", "Clippings/Note", SINCE, "https://mine.example/post")).toBe(
+      "missing",
+    );
+  });
+
+  // A scroll-to-text fragment addresses a position in a page, not a page, and
+  // clip-format.ts strips it before recording the source.
+  test("matches a source recorded without the tab's text fragment", async () => {
+    const verify = createClipVerifier(vaults, {
+      ...fakeClock(),
+      ...vaultWith({ "Note.md": SINCE + 50 }),
+      readNote: async () => clipNote("https://a.example/post"),
+    });
+    const url = "https://a.example/post#:~:text=selected%20words";
+    expect(await verify("test", "Clippings/Note", SINCE, url)).toBe("landed");
+  });
+
+  // Positive disagreement disqualifies; absence of evidence must not. A note
+  // with no readable frontmatter source falls back to freshness alone, so a
+  // format change here degrades to the old behaviour instead of failing clips.
+  test("a note with no recorded source still vouches on freshness", async () => {
+    const verify = createClipVerifier(vaults, {
+      ...fakeClock(),
+      ...vaultWith({ "Note.md": SINCE + 50 }),
+      readNote: async () => "just some text",
+    });
+    expect(await verify("test", "Clippings/Note", SINCE, "https://a.example/post")).toBe("landed");
+  });
+
+  test("unknown when a candidate note cannot be read", async () => {
+    const verify = createClipVerifier(vaults, {
+      ...fakeClock(),
+      ...vaultWith({ "Note.md": SINCE + 50 }),
+      readNote: async () => "unreadable",
+    });
+    expect(await verify("test", "Clippings/Note", SINCE, "https://a.example/post")).toBe("unknown");
   });
 
   // Both really landed: Obsidian sidesteps the collision, so there are two notes

@@ -356,7 +356,12 @@ async function clipAndVerify(
   const file = typeof result?.file === "string" ? result.file : "";
   if (!result || !vault || !file) return raw;
 
-  const verdict = await ctx.verifyClip(vault, file, startedAt);
+  // The clipped page's own URL, which the note records in its frontmatter. It is
+  // what tells this clip's note from a concurrent clip of a same-titled page —
+  // the one thing a timestamp cannot do. Absent, verification is freshness-only,
+  // as it was.
+  const sourceUrl = typeof result.url === "string" ? result.url : undefined;
+  const verdict = await ctx.verifyClip(vault, file, startedAt, sourceUrl);
   if (verdict === "missing") {
     throw new BridgeRequestError(
       "not-enabled",

@@ -12,7 +12,7 @@
 // Obsidian's registry to resolve vault names. Filesystem truth replaces the
 // browser's optimism.
 
-import { readdir, stat } from "node:fs/promises";
+import { readdir, readFile, stat } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import type { ObsidianVaultPaths } from "./obsidian-vaults.js";
 
@@ -31,8 +31,19 @@ export type ClipVerdict = "landed" | "missing" | "unknown";
  * re-clipping a page that was already filed would find the OLD note and call a
  * dropped handoff verified, which is exactly the case this check exists for. The
  * note must have been written since we asked.
+ *
+ * `sourceUrl` is the clipped tab's URL, as the extension reported it. Freshness
+ * alone cannot tell two concurrent clips apart — same title, same requested
+ * name, both timestamps before both writes — so a note whose own `source` names
+ * a different page never vouches for this clip. Optional: an embedder that
+ * cannot supply it gets freshness-only verification, as before.
  */
-export type ClipVerifier = (vault: string, file: string, since: number) => Promise<ClipVerdict>;
+export type ClipVerifier = (
+  vault: string,
+  file: string,
+  since: number,
+  sourceUrl?: string,
+) => Promise<ClipVerdict>;
 
 /** Obsidian writes asynchronously; give it a moment before calling it missing. */
 export const CLIP_VERIFY_TIMEOUT_MS = 4_000;
@@ -60,6 +71,8 @@ export interface ClipVerifierOptions {
   modifiedAt?: (path: string) => Promise<FileTime>;
   /** Names in a directory, or why they could not be read. Injected for tests. */
   readDir?: (dir: string) => Promise<DirListing>;
+  /** A note's text, null when absent, "unreadable" when it cannot be checked. */
+  readNote?: (path: string) => Promise<string | null | "unreadable">;
   sleep?: (ms: number) => Promise<void>;
   now?: () => number;
 }
@@ -82,6 +95,60 @@ async function defaultReadDir(dir: string): Promise<DirListing> {
   } catch (err) {
     return isNotFound(err) ? "missing" : "unreadable";
   }
+}
+
+async function defaultReadNote(path: string): Promise<string | null | "unreadable"> {
+  try {
+    return await readFile(path, "utf8");
+  } catch (err) {
+    return isNotFound(err) ? null : "unreadable";
+  }
+}
+
+/**
+ * The `source` property `markdownForClip` writes into every clip's frontmatter:
+ * a double-quoted scalar in the leading `---` block, in which `"` — and only `"`
+ * — is backslash-escaped. So the value runs to the *last* quote on the line, not
+ * to the first unescaped one: a URL ending in a backslash leaves the writer's
+ * output ambiguous, and reading it the strict way returned null for a note that
+ * was perfectly fine.
+ *
+ * Deliberately not shared with `clip-format.ts`: that module's import graph
+ * reaches browser-typed code, and Gullet's tsconfig has no DOM. The coupling is
+ * one line of output format, `tests/clip-source.test.ts` pins the two together,
+ * and drift degrades to "cannot attribute" rather than to a wrong answer — see
+ * `noteOwnership`.
+ */
+export function noteSourceUrl(content: string): string | null {
+  const frontmatter = /^---\r?\n([\s\S]*?)\r?\n---/.exec(content)?.[1];
+  if (frontmatter === undefined) return null;
+  const value = /^source:[ \t]*"(.*)"[ \t]*$/m.exec(frontmatter)?.[1];
+  return value === undefined ? null : value.replaceAll('\\"', '"');
+}
+
+/**
+ * Obsidian Web Clipper — and so `clip-format.ts` — drops a scroll-to-text
+ * fragment from the recorded source, because it addresses a position in the
+ * page rather than the page. Both sides are stripped so the comparison is
+ * against the same page identity the note recorded.
+ */
+function clipSourceIdentity(url: string): string {
+  return url.replace(/#:~:text=[^&]+(&|$)/, "");
+}
+
+/**
+ * Whether a note that is otherwise a candidate belongs to *this* clip.
+ *
+ * Only a `source` we could read and that names a different page is a refusal.
+ * A note with no parseable frontmatter source — a hand-written note sharing the
+ * name, a clip from an older format, a future format change here — falls back to
+ * freshness alone, which is what this check replaced. Positive disagreement
+ * disqualifies; absence of evidence never does.
+ */
+function noteOwnership(content: string, sourceUrl: string): "mine" | "other" {
+  const recorded = noteSourceUrl(content);
+  if (recorded === null) return "mine";
+  return clipSourceIdentity(recorded) === clipSourceIdentity(sourceUrl) ? "mine" : "other";
 }
 
 /**
@@ -132,30 +199,26 @@ export function createClipVerifier(
   const timeoutMs = options.timeoutMs ?? CLIP_VERIFY_TIMEOUT_MS;
   const modifiedAt = options.modifiedAt ?? defaultModifiedAt;
   const readDir = options.readDir ?? defaultReadDir;
+  const readNote = options.readNote ?? defaultReadNote;
   const sleep = options.sleep ?? ((ms: number) => Bun.sleep(ms));
   const now = options.now ?? (() => Date.now());
 
   /**
    * Notes already spent as proof, by absolute path and the mtime that was
-   * accepted.
+   * accepted. The second line of defence behind the `source` check, and the only
+   * one left when two clips of the *same* page race: a note vouches for exactly
+   * one clip, so a dropped handoff cannot ride on the one write that landed.
+   * Once claimed, only a newer write to the same path counts (Obsidian never
+   * overwrites, so a second real clip is a different path anyway; a newer mtime
+   * on the same path means the note was deleted and the page re-filed).
    *
-   * Two clips of pages with the same title produce the same requested name, and
-   * the second is written as "Note 1.md" — but only if it was written at all.
-   * With both requests in flight, both timestamps precede both writes, so if one
-   * handoff is dropped the single fresh note satisfies both verifications and
-   * `close: true` closes the tab whose content was never saved. A note can
-   * therefore vouch for exactly one clip: once claimed, only a *newer* write to
-   * the same path counts (Obsidian never overwrites, so a real second clip is a
-   * different path anyway; the same path with a newer mtime means the user
-   * deleted the note and re-filed it).
-   *
-   * Process-local. Two Gullets sharing one browser — a hub and a peer — each run
-   * their own verifier, so the same interleaving across two agent sessions is
-   * still possible; it needs the same page clipped from both within seconds.
+   * Process-local, and the reason it is not the primary defence: two Gullets
+   * sharing one browser — a hub and a peer — each keep their own map. Attributing
+   * by `source` needs no shared state and holds across processes.
    */
   const claimed = new Map<string, number>();
 
-  return async (vault, file, since) => {
+  return async (vault, file, since, sourceUrl) => {
     let paths: ReadonlyMap<string, string> | null;
     try {
       paths = await vaultPaths();
@@ -184,6 +247,16 @@ export function createClipVerifier(
         // A note we can see but cannot stat is the same "cannot check".
         if (mtime === "unreadable") return "unknown";
         if (mtime === null || mtime < fresh) continue;
+        // Fresh and correctly named is not yet proof this clip wrote it. A
+        // concurrent clip of a same-titled page asks for the same name, so ask
+        // the note which page it holds before letting it close a tab.
+        if (sourceUrl !== undefined) {
+          const content = await readNote(path);
+          if (content === "unreadable") return "unknown";
+          // Written between our listing and our read; it will be back next poll.
+          if (content === null) continue;
+          if (noteOwnership(content, sourceUrl) === "other") continue;
+        }
         const spentAt = claimed.get(path);
         if (spentAt !== undefined && mtime <= spentAt) continue;
         claimed.set(path, mtime);
