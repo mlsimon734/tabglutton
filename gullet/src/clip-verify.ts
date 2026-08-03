@@ -223,8 +223,12 @@ export function createClipVerifier(
    * cross-session serialization of the whole handoff. What it costs is bounded
    * and much smaller than the bug this file exists for: the note on disk holds
    * that same page, clipped at that same moment, so the closed tab loses only
-   * whatever two tabs of one URL had extracted differently. A tab closed over
-   * *nothing* is the case that is now impossible.
+   * whatever two tabs of one URL had extracted differently.
+   *
+   * So be precise about what a `landed` verdict is worth. It says a fresh note
+   * for this page exists — not that this exact extraction is what it holds. It
+   * is not a guarantee at all when the check cannot run: `unknown` is fail-open
+   * by design, and there the old behaviour stands, dropped handoffs included.
    */
   const claimed = new Map<string, number>();
 
