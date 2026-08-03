@@ -179,15 +179,15 @@ Several agent sessions can share one browser — the first process to bind the p
 the hub and later ones attach as peers and proxy through it, because nothing guarantees
 one sidecar per session (a single `codex` process was observed spawning two).
 
-Setup is a token from the extension's settings page and one `.mcp.json` block:
+Setup is a token from the extension's settings page, written once with its copyable setup
+command, and one MCP entry:
 
 ```json
 {
   "mcpServers": {
     "tabglutton": {
-      "command": "bun",
-      "args": ["run", "/path/to/tabglutton/gullet/gullet.ts"],
-      "env": { "TABGLUTTON_TOKEN": "<from the settings page>" }
+      "command": "bunx",
+      "args": ["tabglutton-gullet"]
     }
   }
 }

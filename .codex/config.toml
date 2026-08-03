@@ -1,15 +1,12 @@
 # Project-local Codex config. Applies to sessions started from this repo, the
 # same scoping .mcp.json gives Claude Code — no flag required.
 #
-# The token is NOT stored here. It is read at spawn time from the gitignored
-# .env, so this file carries no credential and is safe to commit.
+# The token is NOT stored here. Gullet resolves the global token file (or the
+# gitignored .env compatibility fallback), so this file is safe to commit.
 
 [mcp_servers.tabglutton]
-command = "bash"
-args = [
-  "-c",
-  "export TABGLUTTON_TOKEN=\"$(grep -m1 '^TABGLUTTON_TOKEN=' .env | cut -d= -f2-)\"; exec bun run ./gullet/gullet.ts",
-]
+command = "bun"
+args = ["run", "./gullet/gullet.ts"]
 startup_timeout_sec = 30
 # A first tool call can legitimately hold ~90s: up to 45s waiting for the
 # browser to dial in (BRIDGE_CONNECT_WAIT_MS) and up to 45s for the browser to

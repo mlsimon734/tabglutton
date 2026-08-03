@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test";
-import type { BridgeTab } from "../src/bridge-protocol.js";
+import type { BridgeTab } from "../../src/bridge-protocol.js";
 import { displayUrl, renderTabs, TAB_TITLE_MAX, TAB_URL_MAX } from "../src/tabs-view.js";
 
 function makeTab(fields: Partial<BridgeTab> & Pick<BridgeTab, "id" | "url">): BridgeTab {

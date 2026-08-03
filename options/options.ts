@@ -1,6 +1,12 @@
 import type { BridgeStatusChangedMessage, GetBridgeStatusResponse } from "../src/background.js";
 import type { BridgeStatus } from "../src/bridge-client.js";
-import { DEFAULT_BRIDGE_PORT, generateToken, isBridgePort } from "../src/bridge-protocol.js";
+import {
+  CONFIG_DIR_NAME,
+  DEFAULT_BRIDGE_PORT,
+  DEFAULT_TOKEN_FILE_NAME,
+  generateToken,
+  isBridgePort,
+} from "../src/bridge-protocol.js";
 import { BRIDGE_ORIGINS, requestOrigins } from "../src/permissions.js";
 import {
   loadSettings,
@@ -43,6 +49,7 @@ const bridgeTokenGenerate = document.getElementById("bridgeTokenGenerate") as HT
 const bridgeStatusEl = document.getElementById("bridgeStatus") as HTMLSpanElement;
 const bridgeSnippet = document.getElementById("bridgeSnippet") as HTMLPreElement;
 const bridgeSnippetCopy = document.getElementById("bridgeSnippetCopy") as HTMLButtonElement;
+const bridgeLaunchCommand = document.getElementById("bridgeLaunchCommand") as HTMLElement;
 
 function parseParams(text: string): string[] {
   return text
@@ -266,7 +273,12 @@ bridgeTokenCopy.addEventListener("click", () => {
 });
 
 bridgeSnippetCopy.addEventListener("click", () => {
-  void copyText(bridgeSnippetText(false), "Config copied");
+  const command = bridgeSnippetText(false);
+  if (command === null) {
+    flashStatus("No token yet");
+    return;
+  }
+  void copyText(command, "Setup command copied");
 });
 
 async function copyText(text: string, okMessage: string): Promise<void> {
@@ -280,38 +292,43 @@ async function copyText(text: string, okMessage: string): Promise<void> {
 }
 
 /**
+ * Null when there is no token yet — one notion of "nothing to install", shared
+ * by the rendered snippet and the copy button. Rendering a runnable command
+ * around a placeholder invited someone to select the `<pre>` by hand and write
+ * that placeholder into the token file, which the button's guard never covered.
+ *
  * @param masked render the token as dots rather than the secret itself. The
- * displayed snippet is masked unless the eye is open; "Copy config" always
- * passes `false`, so the clipboard gets a config that actually works.
+ * displayed snippet is masked unless the eye is open; "Copy setup command"
+ * always passes `false`, so the clipboard gets a command that actually works.
  */
-function bridgeSnippetText(masked: boolean): string {
-  const port = parsePort(bridgePort.value);
-  const real = bridgeToken.value || "<generate or paste a token above>";
-  const token = masked && bridgeToken.value ? "•".repeat(24) : real;
-  // Named "tabglutton" rather than "gullet": this key becomes the tool
-  // namespace the agent sees, and users know the product by one name.
-  return JSON.stringify(
-    {
-      mcpServers: {
-        tabglutton: {
-          command: "bun",
-          args: [
-            "run",
-            "/path/to/tabglutton/gullet/gullet.ts",
-            ...(selectedBridgePortMode() === "fixed" ? ["--port", String(port)] : []),
-          ],
-          env: { TABGLUTTON_TOKEN: token },
-        },
-      },
-    },
-    null,
-    2,
+function bridgeSnippetText(masked: boolean): string | null {
+  if (!bridgeToken.value) return null;
+  const token = masked ? "•".repeat(24) : bridgeToken.value;
+  const tokenPath = `"$config_dir/${DEFAULT_TOKEN_FILE_NAME}"`;
+  return (
+    `config_dir="\${XDG_CONFIG_HOME:-$HOME/.config}/${CONFIG_DIR_NAME}"\n` +
+    'mkdir -p "$config_dir" && chmod 700 "$config_dir" &&\n' +
+    `(umask 077; printf '%s\\n' ${shellQuote(token)} > ${tokenPath}) && ` +
+    `chmod 600 ${tokenPath}`
   );
 }
 
+/** Single-quote arbitrary pasted tokens without giving the shell code to run. */
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", `'"'"'`)}'`;
+}
+
+const GULLET_LAUNCH_COMMAND = "bunx tabglutton-gullet";
+
 function updateBridgeSnippet(): void {
   const code = bridgeSnippet.querySelector("code");
-  if (code) code.textContent = bridgeSnippetText(!tokenRevealed());
+  if (code) {
+    code.textContent =
+      bridgeSnippetText(!tokenRevealed()) ??
+      "Generate or paste a token above to get the setup command.";
+  }
+  const port = selectedBridgePortMode() === "fixed" ? ` --port ${parsePort(bridgePort.value)}` : "";
+  bridgeLaunchCommand.textContent = `${GULLET_LAUNCH_COMMAND}${port}`;
 }
 
 const BRIDGE_STATUS_LABELS: Record<BridgeStatus, string> = {

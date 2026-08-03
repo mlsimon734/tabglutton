@@ -1,9 +1,9 @@
 // Wires the two halves together: MCP on stdio facing the agent, WebSocket hub
 // on loopback facing the browsers.
 
-import { errorMessage, type BridgeError } from "../../src/bridge-protocol.js";
+import { errorMessage } from "../../src/bridge-protocol.js";
 import { Supervisor } from "./backend.js";
-import { ConfigError, parseConfig, USAGE } from "./config.js";
+import { ConfigError, loadConfig, USAGE } from "./config.js";
 import { serveStdio } from "./mcp.js";
 import { createObsidianVaultLookup } from "./obsidian-vaults.js";
 import { createToolCaller, GULLET_INSTRUCTIONS, GULLET_TOOLS } from "./tools.js";
@@ -22,7 +22,7 @@ export async function main(
 
   let config;
   try {
-    config = parseConfig(argv, env);
+    config = await loadConfig(argv, env);
   } catch (err) {
     console.error(err instanceof ConfigError ? err.message : String(err));
     return 1;
@@ -35,6 +35,7 @@ export async function main(
   const backend = new Supervisor({
     ...(config.portMode === "fixed" ? { port: config.port } : {}),
     token: config.token,
+    resolveToken: config.resolveToken,
   });
 
   // Losing the port is no longer a failure. Whoever binds it serves the browser
@@ -51,15 +52,6 @@ export async function main(
     // that never settles would hang `initialize` itself, and a client reports
     // that as "connection closed" with nothing else to go on.
     console.error(`[gullet] ${errorMessage(err)}`);
-  }
-
-  let tokenError: BridgeError | null = null;
-  if (!config.token) {
-    const message =
-      "Tabglutton's bridge has no token. Open Tabglutton's settings, enable the agent bridge, " +
-      "generate a token, and set TABGLUTTON_TOKEN to it.";
-    console.error(`[gullet] ${message}`);
-    tokenError = { code: "unauthorized", message };
   }
 
   const shutdown = (): void => {
@@ -84,7 +76,7 @@ export async function main(
       request: (connectionId, method, params) => backend.request(connectionId, method, params),
       // A port we never bound is the more proximate problem, and fixing the
       // token would not make this process serve anything either way.
-      startupError: () => backend.fault() ?? tokenError,
+      startupError: () => backend.fault(),
       knownObsidianVaults,
       rivalHubs: () => backend.rivalHubs(),
     }),

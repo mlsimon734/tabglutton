@@ -5,15 +5,16 @@ way to a coding agent. One side is an **MCP server over stdio**, spawned by what
 harness you use; the other is a **WebSocket server on loopback** that browsers running
 Tabglutton dial into.
 
-Architecture, trust boundary, and phasing live in [`../docs/BRIDGE.md`](../docs/BRIDGE.md). This file
-is the setup guide.
+Architecture, trust boundary, and phasing live in
+[`docs/BRIDGE.md`](https://github.com/mlsimon734/tabglutton/blob/main/docs/BRIDGE.md).
+This file is the setup guide.
 
 ```
 Claude Code ──MCP (stdio)──► Gullet ──WebSocket (automatic loopback port)──► browsers
 ```
 
-Zero dependencies: it runs on Bun's built-ins alone, so there is nothing to install beyond
-having the repo checked out.
+Zero dependencies: it runs on Bun's built-ins alone. Install Bun, then let your MCP client
+launch the published package with `bunx tabglutton-gullet`; no checkout is required.
 
 **Two names, one product.** "Gullet" is the internal name for this sidecar; everything a
 user or an agent sees says **Tabglutton**. So the MCP server registers as `tabglutton`, the
@@ -26,29 +27,49 @@ tools appear under that namespace, and the token is `TABGLUTTON_TOKEN`. `GULLET_
    then **Generate** a token and copy it. The bridge is off until you do this, and no
    socket is opened while it is off.
 
-2. **Register Gullet with your agent.** The settings page renders a ready-made config with
-   your token filled in — _Copy config_ and paste it into `.mcp.json` (or
-   `~/.claude.json`), replacing the placeholder path with wherever you cloned this repo:
+2. **Write the global token file.** The settings page renders a shell command with your
+   token filled in. _Copy setup command_ and run it once. It creates the directory privately
+   and writes the secret to `~/.config/tabglutton/token` with mode `0600` (under
+   `$XDG_CONFIG_HOME` instead when set). The token does not go into an MCP config.
+
+3. **Register Gullet with your agent.** Pick the shape your client accepts.
+
+   Claude Code, for every project:
+
+   ```sh
+   claude mcp add --scope user tabglutton -- bunx tabglutton-gullet
+   ```
+
+   Codex CLI and Codex desktop, in `~/.codex/config.toml`:
+
+   ```toml
+   [mcp_servers.tabglutton]
+   command = "bunx"
+   args = ["tabglutton-gullet"]
+   startup_timeout_sec = 30
+   tool_timeout_sec = 120
+   ```
+
+   Claude Desktop/Cowork and clients that accept the standard JSON shape:
 
    ```json
    {
      "mcpServers": {
-       "tabglutton": {
-         "command": "bun",
-         "args": ["run", "/path/to/tabglutton/gullet/gullet.ts"],
-         "env": { "TABGLUTTON_TOKEN": "<token from the settings page>" }
-       }
+       "tabglutton": { "command": "bunx", "args": ["tabglutton-gullet"] }
      }
    }
    ```
 
-   For Claude Code specifically:
+   `npx -y tabglutton-gullet` is also supported when a client already standardizes on
+   `npx`; the package still requires Bun because its executable uses Bun's runtime.
+
+   To run an unpublished checkout while developing, replace the command with:
 
    ```sh
-   claude mcp add tabglutton --env TABGLUTTON_TOKEN=<token> -- bun run /path/to/tabglutton/gullet/gullet.ts
+   bun run /path/to/tabglutton/gullet/gullet.ts
    ```
 
-3. **Start a session.** The agent spawns Gullet, Gullet elects an approved port, and the
+4. **Start a session.** The agent spawns Gullet, Gullet elects an approved port, and the
    extension's reconnect loop finds it — typically within a few seconds (it rotates probes
    every 3s while the browser's extension page is awake), worst case ~30 seconds (the alarm
    cadence, when the page had suspended). The toolbar badge shows a terracotta dot while the
@@ -61,10 +82,44 @@ once — a Zen window and a Chrome profile, say — and each tool call picks one
 
 ## Configuration
 
-| Flag      | Env                | Default   | Notes                                                                              |
-| --------- | ------------------ | --------- | ---------------------------------------------------------------------------------- |
-| `--port`  | `TABGLUTTON_PORT`  | automatic | Use `auto` or omit it; a number pins one port and must match fixed browser mode.   |
-| `--token` | `TABGLUTTON_TOKEN` | —         | Required. Prefer the env var: process arguments are readable by other local users. |
+Gullet reads settings from `${XDG_CONFIG_HOME:-$HOME/.config}/tabglutton/config.json`.
+The file is safe to keep in a dotfiles repository because Gullet rejects an inline
+`"token"` key; it may contain only settings and a pointer to the secret.
+
+```jsonc
+{
+  "port": "auto",
+  "tokenFile": "token",
+}
+```
+
+`tokenFile` defaults to `${XDG_CONFIG_HOME:-$HOME/.config}/tabglutton/token`. Relative
+paths are resolved from the directory containing `config.json`. To read from a secret
+manager instead, use `tokenCommand` in place of `tokenFile`:
+
+```jsonc
+{
+  "port": "auto",
+  "tokenCommand": "op read op://Private/Tabglutton/token",
+}
+```
+
+The command runs through `sh` from the config directory and its trimmed stdout is the
+token. Gullet bounds each attempt at five seconds. A timeout or nonzero exit is reported
+to the MCP client with stderr attached while the process keeps retrying with backoff;
+unlocking the secret manager heals the same MCP session.
+
+Resolution is additive, so existing setups keep working. The first configured token wins:
+
+```text
+--token -> TABGLUTTON_TOKEN / GULLET_TOKEN -> ./.env
+        -> tokenCommand -> tokenFile -> the default global token file
+```
+
+Port selection uses `--port`, then `TABGLUTTON_PORT` / `GULLET_PORT`, then the global
+config, then automatic discovery. A fixed number must match the browser's fixed-port
+setting. Process arguments are visible to other local users, so `--token` is best kept for
+temporary diagnosis; prefer the global file, a secret-manager command, or the environment.
 
 Automatic mode uses the ordered candidate set shared with the extension: `4589`, `20317`,
 `17483`, `27613`, and `24193`. It discovers an existing same-token hub before binding, so
@@ -85,7 +140,9 @@ Diagnostics go to **stderr**; stdout is the MCP transport and carries nothing el
 
 Deliberately absent: navigate, click, type, evaluate. The agent can read what you already
 chose to open, file it, and clean up — it cannot act as you. Adding anything richer means
-revisiting the prompt-injection posture in `../docs/BRIDGE.md` first.
+revisiting the prompt-injection posture in
+[`docs/BRIDGE.md`](https://github.com/mlsimon734/tabglutton/blob/main/docs/BRIDGE.md)
+first.
 
 `tabs_load` is the one tool that acts on a page rather than observing it, so it has its own
 switch — **Agent bridge → "Let agents load unloaded tabs"** in Tabglutton's settings — and
@@ -164,7 +221,7 @@ pass that number with `--port`.
 by hand to watch it:
 
 ```sh
-TABGLUTTON_TOKEN=<token> bun run gullet/gullet.ts
+TABGLUTTON_TOKEN=<token> bunx tabglutton-gullet
 ```
 
 Then poke the selected socket directly (stderr prints the chosen port; `4589` is shown here):
@@ -184,5 +241,6 @@ bun run typecheck:gullet   # from the repo root
 bun test                   # protocol, config, selection, MCP, and a live-socket hub test
 ```
 
-The wire contract lives in [`../src/bridge-protocol.ts`](../src/bridge-protocol.ts) and is
-imported by both halves, so extension and sidecar are typechecked against one definition.
+The wire contract lives in
+[`src/bridge-protocol.ts`](https://github.com/mlsimon734/tabglutton/blob/main/src/bridge-protocol.ts)
+and is imported by both halves, so extension and sidecar are typechecked against one definition.
