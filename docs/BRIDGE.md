@@ -145,44 +145,32 @@ The implementation is an **automatic candidate mode**, not an arbitrary port sca
 contiguous numeric range. The fixed-port path remains for debugging, policy, and deliberate
 isolation.
 
-### User and configuration contract
+### Configuration contract
 
-- The options page offers **Automatic (recommended)** and **Fixed port**. Automatic is the
-  default for new installs; the numeric input is shown only for the fixed mode.
-- Extension storage keeps the concerns separate:
-  - `bridgePortMode: "auto" | "fixed"` is the user's setting.
-  - `bridgePort` is authoritative only in fixed mode.
-  - `bridgeLastPort` is a separate, non-setting `storage.local` cache of the last
-    authenticated automatic endpoint. It is excluded from settings change handling, may
-    improve ordering, and must never narrow the candidate set or become configuration.
-- Gullet mirrors that contract. No `--port` flag and no `TABGLUTTON_PORT` means automatic
-  mode. A numeric `--port` or environment value pins exactly that port. `--port auto` may be
-  accepted for explicitness, but generated snippets should simply omit the flag.
-- Existing numeric MCP configurations stay fixed: Gullet cannot tell whether an explicit
-  `--port 4588` was once copied as a default or deliberately chosen. Entering automatic mode
-  requires removing that flag or environment value. The options page's automatic-mode
-  snippet must not put it back.
-- The token remains the bridge realm. Browsers and sidecars with the same token converge on
-  one hub and can be selected by `browser` / `connectionId`; a different token may establish
-  a separate hub on another candidate without gaining access to the first.
+- The options page offers **Automatic (recommended)** and **Fixed port**; the numeric input
+  belongs to fixed mode only. Extension storage keeps `bridgePortMode` (the user's setting)
+  apart from `bridgePort` (authoritative only in fixed mode) and from `bridgeLastPort` — a
+  non-setting `storage.local` cache of the last authenticated automatic endpoint, excluded
+  from settings change handling, which may improve ordering but must never narrow the
+  candidate set or become configuration.
+- Gullet mirrors it: no `--port` and no `TABGLUTTON_PORT` means automatic mode, a numeric
+  value pins exactly that port, and `--port auto` is accepted for explicitness though
+  generated snippets simply omit the flag.
+- **Existing numeric MCP configurations stay fixed.** Gullet cannot tell whether an explicit
+  `--port 4588` was copied from a shipped default or deliberately chosen, so entering
+  automatic mode means removing the flag or environment value — and the options page's
+  automatic-mode snippet must not put it back.
+- The token is the bridge realm. Same-token browsers and sidecars converge on one hub and are
+  selected by `browser` / `connectionId`; a different token may hold another candidate
+  without gaining access to the first.
 
-### Settings migration
-
-The extension _can_ distinguish historical defaults from likely custom choices, so its
-one-time migration is:
-
-1. If `bridgePortMode` already exists, preserve it.
-2. If it is absent and `bridgePort` is a known historical default (`4588` or `4589`), persist
-   automatic mode.
-3. If it is absent and `bridgePort` is any other valid value, persist fixed mode with that
-   value unchanged.
-4. Preserve the token, enablement, and load permission exactly; changing discovery mode is
-   not token rotation.
-
-This intentionally treats someone who manually chose a number that was also a shipped
-default as automatic. There is no evidence in the old schema that can recover that intent,
-and retaining the stale-default failure for every existing install would defeat the
-migration. Fixed mode remains one click away.
+The extension's one-time settings migration (`storage.ts`, pinned in `tests/storage.test.ts`)
+reads an absent `bridgePortMode` as automatic when `bridgePort` is a historical default
+(`4588` or `4589`) and as fixed at that value otherwise, preserving the token, enablement, and
+load permission — changing discovery mode is not token rotation. It therefore treats someone
+who manually chose a number that was also a shipped default as automatic. There is no evidence
+in the old schema that can recover that intent, and retaining the stale-default failure for
+every existing install would defeat the migration. Fixed mode remains one click away.
 
 ### Candidate-set contract
 
@@ -246,30 +234,26 @@ automatic ports neither require nor imply a daemon.
 
 ### Extension discovery across candidates
 
-Fixed mode keeps today's single-port behaviour. Automatic mode follows these rules:
-
-1. Order the scan with `bridgeLastPort` first when it is still a candidate, followed by the
-   remaining canonical candidates without duplication.
-2. On startup, an explicit settings sync, an alarm wake, or an `IDLE_PROBE_MS` tick, probe
-   one candidate and advance the in-memory cursor. While the background page remains awake,
-   this completes a full five-port rotation in about 15 seconds. One trigger never becomes
-   N probes or N blind WebSocket dials.
-3. A probe is positive only when the response carries Gullet's marker with a supported
-   protocol. Foreign listeners are skipped. A marked endpoint gets a WebSocket handshake;
-   token mismatch or protocol rejection advances to the next marked candidate rather than
-   latching a global conflict.
-4. Cache a candidate only after mutual token proof reaches `hello-ack`. Clear or replace the
-   cache after a successful connection elsewhere; a cached silent/foreign endpoint is merely
-   tried first and never blocks fallback.
-5. Keep at most one WebSocket dial in flight. The first authenticated connection wins the
-   pass and cancels the remaining probe work.
+Fixed mode keeps today's single-port behaviour. In automatic mode the extension orders the
+scan with `bridgeLastPort` first when it is still a candidate, then the remaining canonical
+candidates without duplication, and each trigger — startup, an explicit settings sync, an
+alarm wake, an `IDLE_PROBE_MS` tick — probes **one** candidate and advances an in-memory
+cursor. A full five-port rotation therefore takes about 15 seconds while the page is awake,
+and one trigger never becomes N probes or N blind dials. A probe is positive only when the
+response carries Gullet's marker with a supported protocol: foreign listeners are skipped, and
+a marked endpoint that then fails the token or protocol check advances to the next marked
+candidate rather than latching a global conflict. Only mutual proof reaching `hello-ack`
+caches a candidate — a cached silent or foreign endpoint is merely tried first and never
+blocks fallback — at most one dial is in flight, and the first authenticated connection wins
+the pass and cancels the remaining probe work.
 
 The HTTP probe remains a safety device, not an absolute gate. A future browser rule could
 block loopback `fetch` while still allowing WebSockets, so the current blind-dial escape
 valve survives with a strict bound: after the same instance-only counted misses, an eligible
 non-idle tick may blind-dial **one** candidate, rotating from the last-known/default choice.
 The 3s idle loop never increments that counter, and one tick never bursts across the set.
-Automatic discovery must not turn one Gecko `FailDelayManager` input into N.
+Automatic discovery must not turn one Gecko `FailDelayManager` input into N — which is also
+why that counter dies with the page rather than persisting; see Open questions.
 
 An unmarked legacy Gullet is indistinguishable from another generic local HTTP service and
 is therefore foreign. Automatic mode does not weaken the marker check for compatibility;
@@ -336,36 +320,20 @@ without native messaging or another fixed bootstrap service.
   tears it down and starts a fresh full discovery pass; a candidate change alone is not
   revocation.
 
-### Acceptance and test matrix
+### Verification
 
-The feature is not complete until all of these discriminate against the old implementation:
+Candidate ordering, migration, election, and probe classification are unit-tested behind
+injectable probes and candidate arrays; socket tests bind ephemeral ports, so nothing depends
+on the production numbers being free, and those numbers are validated separately against the
+selection criteria above.
 
-- **Historical split:** an unmarked legacy listener occupies 4588, current Gullet serves
-  4589, and an extension migrated from stored 4588 automatically connects to 4589.
-- **Many browsers:** Zen and Chrome with one token connect to the same auto-selected hub;
-  `tabs_list` returns both and a tab-scoped call without `browser` is ambiguous.
-- **Many sessions:** two same-token Gullet processes launched concurrently produce one hub
-  and one peer, including when the first production candidate is foreign.
-- **No late compaction split:** a same-token hub on a later candidate is joined even after an
-  earlier candidate becomes free.
-- **Separate realms:** two tokens can occupy different candidates; each browser and MCP
-  client sees only its matching realm.
-- **Failover:** killing the hub makes peers re-elect on an available candidate and extensions
-  rediscover it without settings changes.
-- **Probe discipline:** markerless foreign services receive HTTP only; normal automatic
-  discovery makes no blind WebSocket attempts; the blocked-fetch escape valve makes at most
-  one per eligible tick and keeps its counter instance-only.
-- **Migration:** historical defaults become automatic, custom values remain fixed, and an
-  explicit CLI/env port remains fixed.
-- **Exhaustion and recovery:** all candidates occupied yields an actionable MCP fault, then
-  heals after one becomes available without restarting the client.
-- **Live engines:** repeat the shared-hub and failover scenarios on current Chrome and Zen,
-  since event-page suspension, alarm cadence, and Gecko reconnect delay are not faithfully
-  represented by unit tests.
-
-Pure candidate ordering, migration, and election decisions should be extracted behind
-injectable probes/candidate arrays. Socket tests bind ephemeral ports; production candidate
-numbers are validated separately against the documented selection criteria.
+Three properties are not faithfully represented by any of that, because event-page
+suspension, alarm cadence, and Gecko's reconnect delay are not, and are worth re-running on
+current Chrome and Zen after changes here: two same-token browsers sharing one auto-selected
+hub (with a tab-scoped call refusing to guess between them), hub loss followed by peer
+re-election and extension rediscovery without a settings change, and candidate exhaustion
+healing in place — an actionable MCP fault while every candidate is occupied, then a normal
+session once one frees, with no client restart.
 
 ## Wire protocol
 
