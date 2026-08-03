@@ -24,6 +24,7 @@ function caller(
       return respond(entry);
     },
     startupError: () => null,
+    knownObsidianVaults: async () => null,
     ...overrides,
   });
   return { call, sent };
@@ -284,6 +285,50 @@ describe("tab-scoped tools", () => {
     const result = await call("tabs_close", { browser: "chrome", tabIds: [1] });
     expect(sent[0]?.connectionId).toBe("conn-2");
     expect(payload(result)).toMatchObject({ browser: "Chrome", batchId: "b1" });
+  });
+
+  test("tab_clip forwards a vault Obsidian's registry knows", async () => {
+    const { call, sent } = caller([zen], () => ({ file: "Clippings/example.md" }), {
+      knownObsidianVaults: async () => [
+        { name: "Main Vault", path: "/vaults/Main Vault" },
+        { name: "Work", path: "/vaults/Work" },
+      ],
+    });
+    expect((await call("tab_clip", { tabId: 7, vault: "Main Vault" })).isError).toBeUndefined();
+    expect(sent[0]).toMatchObject({
+      method: "tab_clip",
+      params: { tabId: 7, vault: "Main Vault" },
+    });
+  });
+
+  test("tab_clip rejects an absent vault and names only the registry's known vaults", async () => {
+    const { call, sent } = caller([zen], () => ({}), {
+      knownObsidianVaults: async () => [
+        { name: "Main Vault", path: "/vaults/Main Vault" },
+        { name: "Work", path: "/vaults/Work" },
+      ],
+    });
+    const result = await call("tab_clip", { tabId: 7, vault: "Guessed" });
+    expect(result.isError).toBe(true);
+    expect(payload(result)).toEqual({
+      error: "bad-request",
+      message:
+        'Vault "Guessed" is not in Obsidian\'s local registry. Known vaults in that registry: "Main Vault", "Work". Use an exact name from Obsidian\'s vault switcher, or omit vault to use Tabglutton\'s configured destination.',
+    });
+    expect(sent).toEqual([]);
+  });
+
+  test("tab_clip forwards when the registry cannot be checked", async () => {
+    for (const knownObsidianVaults of [
+      async () => null,
+      async () => Promise.reject(new Error("permission denied")),
+    ]) {
+      const { call, sent } = caller([zen], () => ({ file: "Clippings/example.md" }), {
+        knownObsidianVaults,
+      });
+      expect((await call("tab_clip", { tabId: 7, vault: "Unverified" })).isError).toBeUndefined();
+      expect(sent).toHaveLength(1);
+    }
   });
 
   test("tabs_load routes like any tab-scoped tool", async () => {

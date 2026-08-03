@@ -403,17 +403,21 @@ it **only when the user names a vault**, and the result reports the `vault` it f
 every clip, override or not — an agent that cannot see where a note went cannot tell the
 user, and this is precisely the call where that matters.
 
-Two things it deliberately does not do. It does not fall back to the configured vault on a
+It does not fall back to the configured vault on a
 blank string: `obsidianClipRequest` appends `&vault=` only for a truthy value, so a blank
 reaching Obsidian means "whichever vault is open" — but silently substituting settings would
 report a destination the caller did not ask for. Both readings are wrong, so `""` is a
-`bad-request`. And it does not validate that the vault exists, because nothing in a
-WebExtension can: the handoff is a URL handed to the OS. An unrecognised name fails inside
-Obsidian, where neither end of the bridge can observe it, and the call still reports success
-— which is why the parameter's description warns against guessing at a name rather than
-relying on an error that will never arrive. What it does check is the one class of mistake
-that is decidable from the string alone, via the same `vaultWarningFor` the options page
-uses: a filesystem path where a vault name belongs.
+`bad-request`. Gullet also checks an explicit name against Obsidian's local `obsidian.json`
+vault registry before forwarding it. A readable, understood registry that does not contain
+the name produces a `bad-request` listing the vaults that registry knows. This is deliberately
+a soft check: the registry is undocumented and incomplete, and its location varies outside a
+standard install, so an absent, unreadable, malformed, or unfamiliar registry preserves the
+old pass-through behavior. The extension still cannot validate the destination — its handoff
+is a URL given to the OS — and Gullet's error therefore describes _known_ vaults rather than
+claiming to enumerate every vault on disk. The lookup caches parsed contents by modification
+time and size, so a vault added while Gullet is running appears on the next changed-file check.
+The string itself is also checked through the same `vaultWarningFor` the options page uses,
+so a filesystem path is rejected where a vault name belongs.
 
 ▸ **`tab_load` shipped as `tabs_load`, plural.** It was sketched as a per-tab v1.1 tool.
 But loading is dominated by the network wait, not by IPC, and the workflow that needs it —
