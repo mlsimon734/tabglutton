@@ -306,8 +306,20 @@ async function tabsList(
       try {
         const result = (await ctx.request(conn.connectionId, "tabs_list", params)) as {
           tabs?: BridgeTab[];
+          matched?: number;
         };
-        return { conn, tabs: result?.tabs ?? [] };
+        // `matched` is kept, not recomputed. A current extension truncates to
+        // `limit` before sending, so the tabs that arrive are not the tabs that
+        // matched, and its `matched` is the only place the real total survives.
+        // Recomputing it here reported the size of the page as the size of the
+        // result — the agent's one signal that it had not seen everything, lost
+        // exactly when there was more to see. An older extension sends no
+        // `matched`; that is what `undefined` means, and it is counted below.
+        return {
+          conn,
+          tabs: result?.tabs ?? [],
+          matched: typeof result?.matched === "number" ? result.matched : undefined,
+        };
       } catch (err) {
         const { code, message } = toBridgeError(err);
         const failure = {
@@ -316,7 +328,7 @@ async function tabsList(
           error: code,
           message,
         };
-        return { conn, tabs: [] as BridgeTab[], failure };
+        return { conn, tabs: [] as BridgeTab[], matched: undefined, failure };
       }
     }),
   );
@@ -366,11 +378,20 @@ async function tabsList(
           connectionId: origin.get(selected.tabs[i] as BridgeTab)?.connectionId,
         }))
       : view.tabs;
+  // Per browser: its own `matched` when it filtered, otherwise what our filter
+  // made of everything it sent. Mixing the two is normal — one browser can be
+  // newer than the other — so this is resolved per connection and then summed,
+  // never taken from the merged set as a whole.
+  const matched = perBrowser.reduce(
+    (sum, r) => sum + (r.matched ?? filterTabs(r.tabs, listParams).length),
+    0,
+  );
   return {
     ...head,
     ...(view.windowId === undefined ? {} : { windowId: view.windowId }),
-    ...selected,
     tabs,
+    matched,
+    ...(matched > tabs.length ? { truncated: true } : {}),
   };
 }
 

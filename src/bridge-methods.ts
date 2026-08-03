@@ -444,6 +444,11 @@ export class BridgeMethodRunner {
     // Gullet does the grouping, over every browser at once — and the full list
     // crossing loopback costs nothing, unlike the same list crossing into a
     // model's context, which is the only budget any of this is protecting.
+    //
+    // The Infinity stays local: `selectTabs` spends it on a `slice` and it is
+    // absent from `TabsListResult`, so it never meets `JSON.stringify`, which
+    // would silently turn it into `null`. Anything that later puts a limit on
+    // the wire has to send a real number.
     const limit = params.groupBy === undefined ? params.limit : Number.POSITIVE_INFINITY;
     return selectTabs(mapped, { ...params, limit });
   }

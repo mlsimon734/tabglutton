@@ -173,6 +173,44 @@ describe("tabs_list", () => {
     expect(result).toMatchObject({ matched: 3, truncated: true });
   });
 
+  // A current extension truncates before sending, so the page that arrives is
+  // not the match count. Recomputing `matched` here reported 2 of 900 as
+  // "matched: 2" with no `truncated` — the agent's only signal that more
+  // existed, lost precisely when it did. Invisible against an extension that
+  // sends everything, which is why it survived a live run.
+  test("keeps the browser's matched when the browser truncated for us", async () => {
+    const { call } = caller([zen], () => ({
+      tabs: [tab(1, "https://x.com/a", 400), tab(2, "https://x.com/b", 300)],
+      matched: 900,
+      truncated: true,
+    }));
+    const result = payload(await call("tabs_list", { query: "x.com", limit: 2 }));
+    expect(result).toMatchObject({ matched: 900, truncated: true });
+  });
+
+  test("falls back to its own count for a browser that sent no matched", async () => {
+    const { call } = caller([zen], () => ({
+      tabs: [tab(1, "https://x.com/a"), tab(2, "https://x.com/b"), tab(3, "https://other.test/")],
+    }));
+    // No `matched` on the wire means the browser did not filter, so the honest
+    // total is what our own filter kept — not the three tabs it handed over.
+    expect(payload(await call("tabs_list", { query: "x.com" }))).toMatchObject({ matched: 2 });
+  });
+
+  test("sums matched across browsers of different vintages", async () => {
+    const { call } = caller([zen, chrome], ({ connectionId }) =>
+      connectionId === "conn-1"
+        ? { tabs: [tab(1, "https://x.com/a", 400)], matched: 500 }
+        : { tabs: [tab(2, "https://x.com/b", 300), tab(3, "https://no.test/")] },
+    );
+    // 500 reported by the new one, plus the single tab our filter keeps from
+    // the old one's three.
+    expect(payload(await call("tabs_list", { query: "x.com" }))).toMatchObject({
+      matched: 501,
+      truncated: true,
+    });
+  });
+
   // Regression, caught live: grouping ran on the unfiltered merge, so a query
   // plus groupBy counted the whole backlog. The browser here ignores `query`
   // entirely, which is the version skew that exposed it — a newer extension

@@ -500,6 +500,25 @@ silently drop the exact tab the agent asked for. So every filter sees whole stri
 only the bytes handed to the model are trimmed. This is the same trade as `groupBy`: the
 socket is loopback, and loopback bytes are not the budget anyone is spending.
 
+▸ **`matched` is the browser's, not Gullet's, and recomputing it was a silent lie.**
+Gullet read only `tabs` from each browser's reply and let its second `selectTabs` pass
+derive `matched` from what arrived. But a current extension truncates to `limit` _before_
+sending, so the tabs that arrive are not the tabs that matched: 200 of 874 came back and
+were reported as `matched: 200` with no `truncated` — the agent's one signal that it had
+not seen everything, destroyed exactly when there was more to see. It now keeps each
+browser's reported `matched`, falling back to its own count only when a browser sends none
+(which is how an older extension identifies itself), resolved per connection and summed —
+two attached browsers can be different versions.
+
+This one was **invisible in live testing**, because the browser it was tested against was
+0.2.0 and sends everything unfiltered, so page size and match count were the same number.
+It would have appeared on first contact with the very build that fixes the loopback cost.
+Found by reading the path rather than running it, which is the argument for tracing a
+change end to end before signing a build, not after. (The question that prompted the trace
+— whether the `Number.POSITIVE_INFINITY` limit used for `groupBy` survives the wire — was
+a non-issue: it is spent on a `slice` inside the extension and never reaches
+`TabsListResult`, so `JSON.stringify` never gets the chance to turn it into `null`.)
+
 ▸ **The second pass hid a bug from itself, and only a stale extension exposed it.**
 `groupBy` grouped the _unfiltered_ merge: `tabs_list { query: "x.com", groupBy: "domain" }`
 answered `matched: 874, domains: 298` — the whole backlog, identical to the unfiltered
