@@ -183,7 +183,7 @@ export const GULLET_TOOLS: readonly McpTool[] = [
     name: "tab_clip",
     title: "File a tab into Obsidian",
     description:
-      "Save a tab into the user's Obsidian vault as a markdown note with frontmatter — exactly what the Tabglutton popup's Devour does, including per-site subfolders. Requires a vault configured in Tabglutton's settings. Set close: true to close the tab afterwards; that close is undoable via the returned batchId. Filing alone changes nothing in the browser — the tool is annotated destructive because close: true removes the tab.",
+      "Save a tab into the user's Obsidian vault as a markdown note with frontmatter — exactly what the Tabglutton popup's Devour does, including per-site subfolders. Requires a vault configured in Tabglutton's settings. Set close: true to close the tab afterwards; that close is undoable via the returned batchId. Filing alone changes nothing in the browser — the tool is annotated destructive because close: true removes the tab. The result reports the vault it filed into.",
     inputSchema: {
       type: "object",
       properties: {
@@ -192,6 +192,11 @@ export const GULLET_TOOLS: readonly McpTool[] = [
         close: {
           type: "boolean",
           description: "Close the tab once Obsidian has the note. Defaults to false.",
+        },
+        vault: {
+          type: "string",
+          description:
+            "File into this vault instead of the configured one, for this call only — nothing is saved. Use ONLY when the user names a destination vault themselves; never choose one on your own, and never guess at a name. Tabglutton cannot check that the vault exists, so a name Obsidian does not recognise fails inside Obsidian, where neither of us can see it, and this tool still reports success. Pass the name from Obsidian's vault switcher, not a path.",
         },
       },
       required: ["tabId"],

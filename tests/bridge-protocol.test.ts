@@ -392,6 +392,38 @@ describe("parseTabClipParams()", () => {
   test("rejects a non-boolean close", () => {
     expect(() => parseTabClipParams({ tabId: 3, close: 1 })).toThrow(BridgeRequestError);
   });
+
+  test("omits vault entirely when not overridden", () => {
+    expect(parseTabClipParams({ tabId: 3 })).not.toHaveProperty("vault");
+  });
+
+  test("accepts a vault override and trims it", () => {
+    expect(parseTabClipParams({ tabId: 3, vault: "  Hyphae  " })).toEqual({
+      tabId: 3,
+      close: false,
+      vault: "Hyphae",
+    });
+  });
+
+  // A blank override must not fall through to the configured vault: the agent
+  // would be told it filed somewhere it did not. It must not reach Obsidian
+  // either, where an absent `vault=` means "whichever vault is open".
+  test("rejects an empty or whitespace vault rather than falling back", () => {
+    expect(() => parseTabClipParams({ tabId: 3, vault: "" })).toThrow(BridgeRequestError);
+    expect(() => parseTabClipParams({ tabId: 3, vault: "   " })).toThrow(BridgeRequestError);
+  });
+
+  test("rejects a path where a vault name belongs", () => {
+    expect(() => parseTabClipParams({ tabId: 3, vault: "~/Notes" })).toThrow(BridgeRequestError);
+    expect(() => parseTabClipParams({ tabId: 3, vault: "/Users/m/Notes" })).toThrow(
+      BridgeRequestError,
+    );
+    expect(() => parseTabClipParams({ tabId: 3, vault: "Notes/Sub" })).toThrow(BridgeRequestError);
+  });
+
+  test("rejects a non-string vault", () => {
+    expect(() => parseTabClipParams({ tabId: 3, vault: 7 })).toThrow(BridgeRequestError);
+  });
 });
 
 describe("parseTabsCloseParams()", () => {

@@ -401,11 +401,36 @@ extension and Gullet so the contract is typechecked from one definition.
 | `tabs_list`  | `tabs.query`                                           | id, title, url, `windowId` (hoisted when shared), and — only when true — `lastAccessed`, `discarded`, `pinned`, `active`, `hidden`. Filtered with `query`, ordered with `sort`, capped by `limit`, or collapsed to counts with `groupBy: "domain"`. **On Zen, covers the active workspace only.** See below. |
 | `tabs_load`  | `tabs.reload` + `tabs.onUpdated`                       | Wakes discarded tabs so they can be read. Batched (≤20), three at a time, under a 30s deadline; per-tab `ready`/`pending`/`failed`. Gated on a settings toggle, default off — answers `not-enabled` until then.                                                                                              |
 | `tab_read`   | `scripting.executeScript` + existing `clip-current.ts` | Returns Defuddle markdown + metadata. Fails cleanly on discarded tabs (see below).                                                                                                                                                                                                                           |
-| `tab_clip`   | existing `clip-format.ts` + `obsidian://new` handoff   | Files into the vault exactly as manual Devour does, including the Chrome redirect-page dance.                                                                                                                                                                                                                |
+| `tab_clip`   | existing `clip-format.ts` + `obsidian://new` handoff   | Files into the vault exactly as manual Devour does, including the Chrome redirect-page dance. An optional `vault` overrides the destination for that one call. See below.                                                                                                                                    |
 | `tabs_close` | `tabs.remove`                                          | Batched, ids deduplicated. Entries (title, url, pinned, window, index, private) are recorded in an undo log in `storage.local` _before_ the removal, and the batch id comes back with the result.                                                                                                            |
 | `undo_close` | reopen from the log                                    | Safety valve for the one destructive act. Omit the batch id to undo the most recent.                                                                                                                                                                                                                         |
 
 Deliberately absent: navigate, click, type, evaluate.
+
+▸ **`tab_clip`'s `vault` overrides a destination, it does not change a setting.** The
+motivating case is a two-vault user: an agent-managed vault that agents file into by
+default, and a main vault that occasionally deserves something directly, without a
+staging hop it would only have to be moved out of later. The tempting shape for that is a
+tool that writes `obsidianVault` — and it is the wrong one. Settings are the user's, edited
+in a UI they can see; a tool that mutates one leaves the extension describing a destination
+the user never chose, silently, for every clip after it, including the ones from the popup.
+A per-call parameter expresses the same intent and expires by construction, so the blast
+radius of an agent's mistake is exactly one note. The tool description therefore says to use
+it **only when the user names a vault**, and the result reports the `vault` it filed into on
+every clip, override or not — an agent that cannot see where a note went cannot tell the
+user, and this is precisely the call where that matters.
+
+Two things it deliberately does not do. It does not fall back to the configured vault on a
+blank string: `obsidianClipRequest` appends `&vault=` only for a truthy value, so a blank
+reaching Obsidian means "whichever vault is open" — but silently substituting settings would
+report a destination the caller did not ask for. Both readings are wrong, so `""` is a
+`bad-request`. And it does not validate that the vault exists, because nothing in a
+WebExtension can: the handoff is a URL handed to the OS. An unrecognised name fails inside
+Obsidian, where neither end of the bridge can observe it, and the call still reports success
+— which is why the parameter's description warns against guessing at a name rather than
+relying on an error that will never arrive. What it does check is the one class of mistake
+that is decidable from the string alone, via the same `vaultWarningFor` the options page
+uses: a filesystem path where a vault name belongs.
 
 ▸ **`tab_load` shipped as `tabs_load`, plural.** It was sketched as a per-tab v1.1 tool.
 But loading is dominated by the network wait, not by IPC, and the workflow that needs it —

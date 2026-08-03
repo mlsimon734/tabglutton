@@ -6,6 +6,11 @@
 // One JSON object per WebSocket frame — the frame is the delimiter, so no
 // newline framing is needed on top of it.
 
+// The one import, and it stays pure by the rule above: shared so an agent's
+// vault override is rejected for exactly the reasons the options page warns
+// about, rather than by a second, drifting copy of the same rules.
+import { vaultWarningFor } from "./vault-warning.js";
+
 export const BRIDGE_PROTO = 1;
 
 /**
@@ -624,6 +629,11 @@ export interface TabClipParams {
   tabId: number;
   /** Close the tab once Obsidian has been handed the note. Default false. */
   close?: boolean;
+  /**
+   * File into this vault instead of the configured one, for this call only.
+   * Nothing is persisted — the next clip goes back to settings.
+   */
+  vault?: string;
 }
 
 export interface TabClipResult {
@@ -632,6 +642,11 @@ export interface TabClipResult {
   url: string;
   /** Vault-relative note path the clip was filed under. */
   file: string;
+  /**
+   * Vault the note was handed to. Always reported, so a clip that used an
+   * override says so rather than leaving the agent to assume it worked.
+   */
+  vault: string;
   closed: boolean;
   /** Present when `close` was honoured — pass to `undo_close` to reopen. */
   batchId?: string;
@@ -812,7 +827,26 @@ export function parseTabClipParams(raw: unknown): TabClipParams {
   if (obj.close !== undefined && typeof obj.close !== "boolean") {
     badRequest("close must be a boolean");
   }
-  return { tabId: requireTabId(raw), close: obj.close ?? false };
+  return { tabId: requireTabId(raw), close: obj.close ?? false, ...parseVaultOverride(obj.vault) };
+}
+
+/**
+ * A vault override is absent or a usable name — never an empty string.
+ *
+ * `""` would otherwise reach `obsidianClipRequest`, which appends `&vault=` only
+ * for a truthy value, so a blank override would silently mean "whichever vault
+ * Obsidian has open" instead of the configured one. Falling back to settings on
+ * a blank is the wrong repair too: the agent asked for a specific destination
+ * and would be told it got one. Refusing is the only answer that cannot mislead.
+ */
+function parseVaultOverride(raw: unknown): { vault?: string } {
+  if (raw === undefined) return {};
+  if (typeof raw !== "string") badRequest("vault must be a string");
+  const vault = raw.trim();
+  if (!vault) badRequest("vault must not be empty — omit it to use the configured vault");
+  const warning = vaultWarningFor(vault);
+  if (warning) badRequest(warning);
+  return { vault };
 }
 
 /**

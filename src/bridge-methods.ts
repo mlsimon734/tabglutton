@@ -607,7 +607,10 @@ export class BridgeMethodRunner {
   private async tabClip(raw: unknown): Promise<TabClipResult> {
     const params = parseTabClipParams(raw);
     const settings = this.deps.getSettings();
-    const vault = settings.obsidianVault.trim();
+    // An override stands alone: it is the destination the user named, so a
+    // vault they have not configured is not a reason to refuse. `vault-missing`
+    // only means "nowhere to file this", which an override answers.
+    const vault = params.vault ?? settings.obsidianVault.trim();
     if (!vault) {
       fail("vault-missing", "No Obsidian vault is configured in Tabglutton's settings.");
     }
@@ -633,7 +636,7 @@ export class BridgeMethodRunner {
       return request.file;
     });
 
-    const filed = { tabId: params.tabId, title: payload.title, url: payload.url, file };
+    const filed = { tabId: params.tabId, title: payload.title, url: payload.url, file, vault };
     if (!params.close) return { ...filed, closed: false };
 
     // Nothing past here fails the call: the note is already in Obsidian, so a
