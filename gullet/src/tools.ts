@@ -9,6 +9,7 @@ import {
   groupTabsByDomain,
   isBridgeMethod,
   parseTabsListParams,
+  parseVaultOverride,
   selectTabs,
   TABS_LIST_DEFAULT_GROUP_LIMIT,
   TABS_LIST_DEFAULT_LIMIT,
@@ -21,6 +22,7 @@ import {
 } from "../../src/bridge-protocol.js";
 import { renderTabs, TAB_TITLE_MAX } from "../../src/tabs-view.js";
 import type { McpTool, McpToolResult } from "./mcp.js";
+import type { ObsidianVaultLookup } from "./obsidian-vaults.js";
 import { selectAll, selectOne, type ConnectionSummary } from "./select.js";
 
 export interface ToolContext {
@@ -38,6 +40,13 @@ export interface ToolContext {
    * on refusing calls the backend had since become able to serve.
    */
   startupError: () => BridgeError | null;
+  /**
+   * Known vaults from Obsidian's local registry, or null when that advisory
+   * registry cannot be trusted. Checked only for an explicit tab_clip override.
+   * Optional for the same reason as `rivalHubs`: it can refuse a call it can
+   * prove is wrong, but an absent lookup never changes one.
+   */
+  knownObsidianVaults?: ObsidianVaultLookup;
   /**
    * Candidate ports held by another Tabglutton hub, asked only when there is no
    * browser to serve. Optional so tests and any future embedding can omit it —
@@ -196,7 +205,7 @@ export const GULLET_TOOLS: readonly McpTool[] = [
         vault: {
           type: "string",
           description:
-            "File into this vault instead of the configured one, for this call only — nothing is saved. Use ONLY when the user names a destination vault themselves; never choose one on your own, and never guess at a name. Tabglutton cannot check that the vault exists, so a name Obsidian does not recognise fails inside Obsidian, where neither of us can see it, and this tool still reports success. Pass the name from Obsidian's vault switcher, not a path.",
+            "File into this vault instead of the configured one, for this call only — nothing is saved. Use ONLY when the user names a destination vault themselves; never choose one on your own, and never guess at a name. Pass the exact name from Obsidian's vault switcher, not a path. Gullet rejects names missing from Obsidian's local registry when it can read that registry; an unavailable or unrecognised registry stays a soft check and does not block the clip.",
         },
       },
       required: ["tabId"],
@@ -276,6 +285,11 @@ async function route(
   }
   const target = typeof args.browser === "string" ? args.browser : undefined;
   const { browser: _browser, ...params } = args;
+  // Before `connections()`, deliberately: that call waits up to
+  // BRIDGE_CONNECT_WAIT_MS for a browser, and a name we can already prove wrong
+  // should fail in milliseconds rather than after a 45s wait for a browser it
+  // was never going to reach.
+  if (name === "tab_clip") await validateVaultOverride(ctx, params.vault);
   const summaries = await ctx.connections();
 
   if (name === "tabs_list") return tabsList(ctx, summaries, target, params);
@@ -289,6 +303,33 @@ async function route(
     connectionId: conn.connectionId,
     ...(asRecord(result) ?? { result }),
   };
+}
+
+/** Reject only when a registry we could read proves the requested name is absent. */
+async function validateVaultOverride(ctx: ToolContext, raw: unknown): Promise<void> {
+  // Shared with the extension so trimming, blank rejection, and the path-vs-name
+  // warning cannot drift between the two sides of the same call. Only the vault:
+  // the rest of tab_clip's contract stays the extension's to enforce.
+  const { vault } = parseVaultOverride(raw);
+  if (!vault || !ctx.knownObsidianVaults) return;
+
+  let known: readonly string[] | null;
+  try {
+    known = await ctx.knownObsidianVaults();
+  } catch {
+    // Embedders can supply their own lookup. It has the same soft contract as
+    // the built-in filesystem reader: inability to check is never a rejection.
+    return;
+  }
+  if (known === null || known.includes(vault)) return;
+
+  throw new BridgeRequestError(
+    "bad-request",
+    `Vault ${JSON.stringify(vault)} is not in Obsidian's local registry. ` +
+      `Known vaults in that registry: ${known.map((name) => JSON.stringify(name)).join(", ")}. ` +
+      `Use an exact name from Obsidian's vault switcher, or omit vault to use ` +
+      `Tabglutton's configured destination.`,
+  );
 }
 
 /**

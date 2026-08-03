@@ -5,6 +5,7 @@ import { errorMessage, type BridgeError } from "../../src/bridge-protocol.js";
 import { Supervisor } from "./backend.js";
 import { ConfigError, parseConfig, USAGE } from "./config.js";
 import { serveStdio } from "./mcp.js";
+import { createObsidianVaultLookup } from "./obsidian-vaults.js";
 import { createToolCaller, GULLET_INSTRUCTIONS, GULLET_TOOLS } from "./tools.js";
 
 /** Reported to the MCP client on initialize. Keep in step with gullet/package.json. */
@@ -68,6 +69,8 @@ export async function main(
   process.on("SIGINT", shutdown);
   process.on("SIGTERM", shutdown);
 
+  const knownObsidianVaults = createObsidianVaultLookup();
+
   await serveStdio({
     // What the agent sees, and what namespaces its tools. Users know this thing
     // as Tabglutton; "gullet" is the internal name for the sidecar half only.
@@ -82,6 +85,7 @@ export async function main(
       // A port we never bound is the more proximate problem, and fixing the
       // token would not make this process serve anything either way.
       startupError: () => backend.fault() ?? tokenError,
+      knownObsidianVaults,
       rivalHubs: () => backend.rivalHubs(),
     }),
   });
