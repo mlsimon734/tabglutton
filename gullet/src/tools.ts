@@ -5,11 +5,17 @@
 import {
   asRecord,
   BridgeRequestError,
+  groupTabsByDomain,
   isBridgeMethod,
+  parseTabsListParams,
+  selectTabs,
+  TABS_LIST_DEFAULT_LIMIT,
+  TABS_LIST_MAX_LIMIT,
   TABS_LOAD_MAX_BATCH,
   toBridgeError,
   type BridgeError,
   type BridgeMethod,
+  type BridgeTab,
 } from "../../src/bridge-protocol.js";
 import type { McpTool, McpToolResult } from "./mcp.js";
 import { selectAll, selectOne, type ConnectionSummary } from "./select.js";
@@ -41,9 +47,15 @@ const BROWSER_PROPERTY = {
 
 export const GULLET_INSTRUCTIONS = `Tabglutton's bridge to the user's open browser tabs.
 
-Triage cheaply: tabs_list returns metadata only and is affordable across hundreds of
-tabs, so cut on title, URL, and lastAccessed BEFORE reading anything. Only call tab_read
-on the survivors.
+Narrow before you list. A backlog here is hundreds to thousands of tabs and a full
+listing will not fit in your context, so work down: tabs_list with groupBy: "domain"
+first to see what the backlog is made of, then tabs_list with a query to pull just the
+tabs you want. tabs_list is metadata only — cut on title, URL, and lastAccessed BEFORE
+reading anything, and only call tab_read on the survivors.
+
+It answers with "matched" and "truncated", so you can always tell a complete answer from
+a truncated one. If a listing comes back truncated, narrow the query — do not raise the
+limit and do not page through the whole backlog.
 
 Most tabs in a large backlog are discarded (unloaded), and tab_read and tab_clip cannot
 reach those. Wake them with tabs_load first — one call for every survivor you mean to read
@@ -61,11 +73,36 @@ export const GULLET_TOOLS: readonly McpTool[] = [
     name: "tabs_list",
     title: "List open tabs",
     description:
-      "List the user's open tabs with metadata only — id, title, url, lastAccessed, discarded, pinned, active, window, and (Firefox/Zen) hidden. Cheap enough to run across hundreds of tabs; do your triage here before reading any page. `hidden: true` on Zen usually means the tab lives in another workspace. `discarded: true` means the tab is unloaded and cannot be read.",
+      `List the user's open tabs with metadata only — id, title, url, lastAccessed, windowId, index, and the flags discarded, pinned, active and (Firefox/Zen) hidden. **Flags appear only when true**: no \`discarded\` key means the tab is loaded. \`discarded: true\` means the tab is unloaded and cannot be read until tabs_load wakes it; \`hidden: true\` on Zen usually means the tab lives in another Zen workspace.\n\n` +
+      `Backlogs are large, so this returns the ${TABS_LIST_DEFAULT_LIMIT} most recently accessed tabs by default and reports \`matched\` (how many the filter actually hit) plus \`truncated: true\` when there were more. Narrow with \`query\` rather than raising \`limit\` — a full listing of a thousand tabs will not fit in your context.\n\n` +
+      `Start a triage run with \`groupBy: "domain"\`: it returns one row per domain with tab and discarded counts instead of any tabs, which is a few hundred bytes for the whole backlog and tells you what to pass as \`query\` next.`,
     inputSchema: {
       type: "object",
       properties: {
         ...BROWSER_PROPERTY,
+        query: {
+          type: "string",
+          description:
+            'Case-insensitive filter over title and URL. Whitespace splits it into terms that must all match, in either field — "github pull" matches a tab titled "Pull request" at github.com. Do this before raising limit.',
+        },
+        limit: {
+          type: "integer",
+          minimum: 1,
+          maximum: TABS_LIST_MAX_LIMIT,
+          description: `Max tabs (or domain groups) to return. Defaults to ${TABS_LIST_DEFAULT_LIMIT}.`,
+        },
+        sort: {
+          type: "string",
+          enum: ["recent", "oldest", "window"],
+          description:
+            'Order: "recent" (default, most recently accessed first), "oldest" (stale tabs first), or "window" (the order the user sees them in). Combined with limit, "recent" keeps what they were last working on and "oldest" surfaces closing candidates.',
+        },
+        groupBy: {
+          type: "string",
+          enum: ["domain"],
+          description:
+            "Return per-domain counts instead of tabs: { domain, tabs, discarded, newest }, most tabs first. Honours query and limit. The cheap first call for triaging a backlog you have not seen.",
+        },
         scope: {
           type: "string",
           enum: ["all", "current-window"],
@@ -221,53 +258,7 @@ async function route(
   const { browser: _browser, ...params } = args;
   const summaries = await ctx.connections();
 
-  if (name === "tabs_list") {
-    // Read-only and id-free, so fanning out over every browser is safe and
-    // saves the agent a round trip to discover what is connected.
-    const targets = selectAll(summaries, target);
-    // Each request carries its own catch, so this Promise.all can never reject:
-    // one browser timing out must not throw away the listing another already
-    // returned. A half-answer the agent can see the shape of beats no answer,
-    // and with two browsers attached the healthy one is usually the one being
-    // triaged anyway.
-    const perBrowser = await Promise.all(
-      targets.map(async (conn) => {
-        try {
-          const result = (await ctx.request(conn.connectionId, "tabs_list", params)) as {
-            tabs?: Array<Record<string, unknown>>;
-          };
-          const tabs = (result?.tabs ?? []).map((tab) => ({
-            ...tab,
-            browser: conn.label,
-            connectionId: conn.connectionId,
-          }));
-          return { tabs };
-        } catch (err) {
-          const { code, message } = toBridgeError(err);
-          return {
-            tabs: [],
-            failure: { connectionId: conn.connectionId, browser: conn.label, error: code, message },
-          };
-        }
-      }),
-    );
-    const failures = perBrowser.map((r) => r.failure).filter((f) => f !== undefined);
-    // Every browser failed: there is no partial answer to give, and an empty
-    // `tabs` array would read as "the user has no tabs" rather than as a fault.
-    if (failures.length === targets.length) {
-      const first = failures[0];
-      throw new BridgeRequestError(
-        first?.error ?? "internal",
-        first?.message ?? "tabs_list failed.",
-      );
-    }
-    // Tabs carry their origin so ids from two browsers can never be confused.
-    return {
-      browsers: targets,
-      tabs: perBrowser.flatMap((r) => r.tabs),
-      ...(failures.length > 0 ? { failures } : {}),
-    };
-  }
+  if (name === "tabs_list") return tabsList(ctx, summaries, target, params);
 
   // Everything else is tab-scoped: ids only mean something inside one browser.
   const conn = selectOne(summaries, target);
@@ -278,6 +269,85 @@ async function route(
     connectionId: conn.connectionId,
     ...(asRecord(result) ?? { result }),
   };
+}
+
+/**
+ * Fan a listing out over every connected browser and merge the answers.
+ *
+ * Read-only and id-free, so fanning out is safe and saves the agent a round trip
+ * to discover what is connected. The filter/sort/limit pipeline then runs a
+ * second time here, over the merged set: a limit applied per browser is not the
+ * limit the agent asked for, and re-running it is also what lets an older
+ * extension that ignores `query` still produce a filtered answer.
+ */
+async function tabsList(
+  ctx: ToolContext,
+  summaries: ConnectionSummary[],
+  target: string | undefined,
+  params: Record<string, unknown>,
+): Promise<unknown> {
+  const listParams = parseTabsListParams(params);
+  const targets = selectAll(summaries, target);
+  // Each request carries its own catch, so this Promise.all can never reject:
+  // one browser timing out must not throw away the listing another already
+  // returned. A half-answer the agent can see the shape of beats no answer, and
+  // with two browsers attached the healthy one is usually the one being triaged.
+  const perBrowser = await Promise.all(
+    targets.map(async (conn) => {
+      try {
+        const result = (await ctx.request(conn.connectionId, "tabs_list", params)) as {
+          tabs?: BridgeTab[];
+        };
+        return { conn, tabs: result?.tabs ?? [] };
+      } catch (err) {
+        const { code, message } = toBridgeError(err);
+        const failure = {
+          connectionId: conn.connectionId,
+          browser: conn.label,
+          error: code,
+          message,
+        };
+        return { conn, tabs: [] as BridgeTab[], failure };
+      }
+    }),
+  );
+  const failures = perBrowser.map((r) => r.failure).filter((f) => f !== undefined);
+  // Every browser failed: there is no partial answer to give, and an empty
+  // `tabs` array would read as "the user has no tabs" rather than as a fault.
+  if (failures.length === targets.length) {
+    const first = failures[0];
+    throw new BridgeRequestError(first?.error ?? "internal", first?.message ?? "tabs_list failed.");
+  }
+
+  // Which browser a tab came from is tracked beside the tabs rather than stamped
+  // on them: with one browser connected — the normal case — the top-level
+  // `browsers` entry already says it, and repeating a constant string once per
+  // tab cost 13% of the listing that started this.
+  const origin = new WeakMap<BridgeTab, ConnectionSummary>();
+  const merged: BridgeTab[] = [];
+  for (const { conn, tabs } of perBrowser) {
+    for (const tab of tabs) {
+      origin.set(tab, conn);
+      merged.push(tab);
+    }
+  }
+  const head = { browsers: targets, ...(failures.length > 0 ? { failures } : {}) };
+
+  if (listParams.groupBy === "domain") {
+    return { ...head, ...groupTabsByDomain(merged, listParams.limit) };
+  }
+  const selected = selectTabs(merged, listParams);
+  // Ids only mean something inside one browser, so a listing that actually
+  // merged two has to say which one each tab belongs to. The test is how many
+  // browsers *contributed*, not how many were asked: one of two can fail or come
+  // back empty, and then there is nothing to disambiguate. connectionId rather
+  // than the label, because labels are self-reported and two can share one.
+  const contributors = perBrowser.filter((r) => r.tabs.length > 0).length;
+  const tabs =
+    contributors > 1
+      ? selected.tabs.map((tab) => ({ ...tab, connectionId: origin.get(tab)?.connectionId }))
+      : selected.tabs;
+  return { ...head, ...selected, tabs };
 }
 
 // Compact JSON, not pretty-printed: every one of these results goes into a

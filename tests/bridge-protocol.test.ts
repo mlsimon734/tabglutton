@@ -8,7 +8,9 @@ import {
   classifyBridgeProbe,
   deriveProof,
   generateToken,
+  groupTabsByDomain,
   isBridgeMethod,
+  matchesTabQuery,
   orderedBridgePortCandidates,
   parseMessage,
   parseTabClipParams,
@@ -17,10 +19,20 @@ import {
   parseTabsListParams,
   parseTabsLoadParams,
   parseUndoCloseParams,
+  selectTabs,
+  tabDomain,
+  TABS_LIST_DEFAULT_LIMIT,
+  TABS_LIST_MAX_LIMIT,
   TABS_LOAD_MAX_BATCH,
   proofsMatch,
   randomNonce,
+  type BridgeTab,
 } from "../src/bridge-protocol.js";
+
+/** A listing entry with only the fields a case actually exercises. */
+function makeTab(fields: Partial<BridgeTab> & Pick<BridgeTab, "id" | "url">): BridgeTab {
+  return { title: "", windowId: 1, index: 0, ...fields };
+}
 
 describe("constants", () => {
   test("port and proto are the documented values", () => {
@@ -151,14 +163,32 @@ describe("parseMessage()", () => {
 });
 
 describe("parseTabsListParams()", () => {
-  test("defaults to every window, hidden included", () => {
-    expect(parseTabsListParams(undefined)).toEqual({ scope: "all", includeHidden: true });
+  test("defaults to every window, hidden included, newest first, capped", () => {
+    expect(parseTabsListParams(undefined)).toEqual({
+      scope: "all",
+      includeHidden: true,
+      sort: "recent",
+      limit: TABS_LIST_DEFAULT_LIMIT,
+    });
   });
 
   test("accepts the documented values", () => {
-    expect(parseTabsListParams({ scope: "current-window", includeHidden: false })).toEqual({
+    expect(
+      parseTabsListParams({
+        scope: "current-window",
+        includeHidden: false,
+        query: "github",
+        limit: 5,
+        sort: "oldest",
+        groupBy: "domain",
+      }),
+    ).toEqual({
       scope: "current-window",
       includeHidden: false,
+      query: "github",
+      limit: 5,
+      sort: "oldest",
+      groupBy: "domain",
     });
   });
 
@@ -168,6 +198,127 @@ describe("parseTabsListParams()", () => {
 
   test("rejects a non-boolean includeHidden", () => {
     expect(() => parseTabsListParams({ includeHidden: "yes" })).toThrow(BridgeRequestError);
+  });
+
+  test("rejects an unknown sort or groupBy", () => {
+    expect(() => parseTabsListParams({ sort: "alphabetical" })).toThrow(BridgeRequestError);
+    expect(() => parseTabsListParams({ groupBy: "window" })).toThrow(BridgeRequestError);
+  });
+
+  test("rejects a limit that is not a positive integer within the ceiling", () => {
+    expect(() => parseTabsListParams({ limit: 0 })).toThrow(BridgeRequestError);
+    expect(() => parseTabsListParams({ limit: 1.5 })).toThrow(BridgeRequestError);
+    expect(() => parseTabsListParams({ limit: TABS_LIST_MAX_LIMIT + 1 })).toThrow(
+      BridgeRequestError,
+    );
+  });
+
+  // A query of only whitespace would otherwise reach `selectTabs` as a filter
+  // that matches everything, and be reported back as if it had narrowed.
+  test("drops a blank query rather than carrying it", () => {
+    expect(parseTabsListParams({ query: "   " })).not.toHaveProperty("query");
+    expect(parseTabsListParams({ query: "  github  " }).query).toBe("github");
+  });
+});
+
+describe("tabDomain()", () => {
+  test("strips www but keeps the subdomain that distinguishes a service", () => {
+    expect(tabDomain("https://www.github.com/a/b")).toBe("github.com");
+    expect(tabDomain("https://mail.google.com/")).toBe("mail.google.com");
+    expect(tabDomain("https://docs.google.com/")).toBe("docs.google.com");
+  });
+
+  test("falls back to the scheme when there is no host, and to empty when unparseable", () => {
+    expect(tabDomain("about:blank")).toBe("about");
+    expect(tabDomain("file:///Users/x/n.md")).toBe("file");
+    expect(tabDomain("not a url")).toBe("");
+  });
+});
+
+describe("matchesTabQuery()", () => {
+  const tab = makeTab({ id: 1, title: "Pull request #42", url: "https://github.com/o/r/pull/42" });
+
+  test("matches case-insensitively across title and url", () => {
+    expect(matchesTabQuery(tab, "PULL REQUEST")).toBe(true);
+    expect(matchesTabQuery(tab, "github.com")).toBe(true);
+  });
+
+  test("requires every term, but lets them land in different fields", () => {
+    expect(matchesTabQuery(tab, "github pull")).toBe(true);
+    expect(matchesTabQuery(tab, "github issue")).toBe(false);
+  });
+});
+
+describe("selectTabs()", () => {
+  const tabs = [
+    makeTab({ id: 1, title: "old", url: "https://x.com/a", lastAccessed: 100 }),
+    makeTab({ id: 2, title: "new", url: "https://x.com/b", lastAccessed: 300 }),
+    makeTab({ id: 3, title: "mid", url: "https://news.example/c", lastAccessed: 200 }),
+    makeTab({ id: 4, title: "unknown", url: "https://x.com/d" }),
+  ];
+
+  test("defaults to most recent first", () => {
+    expect(selectTabs(tabs, {}).tabs.map((t) => t.id)).toEqual([2, 3, 1, 4]);
+  });
+
+  test("sorts oldest first without floating unknowns to the top", () => {
+    // A tab with no lastAccessed is unknown, not ancient — putting it first
+    // would hand an agent hunting stale tabs a page it knows nothing about.
+    expect(selectTabs(tabs, { sort: "oldest" }).tabs.map((t) => t.id)).toEqual([1, 3, 2, 4]);
+  });
+
+  test("filters on query and reports what the filter hit", () => {
+    const result = selectTabs(tabs, { query: "x.com" });
+    expect(result.tabs.map((t) => t.id)).toEqual([2, 1, 4]);
+    expect(result.matched).toBe(3);
+    expect(result.truncated).toBeUndefined();
+  });
+
+  test("flags truncation so a partial answer is never read as a complete one", () => {
+    const result = selectTabs(tabs, { limit: 2 });
+    expect(result.tabs.map((t) => t.id)).toEqual([2, 3]);
+    expect(result.matched).toBe(4);
+    expect(result.truncated).toBe(true);
+  });
+
+  test("counts matches before the limit, not after", () => {
+    expect(selectTabs(tabs, { query: "x.com", limit: 1 }).matched).toBe(3);
+  });
+
+  test("drops hidden tabs only when asked", () => {
+    const withHidden = [...tabs, makeTab({ id: 5, url: "https://h/", hidden: true })];
+    expect(selectTabs(withHidden, { includeHidden: false }).tabs.map((t) => t.id)).not.toContain(5);
+    expect(selectTabs(withHidden, {}).tabs.map((t) => t.id)).toContain(5);
+  });
+});
+
+describe("groupTabsByDomain()", () => {
+  const tabs = [
+    makeTab({ id: 1, url: "https://x.com/a", lastAccessed: 100, discarded: true }),
+    makeTab({ id: 2, url: "https://www.x.com/b", lastAccessed: 300 }),
+    makeTab({ id: 3, url: "https://x.com/c", discarded: true }),
+    makeTab({ id: 4, url: "https://news.example/d", lastAccessed: 200 }),
+  ];
+
+  test("counts per domain, busiest first", () => {
+    const result = groupTabsByDomain(tabs, 10);
+    expect(result.groups).toEqual([
+      { domain: "x.com", tabs: 3, discarded: 2, newest: 300 },
+      { domain: "news.example", tabs: 1, discarded: 0, newest: 200 },
+    ]);
+    expect(result).toMatchObject({ domains: 2, matched: 4 });
+    expect(result.truncated).toBeUndefined();
+  });
+
+  test("omits newest when no tab in the group reported one", () => {
+    const [group] = groupTabsByDomain([makeTab({ id: 1, url: "https://q/" })], 10).groups;
+    expect(group).not.toHaveProperty("newest");
+  });
+
+  test("truncates groups but still counts every tab behind them", () => {
+    const result = groupTabsByDomain(tabs, 1);
+    expect(result.groups.map((g) => g.domain)).toEqual(["x.com"]);
+    expect(result).toMatchObject({ domains: 2, matched: 4, truncated: true });
   });
 });
 

@@ -371,14 +371,14 @@ extension and Gullet so the contract is typechecked from one definition.
 
 ## Tool surface (v1)
 
-| MCP tool     | Backing APIs                                           | Notes                                                                                                                                                                                                           |
-| ------------ | ------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `tabs_list`  | `tabs.query`                                           | id, title, url, `lastAccessed`, `discarded`, `pinned`; on Firefox also `hidden` (≈ other Zen workspaces). Metadata only — cheap over hundreds of tabs.                                                          |
-| `tabs_load`  | `tabs.reload` + `tabs.onUpdated`                       | Wakes discarded tabs so they can be read. Batched (≤20), three at a time, under a 30s deadline; per-tab `ready`/`pending`/`failed`. Gated on a settings toggle, default off — answers `not-enabled` until then. |
-| `tab_read`   | `scripting.executeScript` + existing `clip-current.ts` | Returns Defuddle markdown + metadata. Fails cleanly on discarded tabs (see below).                                                                                                                              |
-| `tab_clip`   | existing `clip-format.ts` + `obsidian://new` handoff   | Files into the vault exactly as manual Devour does, including the Chrome redirect-page dance.                                                                                                                   |
-| `tabs_close` | `tabs.remove`                                          | Batched, ids deduplicated. Entries (title, url, pinned, window, index, private) are recorded in an undo log in `storage.local` _before_ the removal, and the batch id comes back with the result.               |
-| `undo_close` | reopen from the log                                    | Safety valve for the one destructive act. Omit the batch id to undo the most recent.                                                                                                                            |
+| MCP tool     | Backing APIs                                           | Notes                                                                                                                                                                                                                                                                                     |
+| ------------ | ------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `tabs_list`  | `tabs.query`                                           | id, title, url, `windowId`, `index`, and — only when true — `lastAccessed`, `discarded`, `pinned`, `active`, and on Firefox `hidden` (≈ other Zen workspaces). Filtered with `query`, ordered with `sort`, capped by `limit`, or collapsed to counts with `groupBy: "domain"`. See below. |
+| `tabs_load`  | `tabs.reload` + `tabs.onUpdated`                       | Wakes discarded tabs so they can be read. Batched (≤20), three at a time, under a 30s deadline; per-tab `ready`/`pending`/`failed`. Gated on a settings toggle, default off — answers `not-enabled` until then.                                                                           |
+| `tab_read`   | `scripting.executeScript` + existing `clip-current.ts` | Returns Defuddle markdown + metadata. Fails cleanly on discarded tabs (see below).                                                                                                                                                                                                        |
+| `tab_clip`   | existing `clip-format.ts` + `obsidian://new` handoff   | Files into the vault exactly as manual Devour does, including the Chrome redirect-page dance.                                                                                                                                                                                             |
+| `tabs_close` | `tabs.remove`                                          | Batched, ids deduplicated. Entries (title, url, pinned, window, index, private) are recorded in an undo log in `storage.local` _before_ the removal, and the batch id comes back with the result.                                                                                         |
+| `undo_close` | reopen from the log                                    | Safety valve for the one destructive act. Omit the batch id to undo the most recent.                                                                                                                                                                                                      |
 
 Deliberately absent: navigate, click, type, evaluate.
 
@@ -404,10 +404,62 @@ default off, surfaced as **Agent bridge → "Let agents load unloaded tabs"**. A
 returns the `not-enabled` code — distinct from `unsupported` because this one has a fix the
 agent can state to the user.
 
-`tabs_list` with no `browser` argument fans out over every connected browser and tags each
-tab with its origin, so discovering what is connected costs no extra round trip. The
-tab-scoped tools refuse to guess between two browsers, because ids only mean something
-within one.
+`tabs_list` with no `browser` argument fans out over every connected browser, so
+discovering what is connected costs no extra round trip. The tab-scoped tools refuse to
+guess between two browsers, because ids only mean something within one — and for the same
+reason a listing that actually merged two stamps `connectionId` on each tab. Only then —
+when one browser contributed every tab, the top-level `browsers` entry has already said
+so, and repeating it per tab is pure boilerplate.
+
+▸ **A listing is budgeted against a model's context, not against the socket.** The
+measurement that drove this, from a real 874-tab Zen: 306 KB of JSON in one tool result,
+which is past the client's tool-result ceiling — so the agent got _nothing_, and there was
+no narrower call available to fall back to. `browser` and `connectionId` were constants
+repeated once per tab (13%). `discarded`, `hidden`, `active`, and `pinned` were 17.6%
+while carrying eleven `true` values between them — `hidden` was `false` on all 874.
+
+**Deleting the boilerplate was not enough, and that is the point.** Reconstructing that
+listing from its reported per-field byte totals (304.4 KB, within 0.5% of the original)
+and applying the shape changes alone lands at **215 KB** — a 29% cut that is still far
+past the ceiling, so the call still fails and the agent still gets nothing. What makes it
+usable is narrowing: the default limit brings the same listing to **49 KB**, `query:
+"x.com"` to **43 KB**, and `groupBy: "domain"` to **0.4 KB**. So the hoisting and the
+omission are worth having, but they are a constant factor on something that scales with
+the user's backlog; only the filter changes the shape of the problem.
+
+Four changes, in the order they matter:
+
+1. **`query`, `limit`, `sort`.** The one that actually mattered: the session that produced
+   the measurement wanted "the x.com tabs" and had to ask for all 874 to find them.
+   `query` is a case-insensitive AND over whitespace-separated terms, matched against title
+   and URL together, so "github pull" finds a tab whose title and URL each carry one term.
+   Deliberately not a regex: an agent-authored regex is an unbounded backtracking risk on a
+   thousand strings, and substring terms are what triage actually needs.
+2. **`groupBy: "domain"`** — counts only, no tabs. The real triage primitive: one cheap
+   call says what the backlog is made of and what to pass as `query` next. The domain is
+   the hostname minus `www.`, not the registrable domain: eTLD+1 needs the Public Suffix
+   List, which `bridge-protocol.ts` cannot take as a dependency and which goes stale, and
+   `mail.google.com` vs `docs.google.com` is the distinction triage wants anyway.
+3. **False and unknown fields are omitted**, not sent. Absent means false; absent
+   `lastAccessed` means the browser reported none.
+4. **Constants are hoisted** out of the tabs and into the existing top-level `browsers`
+   array, per the stamping rule above.
+
+Two things about `limit` are load-bearing. It **defaults** to `TABS_LIST_DEFAULT_LIMIT`
+(200) rather than being opt-in, because the failure it prevents is total — an unbounded
+listing returns nothing usable — and truncation is always visible: `matched` counts what
+the filter hit, `truncated` says the answer is partial. And the default `sort` is `recent`
+rather than the browser's own window order, which is what makes truncation defensible: the
+tail that gets cut is the tabs the user touched longest ago, not an arbitrary slice.
+
+The filter/sort/limit pipeline (`selectTabs`) lives in `bridge-protocol.ts` and runs
+**twice**. In the extension, so a backlog never crosses the socket whole; and again in
+Gullet over the merged results, because a limit applied per browser is not the limit the
+agent asked for. Running it a second time also means an older extension that ignores
+`query` still yields a filtered answer instead of a flood. `groupBy` is the exception:
+Gullet asks the extension for the full filtered set and groups it there, since a limit
+applied before grouping would corrupt the counts — and the full list crossing loopback
+costs nothing, which is the whole point of where the budget actually is.
 
 **Restoring is exact where it can be and safe where it cannot.** A batch is recreated in
 ascending index order within each window; inserting a low index after a high one would

@@ -16,6 +16,7 @@ import {
   parseTabReadParams,
   parseTabsCloseParams,
   parseTabsListParams,
+  selectTabs,
   parseTabsLoadParams,
   parseUndoCloseParams,
   TABS_LOAD_DEADLINE_MS,
@@ -151,16 +152,20 @@ function toBridgeTab(tab: browser.tabs.Tab): BridgeTab | null {
     id: tab.id,
     title: tab.title ?? "",
     url,
-    lastAccessed: tab.lastAccessed ?? 0,
-    discarded: tab.discarded ?? false,
-    pinned: tab.pinned,
-    active: tab.active,
     windowId: tab.windowId ?? -1,
     index: tab.index,
   };
-  // Chrome has no `tab.hidden`; omitting the key (rather than sending false)
-  // keeps "no workspace signal here" distinguishable from "visible".
-  if (!IS_CHROME && tab.hidden !== undefined) bridgeTab.hidden = tab.hidden;
+  // Everything below is omitted unless it says something. See BridgeTab: a
+  // listing is repeated once per tab into a model's context, and false flags
+  // were most of what it carried.
+  if (tab.lastAccessed !== undefined && tab.lastAccessed > 0) {
+    bridgeTab.lastAccessed = tab.lastAccessed;
+  }
+  if (tab.discarded === true) bridgeTab.discarded = true;
+  if (tab.pinned) bridgeTab.pinned = true;
+  if (tab.active) bridgeTab.active = true;
+  // Chrome has no `tab.hidden` at all, so there it is never a signal either way.
+  if (!IS_CHROME && tab.hidden === true) bridgeTab.hidden = true;
   return bridgeTab;
 }
 
@@ -434,12 +439,13 @@ export class BridgeMethodRunner {
       params.scope === "current-window"
         ? await browser.tabs.query({ currentWindow: true })
         : await queryAllTabs();
-    const mapped = tabs
-      .map(toBridgeTab)
-      .filter((t): t is BridgeTab => t !== null)
-      .filter((t) => params.includeHidden || t.hidden !== true);
-    mapped.sort((a, b) => a.windowId - b.windowId || a.index - b.index);
-    return { tabs: mapped };
+    const mapped = tabs.map(toBridgeTab).filter((t): t is BridgeTab => t !== null);
+    // `groupBy` counts every match, so truncating here would corrupt the counts.
+    // Gullet does the grouping, over every browser at once — and the full list
+    // crossing loopback costs nothing, unlike the same list crossing into a
+    // model's context, which is the only budget any of this is protecting.
+    const limit = params.groupBy === undefined ? params.limit : Number.POSITIVE_INFINITY;
+    return selectTabs(mapped, { ...params, limit });
   }
 
   /**
