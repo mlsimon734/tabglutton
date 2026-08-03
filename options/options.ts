@@ -126,11 +126,13 @@ async function save(): Promise<void> {
     bridgeAllowTabLoad: bridgeAllowTabLoad.checked,
     bridgePortMode,
     bridgePort: parsePort(bridgePort.value),
-    // Only ever written when we have one. The field is readonly and Generate is
-    // the sole way to set it, so an empty value means "not populated", never
-    // "the user cleared it" — and writing it back would silently revoke the
-    // sidecar's access.
-    ...(bridgeToken.value ? { bridgeToken: bridgeToken.value } : {}),
+    // Still only written when we have one, now that the field is editable. An
+    // empty box is ambiguous — mid-paste, or selected-and-deleted on the way to
+    // typing — and persisting it would revoke the sidecar's access for what is
+    // usually a keystroke rather than a decision. Turning the bridge off is the
+    // toggle above; replacing the token is Generate or a paste. Neither needs
+    // "empty" to mean anything.
+    ...(bridgeToken.value.trim() ? { bridgeToken: bridgeToken.value.trim() } : {}),
   });
   flashStatus("Saved");
 }
@@ -213,6 +215,23 @@ bridgeTokenGenerate.addEventListener("click", () => {
   void save();
 });
 
+// Typing updates the snippet but does not persist. Every write of `bridgeToken`
+// is a revocation — the handshake pins the token it proved, so a live socket
+// drops — and saving per keystroke would tear the bridge down once per character
+// while someone pastes or types one in. `change` fires on blur or Enter, which is
+// when the value is actually meant.
+bridgeToken.addEventListener("input", updateBridgeSnippet);
+bridgeToken.addEventListener("change", () => {
+  // Trimmed because the common way to get a token here is a paste, and a copied
+  // secret routinely arrives with a trailing newline or a stray space. That would
+  // otherwise be a token that looks identical to the one in the sidecar's config
+  // and silently fails every handshake.
+  const trimmed = bridgeToken.value.trim();
+  if (trimmed !== bridgeToken.value) bridgeToken.value = trimmed;
+  updateBridgeSnippet();
+  void save();
+});
+
 // The token stays masked unless asked for. Copy works either way, so revealing
 // it is only ever needed to eyeball one against a config file.
 //
@@ -267,7 +286,7 @@ async function copyText(text: string, okMessage: string): Promise<void> {
  */
 function bridgeSnippetText(masked: boolean): string {
   const port = parsePort(bridgePort.value);
-  const real = bridgeToken.value || "<generate a token above>";
+  const real = bridgeToken.value || "<generate or paste a token above>";
   const token = masked && bridgeToken.value ? "•".repeat(24) : real;
   // Named "tabglutton" rather than "gullet": this key becomes the tool
   // namespace the agent sees, and users know the product by one name.

@@ -289,26 +289,30 @@ the old agent session is the upgrade path.
 - The options-page config snippet omits the port in automatic mode and includes the numeric
   flag only in fixed mode.
 
-▸ **"Connected on 20317" and "no browser is connected" are both true when tokens split.**
-Observed live: an agent session started before a token change held 4589 with the old token;
-a session started after it could not peer with that hub — a mismatched token must never be
-handed a proof — so it bound 20317, and the browser attached to whichever it found first.
-Everything behaved as designed, and the user saw a lit badge naming a port while every tool
-call insisted nothing was attached. That pair reads as a broken bridge, and cost real time
-to unpick.
+▸ **"Connected on \<port\>" and "no browser is connected" can both be true at once.** When
+the token changes while an older agent session is still running, the two sidecars are in
+different realms: the newer one cannot peer with the older hub — a mismatched token must
+never be handed a proof — so it binds a different candidate, and the browser attaches to
+whichever realm it finds first. If that is the older one, the extension's badge reports a
+healthy connection on a real port while every tool call in the new session insists nothing
+is attached. Every component behaves exactly as designed and the pair of facts still reads
+as a broken bridge. Observed live; it cost real time to unpick.
 
-The election already knew: `tryExistingHub` records a compatible-marker port it could not
-join. `Backend.rivalHubs()` now re-probes candidates on the "no browser" path — live rather
-than from those observations, since a rival can appear long after settling — and the tool
-error names the port and points at the token. It is best-effort by construction: a throw in
-the diagnosis must never replace the error it was explaining.
+The election already knew: `tryExistingHub` records a compatible-marker candidate it could
+not join. `Backend.rivalHubs()` now re-probes the candidates on the "no browser" path —
+live rather than from those recorded observations, since a rival can appear long after we
+settled — and the tool error names the endpoint it found and points at the token as the
+reason two sidecars did not merge. Best-effort by construction: a throw inside the
+diagnosis must never replace the error it was explaining.
 
 **A normal extension update does not cause this.** `bridgeToken` is minted only by an
-explicit click in the options page (default `""`, never auto-regenerated) and `bridgeLastPort`
-is written to `storage.local` and put first by `orderedBridgePortCandidates` on the next
-start — both survive an update. Only an _uninstall_ clears `storage.local`, which is what
-happened here: a delete-and-reinstall regenerated the token, and the new token was what split
-the realms. Worth stating because the port moving looks like update fragility and is not.
+explicit action in the options page (default `""`, never auto-regenerated) and
+`bridgeLastPort` is written to `storage.local` and put first by
+`orderedBridgePortCandidates` on the next start — both survive an update. Only an
+_uninstall_ clears `storage.local`. That is the path that produced this: a
+delete-and-reinstall regenerated the token, and the new token, not the reinstall, is what
+split the realms. Worth stating because the endpoint moving looks like update fragility and
+is not.
 
 A filesystem rendezvous file is not part of this design. Gullet, Claude, and Codex could all
 read one, but a WebExtension cannot read an arbitrary config directory. Such a file may be
