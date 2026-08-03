@@ -372,23 +372,27 @@ async function tabsList(
     return { ...head, ...groupTabsByDomain(filterTabs(merged, listParams), listParams.limit) };
   }
   const selected = selectTabs(merged, listParams);
-  // Ids only mean something inside one browser, so every tab needs its origin
-  // whenever more than one browser was targeted. Even if only one browser
-  // returned matches, tab-scoped calls still refuse to guess between all the
-  // connected targets named above. connectionId rather than the label, because
-  // labels are self-reported and two can share one.
+  // Window ids collide across browsers — two can each call their window `1` —
+  // so one is only worth hoisting when a single browser actually contributed.
   const contributors = perBrowser.filter((r) => r.tabs.length > 0).length;
-  const needsOrigins = targets.length > 1;
   // Rendering happens here and only here — after every filter has seen the whole
   // strings. renderTabs preserves order one-for-one, which is what lets the
   // origin lookup stay keyed on the tabs that went in.
   const view = renderTabs(selected.tabs, { hoistWindow: contributors <= 1 });
-  const tabs = needsOrigins
-    ? view.tabs.map((tab, i) => ({
-        ...tab,
-        connectionId: origin.get(selected.tabs[i] as BridgeTab)?.connectionId,
-      }))
-    : view.tabs;
+  // Ids only mean something inside one browser, so every tab needs its origin
+  // whenever more than one was targeted: the listing merged those id spaces
+  // even if only one of them came back with matches. Targeted, not
+  // `contributors` — the follow-up tab-scoped call has to name a browser either
+  // way, and the tabs from the one browser that answered are exactly the ids it
+  // will name it for. connectionId rather than the label, because labels are
+  // self-reported and two can share one.
+  const tabs =
+    targets.length > 1
+      ? view.tabs.map((tab, i) => ({
+          ...tab,
+          connectionId: origin.get(selected.tabs[i] as BridgeTab)?.connectionId,
+        }))
+      : view.tabs;
   // Per browser: its own `matched` when it filtered, otherwise what our filter
   // made of everything it sent. Mixing the two is normal — one browser can be
   // newer than the other — so this is resolved per connection and then summed,

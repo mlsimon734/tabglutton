@@ -389,6 +389,15 @@ silently lose tabs when talking to a new extension, while an old extension would
 vault and file into the configured destination. The handshake rejects both mixed-version
 pairings instead of allowing either call to appear successful with the wrong result.
 
+The bump is not the default for a new field, and the test is whether the other end ignoring
+it produces a _wrong_ answer or merely a less precise one. `matched` and `query` are
+tolerated across versions precisely because an extension that ignores them costs nothing
+the sidecar cannot recompute from what it did send — `tabsList` recomputes both. A missing
+`limit` returns tabs that were silently dropped, and a missing `vault` files a clip
+somewhere the caller did not ask for; neither is recoverable downstream, and both are
+reported as success. Recoverable skew is tolerated; a confidently wrong result forces a
+bump.
+
 ▸ **The token is not sent.** The sketch had the extension put its token in the hello and
 the sidecar echo it back, which proves nothing in the return direction. Instead each side
 proves it knows the token by hashing it against a nonce the _other_ side chose:
