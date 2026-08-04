@@ -84,7 +84,7 @@ describe("createClipVerifier", () => {
       ...fakeClock(),
       ...vaultWith({ "Note.md": SINCE + 50 }),
     });
-    expect(await verify("test", "Clippings/Note", SINCE)).toBe("landed");
+    expect(await verify("test", "Clippings/Note", { since: SINCE })).toBe("landed");
   });
 
   // Obsidian never overwrites: a second clip of the same page lands as "Note 1.md".
@@ -94,7 +94,7 @@ describe("createClipVerifier", () => {
       ...fakeClock(),
       ...vaultWith({ "Note.md": SINCE - 60_000, "Note 1.md": SINCE + 40 }),
     });
-    expect(await verify("test", "Clippings/Note", SINCE)).toBe("landed");
+    expect(await verify("test", "Clippings/Note", { since: SINCE })).toBe("landed");
   });
 
   test("landed when Obsidian writes a moment late, without waiting the full deadline", async () => {
@@ -104,7 +104,7 @@ describe("createClipVerifier", () => {
       readDir: async () => ["Note.md"],
       modifiedAt: async () => (++calls >= 3 ? SINCE + 10 : null),
     });
-    expect(await verify("test", "Clippings/Note", SINCE)).toBe("landed");
+    expect(await verify("test", "Clippings/Note", { since: SINCE })).toBe("landed");
     expect(calls).toBe(3);
   });
 
@@ -115,7 +115,7 @@ describe("createClipVerifier", () => {
       ...fakeClock(),
       ...vaultWith({ "Note.md": SINCE - 60_000, "Note 1.md": SINCE - 30_000 }),
     });
-    expect(await verify("test", "Clippings/Note", SINCE)).toBe("missing");
+    expect(await verify("test", "Clippings/Note", { since: SINCE })).toBe("missing");
   });
 
   test("landed when the note is barely older than our timestamp, within slack", async () => {
@@ -123,12 +123,12 @@ describe("createClipVerifier", () => {
       ...fakeClock(),
       ...vaultWith({ "Note.md": SINCE - 500 }),
     });
-    expect(await verify("test", "Clippings/Note", SINCE)).toBe("landed");
+    expect(await verify("test", "Clippings/Note", { since: SINCE })).toBe("landed");
   });
 
   test("missing once the deadline passes with nothing written", async () => {
     const verify = createClipVerifier(vaults, { ...fakeClock(), ...vaultWith({}) });
-    expect(await verify("test", "Clippings/Note", SINCE)).toBe("missing");
+    expect(await verify("test", "Clippings/Note", { since: SINCE })).toBe("missing");
   });
 
   test("a fresh note by another name does not vouch for this clip", async () => {
@@ -136,13 +136,13 @@ describe("createClipVerifier", () => {
       ...fakeClock(),
       ...vaultWith({ "Something Else.md": SINCE + 100 }),
     });
-    expect(await verify("test", "Clippings/Note", SINCE)).toBe("missing");
+    expect(await verify("test", "Clippings/Note", { since: SINCE })).toBe("missing");
   });
 
   // The soft contract: inability to check is never a failed clip.
   test("unknown when the registry cannot be read", async () => {
     const verify = createClipVerifier(async () => null, { ...fakeClock(), ...vaultWith({}) });
-    expect(await verify("test", "Clippings/Note", SINCE)).toBe("unknown");
+    expect(await verify("test", "Clippings/Note", { since: SINCE })).toBe("unknown");
   });
 
   test("unknown when the registry throws", async () => {
@@ -152,12 +152,12 @@ describe("createClipVerifier", () => {
       },
       { ...fakeClock(), ...vaultWith({}) },
     );
-    expect(await verify("test", "Clippings/Note", SINCE)).toBe("unknown");
+    expect(await verify("test", "Clippings/Note", { since: SINCE })).toBe("unknown");
   });
 
   test("unknown when the registry does not name that vault", async () => {
     const verify = createClipVerifier(vaults, { ...fakeClock(), ...vaultWith({}) });
-    expect(await verify("Some Other Vault", "Clippings/Note", SINCE)).toBe("unknown");
+    expect(await verify("Some Other Vault", "Clippings/Note", { since: SINCE })).toBe("unknown");
   });
 
   // A folder that exists but cannot be listed is "cannot check", not "not written".
@@ -167,7 +167,7 @@ describe("createClipVerifier", () => {
       readDir: async () => "unreadable",
       modifiedAt: async () => null,
     });
-    expect(await verify("test", "Clippings/Note", SINCE)).toBe("unknown");
+    expect(await verify("test", "Clippings/Note", { since: SINCE })).toBe("unknown");
   });
 
   // The same failure one level down: listable folder, unstattable note.
@@ -177,7 +177,7 @@ describe("createClipVerifier", () => {
       readDir: async () => ["Note.md"],
       modifiedAt: async () => "unreadable",
     });
-    expect(await verify("test", "Clippings/Note", SINCE)).toBe("unknown");
+    expect(await verify("test", "Clippings/Note", { since: SINCE })).toBe("unknown");
   });
 
   // But a folder Obsidian never created means the clip genuinely did not land.
@@ -187,7 +187,7 @@ describe("createClipVerifier", () => {
       readDir: async () => "missing",
       modifiedAt: async () => null,
     });
-    expect(await verify("test", "Clippings/Note", SINCE)).toBe("missing");
+    expect(await verify("test", "Clippings/Note", { since: SINCE })).toBe("missing");
   });
 
   // Two pages with the same title clipped at once produce one requested name.
@@ -199,8 +199,8 @@ describe("createClipVerifier", () => {
       ...vaultWith({ "Note.md": SINCE + 50 }),
     });
     const [first, second] = await Promise.all([
-      verify("test", "Clippings/Note", SINCE),
-      verify("test", "Clippings/Note", SINCE),
+      verify("test", "Clippings/Note", { since: SINCE }),
+      verify("test", "Clippings/Note", { since: SINCE }),
     ]);
     expect([first, second].sort()).toEqual(["landed", "missing"]);
   });
@@ -217,11 +217,96 @@ describe("createClipVerifier", () => {
     });
     // Clip A is dropped and looks first; clip B is the one Obsidian filed.
     const [a, b] = await Promise.all([
-      verify("test", "Clippings/Note", SINCE, "https://a.example/post"),
-      verify("test", "Clippings/Note", SINCE, "https://b.example/post"),
+      verify("test", "Clippings/Note", { since: SINCE, sourceUrl: "https://a.example/post" }),
+      verify("test", "Clippings/Note", { since: SINCE, sourceUrl: "https://b.example/post" }),
     ]);
     expect(a).toBe("missing");
     expect(b).toBe("landed");
+  });
+
+  // The residual the source-URL check could not close: two clips of the SAME
+  // page, from separate processes with separate claim maps, one dropped. Both
+  // notes would name the same source, so only the text tells them apart.
+  test("a content hash separates two clips of the same page across processes", async () => {
+    const options = {
+      ...vaultWith({ "Note.md": SINCE + 50 }),
+      readNote: async () => "the note B wrote",
+      hashNote: async (content: string) => `hash:${content}`,
+    };
+    // Separate verifiers, as two Gullet processes would have.
+    const a = createClipVerifier(vaults, { ...fakeClock(), ...options });
+    const b = createClipVerifier(vaults, { ...fakeClock(), ...options });
+    const evidence = { since: SINCE, sourceUrl: "https://a.example/post" };
+    expect(
+      await a("test", "Clippings/Note", { ...evidence, contentHash: "hash:the note A wrote" }),
+    ).toBe("mismatched");
+    expect(
+      await b("test", "Clippings/Note", { ...evidence, contentHash: "hash:the note B wrote" }),
+    ).toBe("landed");
+  });
+
+  // Obsidian creates the note and fills it a beat later — measured live in both
+  // real vaults. Without this the empty file has no parseable source, falls
+  // through as "mine", and vouches for a clip whose text is not there yet.
+  test("an empty note is the write window, not a landed clip", async () => {
+    let reads = 0;
+    const verify = createClipVerifier(vaults, {
+      ...fakeClock(),
+      ...vaultWith({ "Note.md": SINCE + 50 }),
+      readNote: async () => (++reads >= 3 ? clipNote("https://a.example/post") : ""),
+    });
+    expect(
+      await verify("test", "Clippings/Note", { since: SINCE, sourceUrl: "https://a.example/post" }),
+    ).toBe("landed");
+    expect(reads).toBe(3); // it kept polling rather than accepting the empty file
+  });
+
+  // Distinguishing the two failures matters: "nothing was written" and "someone
+  // wrote this and it is not ours" call for different actions from the user.
+  test("reports mismatched, not missing, when a note for this page is foreign", async () => {
+    const verify = createClipVerifier(vaults, {
+      ...fakeClock(),
+      ...vaultWith({ "Note.md": SINCE + 50 }),
+      readNote: async () => clipNote("https://a.example/post"),
+      hashNote: async () => "some other hash",
+    });
+    expect(
+      await verify("test", "Clippings/Note", {
+        since: SINCE,
+        sourceUrl: "https://a.example/post",
+        contentHash: "ours",
+      }),
+    ).toBe("mismatched");
+  });
+
+  // But a note for a *different* page says nothing about ours either way, so it
+  // must not colour the verdict — that is still a plain missing.
+  test("a same-named note for another page leaves the verdict missing", async () => {
+    const verify = createClipVerifier(vaults, {
+      ...fakeClock(),
+      ...vaultWith({ "Note.md": SINCE + 50 }),
+      readNote: async () => clipNote("https://elsewhere.example/post"),
+      hashNote: async () => "some other hash",
+    });
+    expect(
+      await verify("test", "Clippings/Note", {
+        since: SINCE,
+        sourceUrl: "https://a.example/post",
+        contentHash: "ours",
+      }),
+    ).toBe("missing");
+  });
+
+  // An extension that predates the hash still gets the source-URL attribution.
+  test("falls back to source attribution when no hash is supplied", async () => {
+    const verify = createClipVerifier(vaults, {
+      ...fakeClock(),
+      ...vaultWith({ "Note.md": SINCE + 50 }),
+      readNote: async () => clipNote("https://a.example/post"),
+    });
+    expect(
+      await verify("test", "Clippings/Note", { since: SINCE, sourceUrl: "https://a.example/post" }),
+    ).toBe("landed");
   });
 
   // Two Gullets sharing a browser keep separate claim maps, so attribution has
@@ -233,9 +318,12 @@ describe("createClipVerifier", () => {
       ...vaultWith({ "Note.md": SINCE + 50 }),
       readNote: async () => clipNote("https://elsewhere.example/post"),
     });
-    expect(await verify("test", "Clippings/Note", SINCE, "https://mine.example/post")).toBe(
-      "missing",
-    );
+    expect(
+      await verify("test", "Clippings/Note", {
+        since: SINCE,
+        sourceUrl: "https://mine.example/post",
+      }),
+    ).toBe("missing");
   });
 
   // A scroll-to-text fragment addresses a position in a page, not a page, and
@@ -247,7 +335,7 @@ describe("createClipVerifier", () => {
       readNote: async () => clipNote("https://a.example/post"),
     });
     const url = "https://a.example/post#:~:text=selected%20words";
-    expect(await verify("test", "Clippings/Note", SINCE, url)).toBe("landed");
+    expect(await verify("test", "Clippings/Note", { since: SINCE, sourceUrl: url })).toBe("landed");
   });
 
   // Positive disagreement disqualifies; absence of evidence must not. A note
@@ -259,7 +347,9 @@ describe("createClipVerifier", () => {
       ...vaultWith({ "Note.md": SINCE + 50 }),
       readNote: async () => "just some text",
     });
-    expect(await verify("test", "Clippings/Note", SINCE, "https://a.example/post")).toBe("landed");
+    expect(
+      await verify("test", "Clippings/Note", { since: SINCE, sourceUrl: "https://a.example/post" }),
+    ).toBe("landed");
   });
 
   test("unknown when a candidate note cannot be read", async () => {
@@ -268,7 +358,9 @@ describe("createClipVerifier", () => {
       ...vaultWith({ "Note.md": SINCE + 50 }),
       readNote: async () => "unreadable",
     });
-    expect(await verify("test", "Clippings/Note", SINCE, "https://a.example/post")).toBe("unknown");
+    expect(
+      await verify("test", "Clippings/Note", { since: SINCE, sourceUrl: "https://a.example/post" }),
+    ).toBe("unknown");
   });
 
   // Both really landed: Obsidian sidesteps the collision, so there are two notes
@@ -279,8 +371,8 @@ describe("createClipVerifier", () => {
       ...vaultWith({ "Note.md": SINCE + 50, "Note 1.md": SINCE + 60 }),
     });
     const verdicts = await Promise.all([
-      verify("test", "Clippings/Note", SINCE),
-      verify("test", "Clippings/Note", SINCE),
+      verify("test", "Clippings/Note", { since: SINCE }),
+      verify("test", "Clippings/Note", { since: SINCE }),
     ]);
     expect(verdicts).toEqual(["landed", "landed"]);
   });
@@ -295,8 +387,8 @@ describe("createClipVerifier", () => {
       modifiedAt: async (p): Promise<FileTime> =>
         mtimes[p.slice("/vaults/test/Clippings/".length)] ?? null,
     });
-    expect(await verify("test", "Clippings/Note", SINCE)).toBe("landed");
+    expect(await verify("test", "Clippings/Note", { since: SINCE })).toBe("landed");
     mtimes["Note.md"] = SINCE + 500;
-    expect(await verify("test", "Clippings/Note", SINCE + 400)).toBe("landed");
+    expect(await verify("test", "Clippings/Note", { since: SINCE + 400 })).toBe("landed");
   });
 });

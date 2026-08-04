@@ -396,6 +396,46 @@ describe("tab-scoped tools", () => {
     expect(sent).toEqual([]);
   });
 
+  // A note that exists but is not ours is a different story from nothing being
+  // written, and the message has to tell the user which one they are in.
+  test("tab_clip distinguishes a foreign note from a missing one", async () => {
+    const { call, sent } = caller([zen], () => ({ file: "Clippings/Note", vault: "test" }), {
+      verifyClip: async () => "mismatched",
+    });
+    const result = await call("tab_clip", { tabId: 7, close: true });
+    expect(result.isError).toBe(true);
+    const text = JSON.stringify(payload(result));
+    expect(text).toContain("its text is not what was handed over");
+    expect(text).not.toContain("never reached Obsidian");
+    expect(sent).toHaveLength(1); // nothing closed
+  });
+
+  // The evidence the extension supplies has to reach the verifier, or the whole
+  // attribution chain is silently freshness-only.
+  test("tab_clip hands the verifier the clip's own url and content hash", async () => {
+    let evidence: unknown;
+    const { call } = caller(
+      [zen],
+      () => ({
+        file: "Clippings/Note",
+        vault: "test",
+        url: "https://example.com/post",
+        contentHash: "abc123",
+      }),
+      {
+        verifyClip: async (_vault, _file, seen) => {
+          evidence = seen;
+          return "landed";
+        },
+      },
+    );
+    await call("tab_clip", { tabId: 7 });
+    expect(evidence).toMatchObject({
+      sourceUrl: "https://example.com/post",
+      contentHash: "abc123",
+    });
+  });
+
   test("tab_clip without close reports whether the note was verified", async () => {
     const { call, sent } = caller([zen], () => ({ file: "Clippings/Note", vault: "test" }), {
       verifyClip: async () => "landed",

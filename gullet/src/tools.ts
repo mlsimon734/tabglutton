@@ -361,7 +361,10 @@ async function clipAndVerify(
   // the one thing a timestamp cannot do. Absent, verification is freshness-only,
   // as it was.
   const sourceUrl = typeof result.url === "string" ? result.url : undefined;
-  const verdict = await ctx.verifyClip(vault, file, startedAt, sourceUrl);
+  // The extension's own digest of what it handed Obsidian. Absent from older
+  // extensions, and then attribution falls back to the page's URL.
+  const contentHash = typeof result.contentHash === "string" ? result.contentHash : undefined;
+  const verdict = await ctx.verifyClip(vault, file, { since: startedAt, sourceUrl, contentHash });
   if (verdict === "missing") {
     throw new BridgeRequestError(
       "not-enabled",
@@ -371,6 +374,18 @@ async function clipAndVerify(
         `network.protocol-handler.external.obsidian to true and ` +
         `network.protocol-handler.warn-external.obsidian to false in about:config, ` +
         `and to confirm Obsidian's one-time "trust this source" prompt.`,
+    );
+  }
+  if (verdict === "mismatched") {
+    throw new BridgeRequestError(
+      "not-enabled",
+      `The clip may not have reached Obsidian: a note for this page is at ` +
+        `${JSON.stringify(file)} in vault ${JSON.stringify(vault)}, but its text is not what ` +
+        `was handed over, so it cannot be confirmed as this clip. The tab was left open. ` +
+        `Either another session filed the same page while this handoff was dropped — in which ` +
+        `case the page is safely filed and the tab can be closed by hand — or something in ` +
+        `the vault rewrites notes when they are created, which would make every clip report ` +
+        `this. If it is every clip, that is worth reporting as a bug.`,
     );
   }
 

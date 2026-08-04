@@ -10,7 +10,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { markdownForClip, type ClipPayload } from "../src/clip-format.js";
-import { noteSourceUrl } from "../gullet/src/clip-verify.js";
+import { clipContentHash, noteSourceUrl } from "../gullet/src/clip-verify.js";
 
 function payload(overrides: Partial<ClipPayload> = {}): ClipPayload {
   return {
@@ -47,5 +47,35 @@ describe("frontmatter source, as Gullet reads it", () => {
   test("survives a title that itself contains quotes", () => {
     const note = markdownForClip(payload({ title: 'The "Best" Post' }));
     expect(noteSourceUrl(note)).toBe("https://example.com/post");
+  });
+});
+
+/**
+ * The other cross-boundary coupling: the extension hashes with WebCrypto in the
+ * browser, Gullet with Bun's hasher on the filesystem side, and a clip is
+ * attributed by those two agreeing. Nothing else would catch them diverging —
+ * over an encoding, a digest, or a hex-vs-base64 change — and the symptom would
+ * be every clip reported as unconfirmed.
+ */
+describe("content hash, across the extension/sidecar boundary", () => {
+  async function webCryptoSha256Hex(text: string): Promise<string> {
+    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+    return Array.from(new Uint8Array(digest))
+      .map((byte) => byte.toString(16).padStart(2, "0"))
+      .join("");
+  }
+
+  test("the browser's digest of a clip matches the one Gullet takes of the file", async () => {
+    const note = markdownForClip(payload());
+    expect(await clipContentHash(note)).toBe(await webCryptoSha256Hex(note));
+  });
+
+  // Non-ASCII is where an encoding mismatch would surface — a real clip is full
+  // of it (em dashes, smart quotes, emoji).
+  test("agrees on text well outside ASCII", async () => {
+    const note = markdownForClip(
+      payload({ title: "Ünïcödé — 🐊 “smart” quotes", markdown: "Ünïcödé body 🐊" }),
+    );
+    expect(await clipContentHash(note)).toBe(await webCryptoSha256Hex(note));
   });
 });
