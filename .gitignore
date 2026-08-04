@@ -5,9 +5,10 @@ dist-firefox/
 dist-chrome/
 .DS_Store
 *.log
-.dev-profile/
-.dev-profile-firefox/
-.dev-profile-chrome/
+# Dev browser profiles. Wildcard rather than one line per profile: these carry
+# the bridge token in extension storage, and a profile added later must not be
+# one `git add -A` away from committing it.
+.dev-profile*/
 .claude/settings.local.json
 .claude/skills/
 .agents/
