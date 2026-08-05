@@ -10,6 +10,10 @@
 
 import { describe, expect, test } from "bun:test";
 import { markdownForClip, type ClipPayload } from "../src/clip-format.js";
+// The production extension-side helper, imported rather than re-implemented: a
+// local copy would only prove Bun agrees with the test, leaving the suite green
+// through exactly the drift it exists to catch.
+import { clipContentHash as extensionClipHash } from "../src/clip-hash.js";
 import { clipContentHash, noteSourceUrl } from "../gullet/src/clip-verify.js";
 
 function payload(overrides: Partial<ClipPayload> = {}): ClipPayload {
@@ -58,16 +62,9 @@ describe("frontmatter source, as Gullet reads it", () => {
  * be every clip reported as unconfirmed.
  */
 describe("content hash, across the extension/sidecar boundary", () => {
-  async function webCryptoSha256Hex(text: string): Promise<string> {
-    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
-    return Array.from(new Uint8Array(digest))
-      .map((byte) => byte.toString(16).padStart(2, "0"))
-      .join("");
-  }
-
   test("the browser's digest of a clip matches the one Gullet takes of the file", async () => {
     const note = markdownForClip(payload());
-    expect(await clipContentHash(note)).toBe(await webCryptoSha256Hex(note));
+    expect(await clipContentHash(note)).toBe(await extensionClipHash(note));
   });
 
   // Non-ASCII is where an encoding mismatch would surface — a real clip is full
@@ -76,6 +73,24 @@ describe("content hash, across the extension/sidecar boundary", () => {
     const note = markdownForClip(
       payload({ title: "Ünïcödé — 🐊 “smart” quotes", markdown: "Ünïcödé body 🐊" }),
     );
-    expect(await clipContentHash(note)).toBe(await webCryptoSha256Hex(note));
+    expect(await clipContentHash(note)).toBe(await extensionClipHash(note));
+  });
+
+  // The Windows clipboard route: the extension hashes the LF text it composed,
+  // but plain text crosses the OS clipboard as CF_UNICODETEXT with CRLF, so the
+  // note Obsidian writes has endings the extension never produced. Unnormalized,
+  // that is every clip on Windows reported as `mismatched` with its close undone.
+  test("a CRLF note on disk still hashes to the LF clip that produced it", async () => {
+    const note = markdownForClip(payload({ markdown: "First line.\n\nSecond line." }));
+    const asWindowsWroteIt = note.replaceAll("\n", "\r\n");
+    expect(asWindowsWroteIt).not.toBe(note);
+    expect(await clipContentHash(asWindowsWroteIt)).toBe(await extensionClipHash(note));
+  });
+
+  // The weakening stops there: line endings are transport, anything else is not.
+  test("still tells two clips apart by their text", async () => {
+    const a = markdownForClip(payload({ markdown: "Body." }));
+    const b = markdownForClip(payload({ markdown: "Body!" }));
+    expect(await clipContentHash(a)).not.toBe(await extensionClipHash(b));
   });
 });

@@ -7,6 +7,7 @@
 // scripting beyond the existing Defuddle clipper, and every close is logged
 // before it happens.
 
+import { clipContentHash } from "./clip-hash.js";
 import { markdownForClip, OBSIDIAN_HANDOFF_GAP_MS, resolveClipRequest } from "./clip-format.js";
 import type { ClipPayload } from "./clip-format.js";
 import {
@@ -58,21 +59,6 @@ const STALE_ID_HINT =
   "It may have been closed, or unloaded and given a new id (Chrome does this when it discards a tab). Re-run tabs_list for current ids.";
 
 /** The single place the hint is attached — throwing and per-tab paths alike. */
-/**
- * SHA-256 of a note's text, hex, as `TabClipResult.contentHash`.
- *
- * The extension cannot check whether Obsidian took the handoff, but it can say
- * exactly what it handed over, and that is enough for a sidecar sitting beside
- * the vault to tell this clip's note from a concurrent clip of the same page.
- * `crypto.subtle` is available in both the event page and the service worker.
- */
-async function sha256Hex(text: string): Promise<string> {
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
-  return Array.from(new Uint8Array(digest))
-    .map((byte) => byte.toString(16).padStart(2, "0"))
-    .join("");
-}
-
 function missingTabReason(message: string): string {
   return `${message} ${STALE_ID_HINT}`;
 }
@@ -657,7 +643,7 @@ export class BridgeMethodRunner {
       url: payload.url,
       file,
       vault,
-      contentHash: await sha256Hex(content),
+      contentHash: await clipContentHash(content),
     };
     if (!params.close) return { ...filed, closed: false };
 

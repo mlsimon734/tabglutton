@@ -150,11 +150,19 @@ export function noteSourceUrl(content: string): string | null {
 }
 
 /**
- * SHA-256 of a note's text, hex — the same digest `bridge-methods.ts` takes of
- * what it handed Obsidian. Injectable only so tests need not hash real strings.
+ * SHA-256 of a note's text, hex — the same digest `src/clip-hash.ts` takes of
+ * what the extension handed Obsidian. Injectable only so tests need not hash
+ * real strings.
+ *
+ * CRLF is folded to LF for the same reason it is on the extension side, and it
+ * has to be folded on *both*: in clipboard clip mode the note's text reaches
+ * Obsidian through the OS clipboard, and Windows carries plain text as
+ * CF_UNICODETEXT with CRLF endings, so the bytes on disk are not the bytes that
+ * were hashed. Normalizing here is what keeps that path from reporting every
+ * landed clip as `mismatched`. `tests/clip-source.test.ts` pins the two halves.
  */
 export async function clipContentHash(content: string): Promise<string> {
-  return new Bun.CryptoHasher("sha256").update(content).digest("hex");
+  return new Bun.CryptoHasher("sha256").update(content.replaceAll("\r\n", "\n")).digest("hex");
 }
 
 /**
