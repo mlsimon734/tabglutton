@@ -16,6 +16,7 @@ import {
 } from "../src/storage.js";
 import { IS_CHROME } from "../src/target.js";
 import { vaultWarningFor } from "../src/vault-warning.js";
+import { DEFAULT_ZOTERO_CONNECTOR_ID } from "../src/zotero.js";
 
 const FALLBACK_SCOPE: ScopeMode = IS_CHROME ? "current-window" : "hidden-false";
 
@@ -28,6 +29,8 @@ const stripFragment = document.getElementById("stripFragment") as HTMLInputEleme
 const extraStripParams = document.getElementById("extraStripParams") as HTMLInputElement;
 const obsidianVault = document.getElementById("obsidianVault") as HTMLInputElement;
 const clippingsBaseFolder = document.getElementById("clippingsBaseFolder") as HTMLInputElement;
+const zoteroRoutingEnabled = document.getElementById("zoteroRoutingEnabled") as HTMLInputElement;
+const zoteroConnectorId = document.getElementById("zoteroConnectorId") as HTMLInputElement;
 const vaultWarning = document.getElementById("vaultWarning") as HTMLParagraphElement;
 const scopeRadios = document.querySelectorAll<HTMLInputElement>('input[name="scope"]');
 const clipModeRadios = document.querySelectorAll<HTMLInputElement>('input[name="clipMode"]');
@@ -73,6 +76,8 @@ async function load(): Promise<void> {
   extraStripParams.value = (settings.extraStripParams ?? []).join(", ");
   obsidianVault.value = settings.obsidianVault;
   clippingsBaseFolder.value = settings.clippingsBaseFolder;
+  zoteroRoutingEnabled.checked = settings.zoteroRoutingEnabled;
+  zoteroConnectorId.value = settings.zoteroConnectorId;
   updateVaultWarning();
   for (const radio of scopeRadios) {
     radio.checked = radio.value === settings.scope;
@@ -128,6 +133,8 @@ async function save(): Promise<void> {
     obsidianVault: obsidianVault.value.trim(),
     clippingsBaseFolder: clippingsBaseFolder.value.trim(),
     clipMode,
+    zoteroRoutingEnabled: zoteroRoutingEnabled.checked,
+    zoteroConnectorId: zoteroConnectorId.value.trim() || DEFAULT_ZOTERO_CONNECTOR_ID,
     optionsInTab: [...optionsInTabRadios].find((r) => r.checked)?.value !== "embedded",
     bridgeEnabled: bridgeEnabled.checked,
     bridgeAllowTabLoad: bridgeAllowTabLoad.checked,
@@ -171,6 +178,7 @@ function queueSave(): void {
 
 for (const el of [
   stripFragment,
+  zoteroRoutingEnabled,
   bridgeAllowTabLoad,
   ...scopeRadios,
   ...clipModeRadios,
@@ -201,6 +209,7 @@ obsidianVault.addEventListener("input", () => {
   queueSave();
 });
 clippingsBaseFolder.addEventListener("input", queueSave);
+zoteroConnectorId.addEventListener("input", queueSave);
 
 // ---------- agent bridge ----------
 

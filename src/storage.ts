@@ -1,6 +1,7 @@
 import { BRIDGE_PORT_CANDIDATES, DEFAULT_BRIDGE_PORT, isBridgePort } from "./bridge-protocol.js";
 import type { NormalizeOpts } from "./normalize.js";
 import { IS_CHROME } from "./target.js";
+import { DEFAULT_ZOTERO_CONNECTOR_ID } from "./zotero.js";
 
 export type ScopeMode = "hidden-false" | "current-window";
 export type ClipMode = "clipboard" | "legacy-uri";
@@ -14,6 +15,10 @@ export interface Settings {
   obsidianVault: string;
   clippingsBaseFolder: string;
   clipMode: ClipMode;
+  /** Route scholarly items detected by Zotero Connector there instead of Obsidian. */
+  zoteroRoutingEnabled: boolean;
+  /** Published Connector ID by default; overrideable for an unpacked POC build. */
+  zoteroConnectorId: string;
   /**
    * Whether Tabglutton's own settings buttons open the page in a full tab or
    * inside Firefox's Add-ons Manager. Firefox-only: the Chrome build ships
@@ -46,6 +51,8 @@ const DEFAULTS: Readonly<Settings> = Object.freeze({
   obsidianVault: "",
   clippingsBaseFolder: "Clippings",
   clipMode: "clipboard",
+  zoteroRoutingEnabled: false,
+  zoteroConnectorId: DEFAULT_ZOTERO_CONNECTOR_ID,
   optionsInTab: true,
   onboardingComplete: false,
   bridgeEnabled: false,

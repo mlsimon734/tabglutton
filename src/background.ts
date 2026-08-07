@@ -26,6 +26,7 @@ import {
   type Settings,
 } from "./storage.js";
 import { IS_CHROME } from "./target.js";
+import { getZoteroTabInfo, isAcademicZoteroTarget, saveTabToZotero } from "./zotero.js";
 
 export type GetScopedTabsMessage = { type: "get-scoped-tabs" };
 export type ClipSelectedTabsMessage = {
@@ -64,7 +65,11 @@ export interface BridgeStatusChangedMessage {
   port?: number;
 }
 
-export type ClipFailureReason = "extract-failed" | "trigger-failed";
+export type ClipFailureReason =
+  | "extract-failed"
+  | "trigger-failed"
+  | "vault-missing"
+  | "zotero-failed";
 
 export interface ClipFailure {
   tabId: number;
@@ -77,6 +82,8 @@ export interface ClipFailure {
 export interface ClipSelectedTabsResponse {
   succeeded: number;
   failed: number;
+  obsidianSaved: number;
+  zoteroSaved: number;
   vaultMissing?: boolean;
   failures: ClipFailure[];
 }
@@ -553,59 +560,162 @@ async function resolveTabMeta(tabId: number): Promise<{ title: string; url: stri
   }
 }
 
+type TabDestination =
+  | { kind: "obsidian" }
+  | { kind: "zotero" }
+  | { kind: "failed"; detail: string };
+
+const ZOTERO_DETECTION_ATTEMPTS = 8;
+const ZOTERO_DETECTION_RETRY_MS = 250;
+
+async function destinationForTab(tabId: number): Promise<TabDestination> {
+  if (!settings.zoteroRoutingEnabled) return { kind: "obsidian" };
+
+  try {
+    for (let attempt = 0; attempt < ZOTERO_DETECTION_ATTEMPTS; attempt += 1) {
+      const info = await getZoteroTabInfo(settings.zoteroConnectorId, tabId);
+      if (info.state === "ready") {
+        return isAcademicZoteroTarget(info) ? { kind: "zotero" } : { kind: "obsidian" };
+      }
+      if (attempt + 1 < ZOTERO_DETECTION_ATTEMPTS) {
+        await delay(ZOTERO_DETECTION_RETRY_MS);
+      }
+    }
+    return {
+      kind: "failed",
+      detail: "Zotero Connector did not finish detecting this tab.",
+    };
+  } catch (err) {
+    return { kind: "failed", detail: errorMessage(err) };
+  }
+}
+
 async function clipSelectedTabs(tabIds: number[]): Promise<ClipSelectedTabsResponse> {
   const vault = settings.obsidianVault.trim();
-  if (!vault) return { succeeded: 0, failed: 0, vaultMissing: true, failures: [] };
+  if (!vault && !settings.zoteroRoutingEnabled) {
+    return {
+      succeeded: 0,
+      failed: 0,
+      obsidianSaved: 0,
+      zoteroSaved: 0,
+      vaultMissing: true,
+      failures: [],
+    };
+  }
 
-  const metaEntries = await Promise.all(
-    tabIds.map(
-      async (tabId): Promise<[number, { title: string; url: string }]> => [
-        tabId,
-        await resolveTabMeta(tabId),
-      ],
+  const [metaEntries, destinationEntries] = await Promise.all([
+    Promise.all(
+      tabIds.map(
+        async (tabId): Promise<[number, { title: string; url: string }]> => [
+          tabId,
+          await resolveTabMeta(tabId),
+        ],
+      ),
     ),
-  );
+    Promise.all(
+      tabIds.map(
+        async (tabId): Promise<[number, TabDestination]> => [tabId, await destinationForTab(tabId)],
+      ),
+    ),
+  ]);
   const metaById = new Map(metaEntries);
   const metaOf = (tabId: number) => metaById.get(tabId) ?? { title: "", url: "" };
+  const destinationByTabId = new Map(destinationEntries);
+  const obsidianTabIds = tabIds.filter(
+    (tabId) => destinationByTabId.get(tabId)?.kind === "obsidian",
+  );
 
-  // Phase 1: wake + extract every tab in parallel. clipTab is concurrency-safe
+  // Phase 1: wake + extract only the Obsidian-bound tabs in parallel. Zotero
+  // already owns the page and its translator state, so routing a paper there
+  // needs neither Defuddle nor Tabglutton's host permission.
+  //
+  // clipTab is concurrency-safe
   // (per-tab onUpdated listener, unique requestId in pendingClips). The slow
   // step for discarded tabs is ensureTabReady's reload-and-wait, which is
   // overlapping I/O — running them in parallel turns N × 15s into ~max 15s.
   type ExtractOutcome = { kind: "ok"; res: ClipCurrentResponse } | { kind: "threw"; err: unknown };
-  const extractResults = await Promise.all(
-    tabIds.map(async (tabId): Promise<[number, ExtractOutcome]> => {
-      try {
-        return [tabId, { kind: "ok", res: await clipTab(tabId) }];
-      } catch (err) {
-        return [tabId, { kind: "threw", err }];
-      }
-    }),
-  );
+  const extractResults = vault
+    ? await Promise.all(
+        obsidianTabIds.map(async (tabId): Promise<[number, ExtractOutcome]> => {
+          try {
+            return [tabId, { kind: "ok", res: await clipTab(tabId) }];
+          } catch (err) {
+            return [tabId, { kind: "threw", err }];
+          }
+        }),
+      )
+    : [];
   const extractByTabId = new Map(extractResults);
 
-  // Phase 2: dispatch to Obsidian serially in selection order. clipMode
-  // defaults to "clipboard" (storage.ts), and the OS clipboard is global —
-  // parallel dispatches would clobber each other. The 200ms inter-dispatch
-  // delay also helps Obsidian's URI handler stay reliable.
+  // Phase 2: dispatch in selection order. Connector saves are serialized so
+  // progress/selection UI from two papers cannot race. Obsidian remains serial
+  // because clipboard mode uses the global OS clipboard; the 200ms gap also
+  // keeps its URI handler reliable.
   const total = tabIds.length;
   const broadcastProgress = (completed: number): void => {
     const msg: ClipProgressMessage = { type: "clip-progress", completed, total };
     browser.runtime.sendMessage(msg).catch(() => {});
   };
   broadcastProgress(0);
-  let succeeded = 0;
+  let obsidianSaved = 0;
+  let zoteroSaved = 0;
   const failures: ClipFailure[] = [];
   for (const [i, tabId] of tabIds.entries()) {
     try {
+      const destination = destinationByTabId.get(tabId);
+      const meta = metaOf(tabId);
+      if (!destination || destination.kind === "failed") {
+        failures.push({
+          tabId,
+          title: meta.title,
+          url: meta.url,
+          reason: "zotero-failed",
+          detail: destination?.detail ?? "Could not determine where to save this tab.",
+        });
+        continue;
+      }
+
+      if (destination.kind === "zotero") {
+        try {
+          await saveTabToZotero(settings.zoteroConnectorId, tabId);
+        } catch (err) {
+          failures.push({
+            tabId,
+            title: meta.title,
+            url: meta.url,
+            reason: "zotero-failed",
+            detail: errorMessage(err),
+          });
+          console.warn("[tabglutton] Zotero save failed for tab", tabId, err);
+          continue;
+        }
+        try {
+          await browser.tabs.remove(tabId);
+        } catch (err) {
+          console.warn("[tabglutton] close after Zotero save failed for tab", tabId, err);
+        }
+        zoteroSaved += 1;
+        continue;
+      }
+
+      if (!vault) {
+        failures.push({
+          tabId,
+          title: meta.title,
+          url: meta.url,
+          reason: "vault-missing",
+          detail: "This tab was not an academic Zotero item and no Obsidian vault is configured.",
+        });
+        continue;
+      }
+
       const outcome = extractByTabId.get(tabId);
       if (!outcome) continue;
       if (outcome.kind === "threw") {
-        const m = metaOf(tabId);
         failures.push({
           tabId,
-          title: m.title,
-          url: m.url,
+          title: meta.title,
+          url: meta.url,
           reason: "extract-failed",
           detail: errorMessage(outcome.err),
         });
@@ -614,11 +724,10 @@ async function clipSelectedTabs(tabIds: number[]): Promise<ClipSelectedTabsRespo
       }
       const res = outcome.res;
       if (!res.ok || !res.payload) {
-        const m = metaOf(tabId);
         failures.push({
           tabId,
-          title: m.title,
-          url: m.url,
+          title: meta.title,
+          url: meta.url,
           reason: "extract-failed",
           detail: res.error,
         });
@@ -651,11 +760,10 @@ async function clipSelectedTabs(tabIds: number[]): Promise<ClipSelectedTabsRespo
           },
         );
       } catch (err) {
-        const m = metaOf(tabId);
         failures.push({
           tabId,
-          title: res.payload.title || m.title,
-          url: res.payload.url || m.url,
+          title: res.payload.title || meta.title,
+          url: res.payload.url || meta.url,
           reason: "extract-failed",
           detail: errorMessage(err),
         });
@@ -683,12 +791,18 @@ async function clipSelectedTabs(tabIds: number[]): Promise<ClipSelectedTabsRespo
       } catch (err) {
         console.warn("[tabglutton] close failed for tab", tabId, err);
       }
-      succeeded += 1;
+      obsidianSaved += 1;
     } finally {
       broadcastProgress(i + 1);
     }
   }
-  return { succeeded, failed: failures.length, failures };
+  return {
+    succeeded: obsidianSaved + zoteroSaved,
+    failed: failures.length,
+    obsidianSaved,
+    zoteroSaved,
+    failures,
+  };
 }
 
 browser.runtime.onMessage.addListener(async (rawMsg: unknown): Promise<unknown> => {
