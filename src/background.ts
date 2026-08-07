@@ -571,23 +571,39 @@ const ZOTERO_DETECTION_RETRY_MS = 250;
 async function destinationForTab(tabId: number): Promise<TabDestination> {
   if (!settings.zoteroRoutingEnabled) return { kind: "obsidian" };
 
+  // The Connector's per-tab translator result only exists for a page whose
+  // content script has run, and Devour's normal workload is a backlog of
+  // discarded tabs. Asking before waking therefore never sees a translator: an
+  // arXiv tab in the backlog reports "detecting" (or a translator-less "ready")
+  // and is failed or silently sent to Obsidian instead of Zotero. Wake first —
+  // clipTab's own ensureTabReady returns immediately for the tabs that then go
+  // down the Obsidian path, so this costs nothing extra.
   try {
-    for (let attempt = 0; attempt < ZOTERO_DETECTION_ATTEMPTS; attempt += 1) {
+    await ensureTabReady(tabId, 15000);
+  } catch {
+    // Let the Obsidian path own a tab that will not load, so it is reported as
+    // an extract failure rather than as a Zotero one.
+    return { kind: "obsidian" };
+  }
+
+  // A throw is retried like a "detecting" answer: the Connector's MV3 service
+  // worker can be mid-suspend when a batch reaches it, and Chrome answers that
+  // race with "Could not establish connection", not with a real verdict.
+  let lastError = "Zotero Connector did not finish detecting this tab.";
+  for (let attempt = 0; attempt < ZOTERO_DETECTION_ATTEMPTS; attempt += 1) {
+    try {
       const info = await getZoteroTabInfo(settings.zoteroConnectorId, tabId);
       if (info.state === "ready") {
         return isAcademicZoteroTarget(info) ? { kind: "zotero" } : { kind: "obsidian" };
       }
-      if (attempt + 1 < ZOTERO_DETECTION_ATTEMPTS) {
-        await delay(ZOTERO_DETECTION_RETRY_MS);
-      }
+    } catch (err) {
+      lastError = errorMessage(err);
     }
-    return {
-      kind: "failed",
-      detail: "Zotero Connector did not finish detecting this tab.",
-    };
-  } catch (err) {
-    return { kind: "failed", detail: errorMessage(err) };
+    if (attempt + 1 < ZOTERO_DETECTION_ATTEMPTS) {
+      await delay(ZOTERO_DETECTION_RETRY_MS);
+    }
   }
+  return { kind: "failed", detail: lastError };
 }
 
 async function clipSelectedTabs(tabIds: number[]): Promise<ClipSelectedTabsResponse> {
@@ -625,9 +641,10 @@ async function clipSelectedTabs(tabIds: number[]): Promise<ClipSelectedTabsRespo
     (tabId) => destinationByTabId.get(tabId)?.kind === "obsidian",
   );
 
-  // Phase 1: wake + extract only the Obsidian-bound tabs in parallel. Zotero
-  // already owns the page and its translator state, so routing a paper there
-  // needs neither Defuddle nor Tabglutton's host permission.
+  // Phase 1: extract only the Obsidian-bound tabs in parallel (destination
+  // resolution above has already woken them). Zotero already owns the page and
+  // its translator state, so routing a paper there needs neither Defuddle nor
+  // Tabglutton's host permission.
   //
   // clipTab is concurrency-safe
   // (per-tab onUpdated listener, unique requestId in pendingClips). The slow
