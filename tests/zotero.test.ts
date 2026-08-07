@@ -5,7 +5,7 @@ function info(itemType?: string, isPDF = false): ZoteroTabInfo {
   return {
     state: "ready",
     isPDF,
-    ...(itemType ? { translator: { itemType, label: "Test translator" } } : {}),
+    ...(itemType ? { translator: { itemType } } : {}),
   };
 }
 

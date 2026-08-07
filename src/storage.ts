@@ -66,6 +66,20 @@ export function defaults(): Settings {
   return { ...DEFAULTS, extraStripParams: [...DEFAULTS.extraStripParams] };
 }
 
+/** Whether an Obsidian vault is configured — the Defuddle path needs one. */
+export function hasVault(settings: Settings | null): boolean {
+  return !!settings?.obsidianVault.trim();
+}
+
+/**
+ * Whether a clip has anywhere to go. Sole owner of that question: the popups
+ * gate their buttons on it and `clipSelectedTabs` refuses the whole request
+ * when it is false, and those must agree.
+ */
+export function hasClipDestination(settings: Settings | null): boolean {
+  return hasVault(settings) || !!settings?.zoteroRoutingEnabled;
+}
+
 export async function loadSettings(): Promise<Settings> {
   const stored = (await browser.storage.local.get(Object.keys(DEFAULTS))) as Partial<Settings>;
   const bridgePortMode = bridgePortModeFromStored(stored);

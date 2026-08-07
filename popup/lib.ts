@@ -1,4 +1,4 @@
-import type { PopupTab } from "../src/background.js";
+import type { ClipFailureReason, ClipSelectedTabsResponse, PopupTab } from "../src/background.js";
 import { normalizeUrl } from "../src/normalize.js";
 import { normalizeOptsFrom, type Settings } from "../src/storage.js";
 
@@ -115,6 +115,34 @@ export function computeDedupCount(scopedTabs: PopupTab[], settings: Settings | n
     if (n > 1) dups += n - 1;
   }
   return dups;
+}
+
+/** Both popups render the same failure vocabulary; keep them from drifting. */
+export function reasonLabel(reason: ClipFailureReason): string {
+  switch (reason) {
+    case "extract-failed":
+      return "extract failed";
+    case "trigger-failed":
+      return "open failed";
+    case "vault-missing":
+      return "vault missing";
+    case "zotero-failed":
+      return "Zotero failed";
+  }
+}
+
+/**
+ * "Saved 3 to Zotero, 1 to Obsidian". A destination is named only when it
+ * actually took something, so the common single-destination run stays short.
+ */
+export function clipSummary(res: ClipSelectedTabsResponse): string {
+  const saved =
+    res.zoteroSaved && res.obsidianSaved
+      ? `${res.zoteroSaved} to Zotero, ${res.obsidianSaved} to Obsidian`
+      : res.zoteroSaved
+        ? `${res.zoteroSaved} to Zotero`
+        : String(res.obsidianSaved);
+  return res.failed === 0 ? `Saved ${saved}` : `Saved ${saved}, ${res.failed} failed`;
 }
 
 export function selectedTabsInUiOrder(groups: DomainGroup[], selected: Set<number>): PopupTab[] {

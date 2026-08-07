@@ -1,6 +1,7 @@
+import { asRecord } from "./bridge-protocol.js";
 import { IS_CHROME } from "./target.js";
 
-export const ZOTERO_CONNECTOR_API_VERSION = 1;
+const ZOTERO_CONNECTOR_API_VERSION = 1;
 
 /**
  * The published Connector IDs. A locally loaded Chromium proof-of-concept gets
@@ -10,24 +11,11 @@ export const DEFAULT_ZOTERO_CONNECTOR_ID = IS_CHROME
   ? "ekhagklcjbdpajgpjgmbionohlpdbjgc"
   : "zotero@chnm.gmu.edu";
 
-export interface ZoteroTranslatorSummary {
-  itemType: string;
-  label: string;
-}
-
 export interface ZoteroTabInfo {
   state: "ready" | "detecting";
   isPDF: boolean;
-  translator?: ZoteroTranslatorSummary;
-}
-
-interface ZoteroExternalResponse {
-  ok?: unknown;
-  status?: unknown;
-  state?: unknown;
-  isPDF?: unknown;
-  translator?: unknown;
-  error?: unknown;
+  /** The Connector's top translator. Only its item type is a routing signal. */
+  translator?: { itemType: string };
 }
 
 const ACADEMIC_ITEM_TYPES = new Set([
@@ -54,50 +42,41 @@ export function isAcademicZoteroTarget(info: ZoteroTabInfo): boolean {
 }
 
 export async function getZoteroTabInfo(connectorId: string, tabId: number): Promise<ZoteroTabInfo> {
-  const response = (await browser.runtime.sendMessage(connectorId, {
-    action: "getTabInfo",
-    version: ZOTERO_CONNECTOR_API_VERSION,
-    tabId,
-  })) as ZoteroExternalResponse | undefined;
-
-  if (!response || response.ok !== true) {
+  const response = await callConnector(connectorId, "getTabInfo", tabId);
+  if (response.ok !== true) {
     throw new Error(responseError(response, "Zotero Connector did not return tab information."));
   }
   if (response.state !== "ready" && response.state !== "detecting") {
     throw new Error("Zotero Connector returned an invalid detection state.");
   }
 
-  const info: ZoteroTabInfo = {
-    state: response.state,
-    isPDF: response.isPDF === true,
-  };
-  if (response.translator !== undefined) {
-    if (!isTranslatorSummary(response.translator)) {
-      throw new Error("Zotero Connector returned invalid translator information.");
-    }
-    info.translator = response.translator;
-  }
+  const info: ZoteroTabInfo = { state: response.state, isPDF: response.isPDF === true };
+  const itemType = asRecord(response.translator)?.itemType;
+  if (typeof itemType === "string") info.translator = { itemType };
   return info;
 }
 
 export async function saveTabToZotero(connectorId: string, tabId: number): Promise<void> {
-  const response = (await browser.runtime.sendMessage(connectorId, {
-    action: "saveTab",
-    version: ZOTERO_CONNECTOR_API_VERSION,
-    tabId,
-  })) as ZoteroExternalResponse | undefined;
-
-  if (!response || response.ok !== true || response.status !== "saved") {
+  const response = await callConnector(connectorId, "saveTab", tabId);
+  if (response.ok !== true || response.status !== "saved") {
     throw new Error(responseError(response, "Zotero Connector did not confirm the save."));
   }
 }
 
-function isTranslatorSummary(value: unknown): value is ZoteroTranslatorSummary {
-  if (!value || typeof value !== "object") return false;
-  const translator = value as Record<string, unknown>;
-  return typeof translator.itemType === "string" && typeof translator.label === "string";
+/** A reply that is not a plain object cannot be `ok`, so it fails the same way. */
+async function callConnector(
+  connectorId: string,
+  action: string,
+  tabId: number,
+): Promise<Record<string, unknown>> {
+  const raw = await browser.runtime.sendMessage(connectorId, {
+    action,
+    version: ZOTERO_CONNECTOR_API_VERSION,
+    tabId,
+  });
+  return asRecord(raw) ?? {};
 }
 
-function responseError(response: ZoteroExternalResponse | undefined, fallback: string): string {
-  return typeof response?.error === "string" && response.error.trim() ? response.error : fallback;
+function responseError(response: Record<string, unknown>, fallback: string): string {
+  return typeof response.error === "string" && response.error.trim() ? response.error : fallback;
 }
