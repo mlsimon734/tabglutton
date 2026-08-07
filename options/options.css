@@ -64,11 +64,12 @@ body {
   min-width: 0;
 }
 
+/* The wordmark, and the only serif on this page. Weight 400 because Young
+   Serif ships one weight; anything heavier would be synthesised. */
 .title {
   font-family: var(--font-display);
-  font-feature-settings: normal;
   font-size: var(--fs-hero);
-  font-weight: 500;
+  font-weight: 400;
   letter-spacing: var(--track-hero);
   line-height: 1;
   margin: 0;
@@ -109,11 +110,12 @@ section:last-of-type {
   margin-bottom: 0;
 }
 
+/* Sans now. A serif section heading on a settings form read as editorial
+   furniture rather than as structure, and it is the wordmark's job to be the
+   one place the serif speaks. */
 .section-title {
-  font-family: var(--font-display);
-  font-feature-settings: normal;
   font-size: var(--fs-lead);
-  font-weight: 500;
+  font-weight: 600;
   letter-spacing: var(--track-lead);
   color: var(--ink);
   margin: 0 0 var(--space-4);

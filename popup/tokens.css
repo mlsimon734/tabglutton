@@ -1,21 +1,19 @@
-/* Tabglutton design tokens. Shared by popup, devour cockpit, options. */
+/* Tabglutton design tokens. Shared by popup, devour cockpit, options, onboarding. */
 
-/* Vollkorn is a text serif: one `wght` axis (400–900), no optical-size axis.
-   Sizes are tuned with tracking in each sheet, not with `opsz`. */
+/* The one bundled face, and it exists for one string: the wordmark. Young Serif
+   is a single-weight display serif — hearty wedge serifs that carry the
+   appetite the product is named for, and the one warm human element against a
+   chrome that is otherwise system sans on glass.
+   Subsetted to Latin + common punctuation (10 KB); it replaced Vollkorn (a text
+   serif doing display work) and the two together replaced 143 KB of webfont.
+   `font-weight: 400` is declared honestly: asking for 500+ anywhere would get
+   synthetic bold, so display type sets 400. */
 @font-face {
-  font-family: "Vollkorn";
+  font-family: "Young Serif";
   font-style: normal;
-  font-weight: 400 900;
+  font-weight: 400;
   font-display: swap;
-  src: url("./fonts/Vollkorn.woff2") format("woff2");
-}
-
-@font-face {
-  font-family: "Geist";
-  font-style: normal;
-  font-weight: 100 900;
-  font-display: swap;
-  src: url("./fonts/Geist.woff2") format("woff2");
+  src: url("./fonts/YoungSerif.woff2") format("woff2");
 }
 
 :root {
@@ -48,10 +46,58 @@
   --success: #4f6a3a;
   --success-soft: rgba(79, 106, 58, 0.12);
 
-  /* Type system */
-  --font-display: "Vollkorn", "Iowan Old Style", "Hoefler Text", Georgia, serif;
+  /* Navigation-layer glass. These belong to bars, floating clusters and the
+     toast — the layer *above* the content — and never to a content surface.
+     Tab rows, the inspector and every options control stay opaque paper, both
+     because that is where the reading happens and because translucency spends
+     contrast this palette has already been tuned to the edge of.
+     `backdrop-filter` only samples what is behind an element in the same
+     document: an extension popup cannot blur the page beneath it. So the glass
+     is honest only where our own content genuinely passes underneath, which is
+     why the bars float over the scrolling list rather than sitting beside it.
+     The tint is warm rather than the neutral gray of system glass — the
+     terracotta wash showing through is what keeps this Tabglutton and not a
+     macOS impression.
+     It is also a **step deeper than the content it floats over**, and that is
+     the part that makes it visible at all. Tinted with `--paper` it was paper
+     blurred over paper: measured against a build with 28px blur and a 55% fill,
+     the light theme was indistinguishable from having no glass, because the
+     constraint was never the blur radius — it was that the bar and its backdrop
+     were the same value, so the material had no boundary to describe. A macOS
+     toolbar reads as glass partly because it sits at a different value from the
+     sheet beneath it. */
+  --glass: rgba(233, 223, 208, 0.75);
+  /* Floating capsules only. Denser fill, deeper blur: a full-bleed bar can sit
+     at 75% because it covers a whole band and the eye reads it as a surface,
+     but a small capsule with row text crossing it at an arbitrary offset needs
+     the backdrop pushed further down. Colour still bleeds through — that is the
+     part worth keeping — but the text underneath stops competing. */
+  --glass-dense: rgba(236, 228, 214, 0.9);
+  --glass-blur-dense: saturate(200%) blur(30px);
+  --glass-blur: saturate(180%) blur(20px);
+  /* Specular rim on the edge that faces the content, plus the hairline that
+     separates. Together they read as thickness — the job a border and a drop
+     shadow were doing separately and badly. */
+  --glass-rim: rgba(255, 255, 255, 0.7);
+  --glass-edge: rgba(27, 22, 20, 0.1);
+  --glass-shade: rgba(27, 22, 20, 0.5);
+  --toast-glass: rgba(27, 22, 20, 0.86);
+  --toast-rim: rgba(255, 255, 255, 0.18);
+  /* The inset field on a glass bar. It has to step *away* from the bar, and
+     which direction that is flips with the theme: the light bar is deeper than
+     its content so the well goes lighter, the dark bar is lighter so the well
+     goes darker. Tinting it with `--hover-strong` instead — a darkening that
+     works on any substrate — put the placeholder at 3.3:1. */
+  --well: var(--paper);
+
+  /* Type system. The UI face is the platform's own — SF on macOS, Segoe UI
+     Variable on Windows — so the app renders in the same type as the browser
+     around it and ships no bytes to do it. The display face is bundled because
+     a wordmark cannot be a fallback stack. */
+  --font-display: "Young Serif", "Iowan Old Style", "Hoefler Text", Georgia, serif;
   --font-ui:
-    "Geist", -apple-system, "SF Pro Text", system-ui, "Segoe UI Variable", "Segoe UI", sans-serif;
+    -apple-system, "Segoe UI Variable Text", system-ui, "Segoe UI", Roboto, "Helvetica Neue", Arial,
+    sans-serif;
   --font-mono:
     ui-monospace, "JetBrains Mono", "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace;
 
@@ -88,6 +134,11 @@
   --radius-1: 3px;
   --radius-2: 6px;
   --radius-3: 9px;
+  /* Floating chrome only. Density still governs everything in the content
+     layer — this exists because a detached capsule needs a radius near
+     concentric with the pill controls inside it, and 9px reads as a card that
+     happens to be translucent rather than as a floating control. */
+  --radius-float: 26px;
   --radius-pill: 999px;
 
   /* Motion */
@@ -125,6 +176,46 @@
 
     --success: #a3b389;
     --success-soft: rgba(163, 179, 137, 0.16);
+
+    /* Dark glass sits lower in opacity than light: warm ink is already close to
+       the substrate, so it can let more through before the bar stops reading as
+       a bar. The rim drops to a whisper — a bright edge on dark glass is the
+       single fastest way to look like a 2019 dribbble shot.
+       Deeper here means *lighter*: the step away from the content substrate is
+       what carries the boundary, and in dark that direction is up. */
+    --glass: rgba(45, 37, 31, 0.72);
+    --glass-dense: rgba(48, 40, 33, 0.9);
+    --glass-rim: rgba(255, 255, 255, 0.07);
+    --glass-edge: rgba(240, 230, 214, 0.1);
+    --glass-shade: rgba(0, 0, 0, 0.7);
+    /* The toast inverts with the theme — light pill on dark. */
+    --toast-glass: rgba(240, 230, 214, 0.88);
+    --toast-rim: rgba(27, 22, 20, 0.1);
+    --well: var(--bone);
+  }
+}
+
+/* Two ways out of translucency, and both must land on an opaque fill rather
+   than merely dropping the blur — a 72%-alpha bar over a scrolling list is
+   unreadable without one. Nulling the blur too keeps the GPU cost at zero
+   instead of paying it for an invisible effect. */
+@media (prefers-reduced-transparency: reduce) {
+  :root {
+    --glass: var(--paper);
+    --glass-blur: none;
+    --glass-dense: var(--paper);
+    --glass-blur-dense: none;
+    --toast-glass: var(--ink);
+  }
+}
+
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  :root {
+    --glass: var(--paper);
+    --glass-blur: none;
+    --glass-dense: var(--paper);
+    --glass-blur-dense: none;
+    --toast-glass: var(--ink);
   }
 }
 
@@ -146,17 +237,18 @@ body {
   padding: 0;
 }
 
+/* No `font-feature-settings` here. It used to switch on Geist's ss01/ss03/cv11,
+   which meant every display element had to reset it — Vollkorn's ss01/ss03 mean
+   something else and silently substituted glyphs in the wordmark. The platform
+   face needs none of them, and the global `tnum` went with it: every number that
+   updates already opts into `font-variant-numeric: tabular-nums` at its own site,
+   which is the only place it belongs. */
 body {
   font-family: var(--font-ui);
   font-size: var(--fs-body);
   line-height: 1.45;
   color: var(--ink);
   background: var(--bone);
-  font-feature-settings:
-    "ss01" on,
-    "ss03" on,
-    "cv11" on,
-    "tnum" on;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
 }
@@ -166,24 +258,40 @@ body {
   color: var(--ink);
 }
 
-/* Display type. `font-feature-settings` is reset because the body sets Geist's
-   ss01/ss03/cv11 — Vollkorn has its own ss01/ss03 meaning something else entirely,
-   and inheriting them silently substitutes glyphs in the wordmark. */
-.u-display {
-  font-family: var(--font-display);
-  font-feature-settings: normal;
-  font-weight: 500;
-  color: var(--ink);
+/* ---------- navigation-layer material ---------- */
+
+/* Composed onto a bar that already owns its own layout, so popup and cockpit
+   cannot drift apart on the thing that has to look identical: the material.
+   `-top` is a bar with content passing beneath it — a hairline is all macOS
+   gives a toolbar, and all it needs. `-bottom` is the floating one, so its
+   upper edge catches a specular rim. */
+.u-glass {
+  background: var(--glass);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
 }
 
-/* The one uppercase micro-label. */
-.u-label {
-  font-family: var(--font-ui);
-  font-size: var(--fs-micro);
-  font-weight: 500;
-  letter-spacing: var(--track-label);
-  text-transform: uppercase;
-  color: var(--muted);
+.u-glass-top {
+  box-shadow:
+    0 1px 0 var(--glass-edge),
+    0 10px 30px -22px var(--glass-shade);
+}
+
+/* A capsule floating clear of every edge, so all four sides of the material
+   show. That is the difference between this language and a vibrant toolbar,
+   which macOS has had since Yosemite: detachment, not translucency. */
+.u-glass-float {
+  box-shadow:
+    inset 0 1px 0 var(--glass-rim),
+    0 0 0 1px var(--glass-edge),
+    0 14px 34px -18px var(--glass-shade);
+}
+
+.u-glass-bottom {
+  box-shadow:
+    inset 0 1px 0 var(--glass-rim),
+    0 -1px 0 var(--glass-edge),
+    0 -10px 30px -22px var(--glass-shade);
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -7,81 +7,104 @@
   </head>
   <body>
     <div class="surface">
-      <header>
-        <div class="row title-row">
-          <div class="brand">
-            <span id="logo-mark" class="logo-mark" aria-hidden="true"></span>
-            <h1 class="title">Tabglutton</h1>
+      <!-- Same floating-chrome shape as the cockpit: the list scrolls beneath
+           these two stacks, which is what makes their glass describe something
+           real rather than decorate a flat panel. -->
+      <div id="chrome-top" class="chrome chrome-top u-glass u-glass-top">
+        <header>
+          <div class="row title-row">
+            <div class="brand">
+              <span id="logo-mark" class="logo-mark" aria-hidden="true"></span>
+              <h1 class="title">Tabglutton</h1>
+            </div>
+            <kbd id="shortcut-hint" class="shortcut-hint" aria-hidden="true"></kbd>
+            <div class="title-spacer"></div>
+            <button
+              id="open-cockpit"
+              type="button"
+              class="icon"
+              title="Open Devour cockpit (full-screen)"
+              aria-label="Open Devour cockpit"
+            >
+              <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+                <path
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.4"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  d="M3 6V3h3M13 6V3h-3M3 10v3h3M13 10v3h-3"
+                />
+              </svg>
+            </button>
+            <button
+              id="open-options"
+              type="button"
+              class="icon"
+              title="Settings"
+              aria-label="Settings"
+            >
+              <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+                <path
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.4"
+                  stroke-linecap="round"
+                  d="M3 4h10M3 8h10M3 12h10"
+                />
+                <circle cx="6" cy="4" r="1.5" fill="currentColor" />
+                <circle cx="11" cy="8" r="1.5" fill="currentColor" />
+                <circle cx="5" cy="12" r="1.5" fill="currentColor" />
+              </svg>
+            </button>
+            <button id="dedup" type="button" class="primary" disabled title="Close duplicate tabs">
+              <span class="primary-label">Dedup</span>
+              <span id="dedup-count" class="count-badge" hidden>0</span>
+            </button>
           </div>
-          <kbd id="shortcut-hint" class="shortcut-hint" aria-hidden="true"></kbd>
-          <div class="title-spacer"></div>
-          <button
-            id="open-cockpit"
-            type="button"
-            class="icon"
-            title="Open Devour cockpit (full-screen)"
-            aria-label="Open Devour cockpit"
-          >
-            <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
-              <path
-                fill="none"
-                stroke="currentColor"
-                stroke-width="1.4"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                d="M3 6V3h3M13 6V3h-3M3 10v3h3M13 10v3h-3"
-              />
-            </svg>
-          </button>
-          <button
-            id="open-options"
-            type="button"
-            class="icon"
-            title="Settings"
-            aria-label="Settings"
-          >
-            <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
-              <path
-                fill="none"
-                stroke="currentColor"
-                stroke-width="1.4"
-                stroke-linecap="round"
-                d="M3 4h10M3 8h10M3 12h10"
-              />
-              <circle cx="6" cy="4" r="1.5" fill="currentColor" />
-              <circle cx="11" cy="8" r="1.5" fill="currentColor" />
-              <circle cx="5" cy="12" r="1.5" fill="currentColor" />
-            </svg>
-          </button>
-          <button id="dedup" type="button" class="primary" disabled title="Close duplicate tabs">
-            <span class="primary-label">Dedup</span>
-            <span id="dedup-count" class="count-badge" hidden>0</span>
-          </button>
-        </div>
 
-        <div class="row search-row">
-          <div class="search">
-            <svg class="search-glyph" viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
-              <circle cx="7" cy="7" r="4.4" fill="none" stroke="currentColor" stroke-width="1.4" />
-              <path
-                d="M10.4 10.4 13.5 13.5"
-                stroke="currentColor"
-                stroke-width="1.4"
-                stroke-linecap="round"
+          <div class="row search-row">
+            <div class="search">
+              <svg
+                class="search-glyph"
+                viewBox="0 0 16 16"
+                width="13"
+                height="13"
+                aria-hidden="true"
+              >
+                <circle
+                  cx="7"
+                  cy="7"
+                  r="4.4"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.4"
+                />
+                <path
+                  d="M10.4 10.4 13.5 13.5"
+                  stroke="currentColor"
+                  stroke-width="1.4"
+                  stroke-linecap="round"
+                />
+              </svg>
+              <input
+                type="search"
+                id="filter"
+                placeholder="Filter URL or title"
+                autocomplete="off"
               />
-            </svg>
-            <input type="search" id="filter" placeholder="Filter URL or title" autocomplete="off" />
-            <kbd class="search-hint" aria-hidden="true">/</kbd>
+              <kbd class="search-hint" aria-hidden="true">/</kbd>
+            </div>
           </div>
-        </div>
 
-        <div class="row selection-row">
-          <button id="select-all" type="button" class="select-toggle quiet">Select all</button>
-          <span id="selection-summary" class="selection-summary">0 of 0 chosen</span>
-        </div>
+          <div class="row selection-row">
+            <button id="select-all" type="button" class="select-toggle quiet">Select all</button>
+            <span id="selection-summary" class="selection-summary">0 of 0 chosen</span>
+          </div>
 
-        <div id="warning" class="warning" hidden></div>
-      </header>
+          <div id="warning" class="warning" hidden></div>
+        </header>
+      </div>
 
       <main>
         <div id="empty" class="empty" hidden>
@@ -91,38 +114,40 @@
         <ul id="groups"></ul>
       </main>
 
-      <section id="devour-failures" class="devour-failures" hidden aria-live="polite">
-        <header class="devour-failures-header">
-          <span class="devour-failures-title">
-            Devour failures
-            <span id="devour-failures-count" class="count-badge danger">0</span>
-          </span>
-          <div class="devour-failures-actions">
-            <button id="devour-retry-all" type="button">Retry all</button>
-            <button id="devour-dismiss" type="button" class="quiet">Dismiss</button>
-          </div>
-        </header>
-        <ul id="devour-failures-list" class="devour-failures-list"></ul>
-      </section>
+      <div id="chrome-bottom" class="chrome chrome-bottom u-glass u-glass-bottom">
+        <section id="devour-failures" class="devour-failures" hidden aria-live="polite">
+          <header class="devour-failures-header">
+            <span class="devour-failures-title">
+              Devour failures
+              <span id="devour-failures-count" class="count-badge danger">0</span>
+            </span>
+            <div class="devour-failures-actions">
+              <button id="devour-retry-all" type="button">Retry all</button>
+              <button id="devour-dismiss" type="button" class="quiet">Dismiss</button>
+            </div>
+          </header>
+          <ul id="devour-failures-list" class="devour-failures-list"></ul>
+        </section>
 
-      <footer>
-        <div id="bulk-bar" class="bulk-bar">
-          <div class="bulk-cluster">
-            <button
-              id="clip-current"
-              type="button"
-              class="primary"
-              disabled
-              title="Devour selected tabs into Obsidian (Defuddle parse) and close them."
-            >
-              Devour
-            </button>
-            <button id="copy-urls" type="button" disabled>Copy URLs</button>
+        <footer>
+          <div id="bulk-bar" class="bulk-bar">
+            <div class="bulk-cluster">
+              <button
+                id="clip-current"
+                type="button"
+                class="primary"
+                disabled
+                title="Devour selected tabs into Obsidian (Defuddle parse) and close them."
+              >
+                Devour
+              </button>
+              <button id="copy-urls" type="button" disabled>Copy URLs</button>
+            </div>
+            <span class="bulk-divider" aria-hidden="true"></span>
+            <button id="close-selected" type="button" class="danger" disabled>Close</button>
           </div>
-          <span class="bulk-divider" aria-hidden="true"></span>
-          <button id="close-selected" type="button" class="danger" disabled>Close</button>
-        </div>
-      </footer>
+        </footer>
+      </div>
     </div>
 
     <div id="toast" class="toast" hidden role="status" aria-live="polite">

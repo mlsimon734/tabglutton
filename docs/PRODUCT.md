@@ -41,8 +41,11 @@ the typography, the accent, and a few well-placed moments — never in decoratio
 ## Anti-references
 
 - Generic SaaS-cream dashboards and the "hero metric + gradient accent" template.
-- Over-decorated extension popups: gradient text, glassmorphism, neon, heavy drop shadows
-  paired with borders, oversized rounding.
+- Over-decorated extension popups: gradient text, decorative glassmorphism, neon, heavy drop
+  shadows paired with borders, oversized rounding. The distinction that matters: frosted
+  cards floating on a gradient for looks are still out; a translucent **navigation layer**
+  over content that genuinely scrolls beneath it is a material, and is in. See DESIGN.md —
+  content surfaces stay opaque.
 - Cartoonish "eating" mascotry. The glutton idea is a wink, not a brand bear.
 - Anything that reads as "an AI generated this UI" — sketchy SVG, eyebrow kickers on every
   section, identical card grids, rainbow status colors.
@@ -54,7 +57,9 @@ the typography, the accent, and a few well-placed moments — never in decoratio
 2. **Keyboard-first, density-friendly.** Built for fast triage: every primary action has a
    key, lists are dense but legible, nothing makes the user wait for choreography.
 3. **Warmth lives in type and accent, not the background.** The paper palette is the
-   substrate; identity is carried by the display serif, the terracotta accent, and rhythm.
+   substrate; identity is carried by the display serif — now the wordmark alone — the
+   terracotta accent, and rhythm. The UI face is the platform's own, so the one bundled
+   typeface has to earn its 10 KB in a single word.
 4. **Motion conveys state, never decorates.** Selection, progress, arrival, undo — that's it.
    150–250ms, ease-out, reduced-motion honored.
 5. **Consistent vocabulary across surfaces.** Popup, cockpit, and options share one button

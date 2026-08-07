@@ -66,9 +66,8 @@ body {
 .title {
   margin: 0;
   font-family: var(--font-display);
-  font-feature-settings: normal;
   font-size: var(--fs-hero);
-  font-weight: 500;
+  font-weight: 400;
   letter-spacing: var(--track-hero);
   line-height: 1;
   color: var(--ink);

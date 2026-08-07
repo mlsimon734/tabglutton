@@ -1,6 +1,15 @@
 @import url("./tokens.css");
 
+/* Resting heights of the two floating chrome stacks; `trackChromeHeights`
+   overwrites both from the real elements once the warning banner and the
+   failures panel start appearing and disappearing inside them. They live on
+   `body`, not on `.surface`, because the toast is a sibling of `.surface` and
+   would otherwise resolve `--chrome-bottom` to nothing and drop off the
+   bottom edge. */
 body {
+  --chrome-top: 118px;
+  --chrome-bottom: 53px;
+
   width: 600px;
   height: 560px;
   background: var(--bone);
@@ -20,10 +29,27 @@ body {
 }
 
 .surface {
-  display: flex;
-  flex-direction: column;
+  position: relative;
   height: 100%;
   background: var(--paper);
+}
+
+/* Same arrangement as the cockpit at a sixth the size: the list runs the full
+   height of the popup and the two bars float over it, so the glass is
+   refracting real content rather than tinting a flat panel. */
+.chrome {
+  position: absolute;
+  left: 0;
+  right: 0;
+  z-index: 20;
+}
+
+.chrome-top {
+  top: 0;
+}
+
+.chrome-bottom {
+  bottom: 0;
 }
 
 /* ---------- header ---------- */
@@ -33,7 +59,6 @@ header {
   flex-direction: column;
   gap: var(--space-2);
   padding: var(--space-3) var(--pad) var(--space-2);
-  border-block-end: 1px solid var(--hairline);
 }
 
 .row {
@@ -61,12 +86,13 @@ header {
   flex-shrink: 0;
 }
 
+/* The only serif in the popup, and only for the wordmark. Weight 400 because
+   Young Serif ships one weight; anything heavier would be synthesised. */
 .title {
   margin: 0;
   font-family: var(--font-display);
-  font-feature-settings: normal;
   font-size: var(--fs-display);
-  font-weight: 500;
+  font-weight: 400;
   letter-spacing: var(--track-display);
   line-height: 1;
   color: var(--ink);
@@ -256,7 +282,7 @@ button.primary:disabled .count-badge {
   position: relative;
   display: flex;
   align-items: center;
-  background: var(--bone);
+  background: var(--well);
   border: 1px solid var(--hairline);
   border-radius: var(--radius-pill);
   padding: 0 12px 0 32px;
@@ -269,7 +295,7 @@ button.primary:disabled .count-badge {
 
 .search:focus-within {
   border-color: var(--accent-ring);
-  background: var(--paper);
+  background: var(--paper-raised);
   box-shadow: 0 0 0 3px var(--accent-ring);
 }
 
@@ -366,9 +392,14 @@ button.primary:disabled .count-badge {
 /* ---------- main ---------- */
 
 main {
-  flex: 1;
-  overflow: auto;
-  padding: var(--space-3) var(--pad) var(--space-3);
+  position: absolute;
+  inset: 0;
+  overflow-y: auto;
+  padding-inline: var(--pad);
+  padding-block: calc(var(--chrome-top) + var(--space-3))
+    calc(var(--chrome-bottom) + var(--space-3));
+  scroll-padding-block: calc(var(--chrome-top) + var(--space-2))
+    calc(var(--chrome-bottom) + var(--space-2));
   scrollbar-width: thin;
   scrollbar-color: var(--hairline-strong) transparent;
 }
@@ -397,10 +428,8 @@ main::-webkit-scrollbar-thumb {
 }
 
 .empty p:first-child {
-  font-family: var(--font-display);
-  font-feature-settings: normal;
   font-size: var(--fs-lead);
-  font-weight: 500;
+  font-weight: 600;
   letter-spacing: var(--track-lead);
   color: var(--ink);
 }
@@ -544,12 +573,12 @@ body.initial-load .group {
   justify-content: center;
 }
 
+/* The letter standing in for a missing favicon, at 10px. The display serif was
+   pure noise at that size. */
 .favicon.fallback {
   border: 1px solid var(--hairline-strong);
   border-radius: 50%;
   color: var(--muted);
-  font-family: var(--font-display);
-  font-feature-settings: normal;
   font-size: 10px;
   font-weight: 600;
   line-height: 1;
@@ -622,7 +651,7 @@ body.initial-load .group {
 /* ---------- devour failures ---------- */
 
 .devour-failures {
-  margin: 0 var(--pad) var(--space-2);
+  margin: var(--space-2) var(--pad) 0;
   padding: var(--space-2);
   border-radius: var(--radius-2);
   background: var(--danger-soft);
@@ -708,9 +737,7 @@ body.initial-load .group {
 /* ---------- footer ---------- */
 
 footer {
-  border-block-start: 1px solid var(--hairline);
   padding: var(--space-2) var(--pad) var(--space-3);
-  background: var(--paper);
 }
 
 .bulk-bar {
@@ -744,19 +771,25 @@ footer {
 
 /* ---------- toast ---------- */
 
+/* Rides above the bottom chrome rather than at a fixed offset, which the
+   Devour-failures panel used to grow up behind. */
 .toast {
   position: fixed;
   left: 50%;
-  bottom: 16px;
+  bottom: calc(var(--chrome-bottom) + var(--space-2));
   transform: translateX(-50%);
   display: flex;
   align-items: center;
   gap: 10px;
   padding: 5px 5px 5px 14px;
-  background: var(--ink);
+  background: var(--toast-glass);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
   color: var(--paper);
   border-radius: var(--radius-pill);
-  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.22);
+  box-shadow:
+    inset 0 1px 0 var(--toast-rim),
+    0 10px 28px -6px var(--glass-shade);
   font-size: var(--fs-small);
   font-variant-numeric: tabular-nums;
   height: 32px;
