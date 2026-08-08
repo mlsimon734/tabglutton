@@ -202,7 +202,7 @@ export const GULLET_TOOLS: readonly McpTool[] = [
     name: "tab_clip",
     title: "File a tab into Obsidian",
     description:
-      "Save a tab into the user's Obsidian vault as a markdown note with frontmatter — exactly what the Tabglutton popup's Devour does, including per-site subfolders. Requires a vault configured in Tabglutton's settings. Set close: true to close the tab afterwards; that close is undoable via the returned batchId. Filing alone changes nothing in the browser — the tool is annotated destructive because close: true removes the tab. The result reports the vault it filed into.\n\nWhen the vault can be checked, a fresh note for the clipped page is confirmed on disk before anything is closed: `clipVerified: true` means one was found, and a clip that provably never reached Obsidian is reported as an error with the tab left open. `clipVerified: false` means the vault could not be checked at all — the clip was still handed over, and the close, if asked for, still happened. Treat a verified clip as \"a note for this page landed just now\", not as proof this exact extraction is what it holds: concurrent clips of the same URL from separate agent sessions can share one note as evidence.",
+      "Save a tab into the user's Obsidian vault as a markdown note with frontmatter — exactly what the Tabglutton popup's Devour does, including per-site subfolders. Requires a vault configured in Tabglutton's settings. Set close: true to close the tab afterwards; that close is undoable via the returned batchId. Filing alone changes nothing in the browser — the tool is annotated destructive because close: true removes the tab. The result reports the vault it filed into.\n\nWhen the vault can be checked, a fresh note for the clipped page is confirmed on disk before anything is closed: `clipVerified: true` means one was found, and a clip that provably never reached Obsidian is reported as an error with the tab left open. `clipVerified: false` means the vault could not be checked at all — the clip was still handed over, and the close, if asked for, still happened. How much a verified clip proves depends on whether the result carries a `contentHash`: with one, the note on disk is this exact clip's text, so it holds even against another agent session clipping the same URL at the same moment; without one (an older extension), it means only \"a fresh note for this page landed just now\", and concurrent clips of the same URL from separate sessions can share one note as evidence.",
     inputSchema: {
       type: "object",
       properties: {
@@ -361,7 +361,10 @@ async function clipAndVerify(
   // the one thing a timestamp cannot do. Absent, verification is freshness-only,
   // as it was.
   const sourceUrl = typeof result.url === "string" ? result.url : undefined;
-  const verdict = await ctx.verifyClip(vault, file, startedAt, sourceUrl);
+  // The extension's own digest of what it handed Obsidian. Absent from older
+  // extensions, and then attribution falls back to the page's URL.
+  const contentHash = typeof result.contentHash === "string" ? result.contentHash : undefined;
+  const verdict = await ctx.verifyClip(vault, file, { since: startedAt, sourceUrl, contentHash });
   if (verdict === "missing") {
     throw new BridgeRequestError(
       "not-enabled",
@@ -371,6 +374,18 @@ async function clipAndVerify(
         `network.protocol-handler.external.obsidian to true and ` +
         `network.protocol-handler.warn-external.obsidian to false in about:config, ` +
         `and to confirm Obsidian's one-time "trust this source" prompt.`,
+    );
+  }
+  if (verdict === "mismatched") {
+    throw new BridgeRequestError(
+      "not-enabled",
+      `The clip may not have reached Obsidian: a note for this page is at ` +
+        `${JSON.stringify(file)} in vault ${JSON.stringify(vault)}, but its text is not what ` +
+        `was handed over, so it cannot be confirmed as this clip. The tab was left open. ` +
+        `Either another session filed the same page while this handoff was dropped — in which ` +
+        `case the page is safely filed and the tab can be closed by hand — or something in ` +
+        `the vault rewrites notes when they are created, which would make every clip report ` +
+        `this. If it is every clip, that is worth reporting as a bug.`,
     );
   }
 

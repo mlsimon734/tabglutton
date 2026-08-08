@@ -662,6 +662,19 @@ export interface TabClipResult {
   closed: boolean;
   /** Present when `close` was honoured — pass to `undo_close` to reopen. */
   batchId?: string;
+  /**
+   * SHA-256, hex, of the exact note text handed to Obsidian.
+   *
+   * The one thing that identifies *this* invocation on disk. Freshness and the
+   * note's own `source` cannot separate two clips of the same page racing from
+   * two agent sessions, so a sidecar that can hash the file can attribute the
+   * note to the request that wrote it — see gullet/src/clip-verify.ts.
+   *
+   * Optional because an older extension does not send it and the sidecar must
+   * keep working against one. Identical in both clip modes: clipboard and
+   * legacy-uri carry the same text by different roads.
+   */
+  contentHash?: string;
 }
 
 export interface TabsCloseParams {

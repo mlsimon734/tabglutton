@@ -7,6 +7,7 @@
 // scripting beyond the existing Defuddle clipper, and every close is logged
 // before it happens.
 
+import { clipContentHash } from "./clip-hash.js";
 import { markdownForClip, OBSIDIAN_HANDOFF_GAP_MS, resolveClipRequest } from "./clip-format.js";
 import type { ClipPayload } from "./clip-format.js";
 import {
@@ -636,7 +637,14 @@ export class BridgeMethodRunner {
       return request.file;
     });
 
-    const filed = { tabId: params.tabId, title: payload.title, url: payload.url, file, vault };
+    const filed = {
+      tabId: params.tabId,
+      title: payload.title,
+      url: payload.url,
+      file,
+      vault,
+      contentHash: await clipContentHash(content),
+    };
     if (!params.close) return { ...filed, closed: false };
 
     // Nothing past here fails the call: the note is already in Obsidian, so a

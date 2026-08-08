@@ -20,29 +20,50 @@ import type { ObsidianVaultPaths } from "./obsidian-vaults.js";
  * - `landed`  the note is on disk. The clip is real.
  * - `missing` the vault path is known and the note is not there. Refuse to
  *   close, and say so.
+ * - `mismatched` a fresh note for this page is there, but its text is not what
+ *   we handed over. Refuse to close — but it is a different story from
+ *   `missing` and has to be told differently: either another session's clip of
+ *   the same page landed while ours dropped, or something in the vault rewrites
+ *   notes on create, which would make this the answer for every clip. Guessing
+ *   between them is not our job; naming both is.
  * - `unknown` the registry could not be read, or names no such vault. Same soft
  *   contract as the vault-override check: inability to verify is never a
  *   failure, so behaviour falls back to what it was before.
  */
-export type ClipVerdict = "landed" | "missing" | "unknown";
+export type ClipVerdict = "landed" | "missing" | "mismatched" | "unknown";
 
 /**
- * `since` is taken before the clip is requested. Mere existence is not proof:
- * re-clipping a page that was already filed would find the OLD note and call a
- * dropped handoff verified, which is exactly the case this check exists for. The
- * note must have been written since we asked.
- *
- * `sourceUrl` is the clipped tab's URL, as the extension reported it. Freshness
- * alone cannot tell two concurrent clips apart — same title, same requested
- * name, both timestamps before both writes — so a note whose own `source` names
- * a different page never vouches for this clip. Optional: an embedder that
- * cannot supply it gets freshness-only verification, as before.
+ * What a verification has to go on, weakest to strongest. Only `since` is
+ * required: an embedder that can supply nothing else gets freshness-only
+ * verification, which is where this check started.
  */
+export interface ClipEvidence {
+  /**
+   * Taken before the clip is requested. Mere existence is not proof: re-clipping
+   * a page that was already filed would find the OLD note and call a dropped
+   * handoff verified, which is exactly the case this check exists for.
+   */
+  since: number;
+  /**
+   * The clipped tab's URL, as the extension reported it. Freshness cannot tell
+   * two concurrent clips apart — same title, same requested name, both
+   * timestamps before both writes — so a note whose own `source` names a
+   * different page never vouches.
+   */
+  sourceUrl?: string;
+  /**
+   * SHA-256 of the exact text handed to Obsidian. Stronger than `sourceUrl`,
+   * and the only evidence that separates two clips of the *same* page: it
+   * identifies the invocation rather than the destination. Absent from older
+   * extensions, so it is never required.
+   */
+  contentHash?: string;
+}
+
 export type ClipVerifier = (
   vault: string,
   file: string,
-  since: number,
-  sourceUrl?: string,
+  evidence: ClipEvidence,
 ) => Promise<ClipVerdict>;
 
 /** Obsidian writes asynchronously; give it a moment before calling it missing. */
@@ -73,6 +94,8 @@ export interface ClipVerifierOptions {
   readDir?: (dir: string) => Promise<DirListing>;
   /** A note's text, null when absent, "unreadable" when it cannot be checked. */
   readNote?: (path: string) => Promise<string | null | "unreadable">;
+  /** SHA-256 hex of a note's text. Injected for tests. */
+  hashNote?: (content: string) => Promise<string>;
   sleep?: (ms: number) => Promise<void>;
   now?: () => number;
 }
@@ -124,6 +147,22 @@ export function noteSourceUrl(content: string): string | null {
   if (frontmatter === undefined) return null;
   const value = /^source:[ \t]*"(.*)"[ \t]*$/m.exec(frontmatter)?.[1];
   return value === undefined ? null : value.replaceAll('\\"', '"');
+}
+
+/**
+ * SHA-256 of a note's text, hex — the same digest `src/clip-hash.ts` takes of
+ * what the extension handed Obsidian. Injectable only so tests need not hash
+ * real strings.
+ *
+ * CRLF is folded to LF for the same reason it is on the extension side, and it
+ * has to be folded on *both*: in clipboard clip mode the note's text reaches
+ * Obsidian through the OS clipboard, and Windows carries plain text as
+ * CF_UNICODETEXT with CRLF endings, so the bytes on disk are not the bytes that
+ * were hashed. Normalizing here is what keeps that path from reporting every
+ * landed clip as `mismatched`. `tests/clip-source.test.ts` pins the two halves.
+ */
+export async function clipContentHash(content: string): Promise<string> {
+  return new Bun.CryptoHasher("sha256").update(content.replaceAll("\r\n", "\n")).digest("hex");
 }
 
 /**
@@ -200,6 +239,7 @@ export function createClipVerifier(
   const modifiedAt = options.modifiedAt ?? defaultModifiedAt;
   const readDir = options.readDir ?? defaultReadDir;
   const readNote = options.readNote ?? defaultReadNote;
+  const hashNote = options.hashNote ?? clipContentHash;
   const sleep = options.sleep ?? ((ms: number) => Bun.sleep(ms));
   const now = options.now ?? (() => Date.now());
 
@@ -216,23 +256,20 @@ export function createClipVerifier(
    * sharing one browser — a hub and a peer — each keep their own map. Attributing
    * by `source` needs no shared state and holds across processes.
    *
-   * Known and accepted residual: two *processes* clipping the same URL at the
-   * same time, one handoff dropped, both accept the single note. Nothing on disk
-   * separates them — the URL matches and the maps are not shared — so closing
-   * that would take either a per-request marker written into the user's note or
-   * cross-session serialization of the whole handoff. What it costs is bounded
-   * and much smaller than the bug this file exists for: the note on disk holds
-   * that same page, clipped at that same moment, so the closed tab loses only
-   * whatever two tabs of one URL had extracted differently.
+   * With `contentHash` present it is a backstop rather than the argument: the
+   * hash already identifies the invocation, and two clips that hash the same are
+   * two clips of byte-identical text, where which note belongs to which cannot
+   * matter. It still carries the older extensions that send no hash.
    *
-   * So be precise about what a `landed` verdict is worth. It says a fresh note
-   * for this page exists — not that this exact extraction is what it holds. It
-   * is not a guarantee at all when the check cannot run: `unknown` is fail-open
-   * by design, and there the old behaviour stands, dropped handoffs included.
+   * Be precise about what a `landed` verdict is worth. Hashed, it says this
+   * exact text is on disk. Unhashed, only that a fresh note for this page is.
+   * Either way it is not a guarantee when the check cannot run: `unknown` is
+   * fail-open by design, and there the old behaviour stands, dropped handoffs
+   * included.
    */
   const claimed = new Map<string, number>();
 
-  return async (vault, file, since, sourceUrl) => {
+  return async (vault, file, { since, sourceUrl, contentHash }) => {
     let paths: ReadonlyMap<string, string> | null;
     try {
       paths = await vaultPaths();
@@ -249,6 +286,10 @@ export function createClipVerifier(
     const base = basename(target).slice(0, -3);
     const fresh = since - CLIP_MTIME_SLACK_MS;
     const deadline = now() + timeoutMs;
+    // A fresh note for this page that we refused on its hash. Kept so the
+    // timeout can say "someone wrote this, it just was not us" rather than the
+    // flatly wrong "nothing was written".
+    let sawForeign = false;
     for (;;) {
       const entries = await readDir(dir);
       // The folder not existing yet is a legitimate "not written", but a folder
@@ -262,14 +303,33 @@ export function createClipVerifier(
         if (mtime === "unreadable") return "unknown";
         if (mtime === null || mtime < fresh) continue;
         // Fresh and correctly named is not yet proof this clip wrote it. A
-        // concurrent clip of a same-titled page asks for the same name, so ask
-        // the note which page it holds before letting it close a tab.
-        if (sourceUrl !== undefined) {
+        // concurrent clip of a same-titled page asks for the same name, so read
+        // the note before letting it close a tab.
+        if (contentHash !== undefined || sourceUrl !== undefined) {
           const content = await readNote(path);
           if (content === "unreadable") return "unknown";
           // Written between our listing and our read; it will be back next poll.
           if (content === null) continue;
-          if (noteOwnership(content, sourceUrl) === "other") continue;
+          // Obsidian creates the note and fills it a beat later — measured live,
+          // both of this user's real vaults. An empty file is that window, never
+          // a landed clip, and without this it is exactly the note that has no
+          // parseable `source` and so falls through as "mine".
+          if (content.trim() === "") continue;
+          if (contentHash !== undefined) {
+            // The invocation's own fingerprint: a note that does not hash to it
+            // was written by some other clip, whatever page it names.
+            if ((await hashNote(content)) !== contentHash) {
+              // Only a note naming *our* page is worth reporting as a mismatch;
+              // a neighbouring clip that merely shares a title is not evidence
+              // about ours either way.
+              if (sourceUrl === undefined || noteOwnership(content, sourceUrl) === "mine") {
+                sawForeign = true;
+              }
+              continue;
+            }
+          } else if (noteOwnership(content, sourceUrl ?? "") === "other") {
+            continue;
+          }
         }
         const spentAt = claimed.get(path);
         if (spentAt !== undefined && mtime <= spentAt) continue;
@@ -277,7 +337,7 @@ export function createClipVerifier(
         prune(claimed, now() - timeoutMs - CLIP_MTIME_SLACK_MS);
         return "landed";
       }
-      if (now() >= deadline) return "missing";
+      if (now() >= deadline) return sawForeign ? "mismatched" : "missing";
       await sleep(POLL_INTERVAL_MS);
     }
   };
