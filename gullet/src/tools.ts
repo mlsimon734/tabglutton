@@ -370,10 +370,9 @@ async function clipAndVerify(
       "not-enabled",
       `The clip never reached Obsidian: no note at ${JSON.stringify(file)} in vault ` +
         `${JSON.stringify(vault)}. The tab was left open. On Firefox this is usually the ` +
-        `browser silently dropping the obsidian:// handoff — ask the user to set ` +
-        `network.protocol-handler.external.obsidian to true and ` +
-        `network.protocol-handler.warn-external.obsidian to false in about:config, ` +
-        `and to confirm Obsidian's one-time "trust this source" prompt.`,
+        `external-protocol approval being absent or revoked — ask the user to re-run ` +
+        `Tabglutton's setup, approve obsidian:// in step 3 with "Always allow this ` +
+        `extension" checked, and confirm Obsidian's one-time "trust this source" prompt.`,
     );
   }
   if (verdict === "mismatched") {
