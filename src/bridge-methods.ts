@@ -120,8 +120,42 @@ const TAB_LOAD_TIMEOUT_MS = 20_000;
  */
 const TABS_LOAD_CONCURRENCY = 3;
 
+/**
+ * Gecko was observed rejecting the first script injection after `tabs_load`
+ * reported a page ready even though the extension still held its host grant.
+ * The identical extraction succeeded a moment later; keep this pause local to
+ * that measured error instead of delaying or repeating every failed read.
+ */
+const TRANSIENT_EXTRACT_RETRY_MS = 250;
+const NO_INJECTION_TARGET_ERROR = "missing host permission for the tab";
+
+/**
+ * Appended when the retry has been spent. Gecko raises the message above for
+ * *any* injection that came back with no results, so it names a permission
+ * whether or not one is missing — say what is actually known instead of
+ * repeating it, and never advise a retry that cannot help.
+ */
+const NO_INJECTION_TARGET_HINT =
+  "Firefox reports this whenever no frame accepted the injection: the page may have been navigating, or it may be one the engine keeps closed to extensions (its own add-on, support, and account sites). The host grant is held, so a second failure means this page cannot be read.";
+
+/** Pure so the engine-string gate can be pinned without a browser harness. */
+export function isNoInjectionTargetError(message: string | undefined): boolean {
+  return message?.toLowerCase().includes(NO_INJECTION_TARGET_ERROR) === true;
+}
+
 function fail(code: BridgeErrorCode, message: string): never {
   throw new BridgeRequestError(code, message);
+}
+
+/** Distinguish a real missing host grant from an injection failure. */
+async function requireClipAccess(): Promise<void> {
+  if (await hasOrigins(CLIP_ORIGINS)) return;
+  fail(
+    "not-enabled",
+    "Tabglutton has no access to page contents, so tabs cannot be read or clipped. " +
+      "Ask the user to open the Tabglutton popup and run Devour once — that is where " +
+      "the browser asks for the permission.",
+  );
 }
 
 /**
@@ -569,21 +603,31 @@ export class BridgeMethodRunner {
         `Tab ${tabId} is unloaded, so its content cannot be read. Wake it with tabs_load and read it again; if that reports the capability is off, the tab needs a manual load.`,
       );
     }
-    const result = await this.deps.extract(tabId);
+    let result = await this.deps.extract(tabId);
     if (!result.ok || !result.payload) {
       // Asked only once extraction has already failed, so a read costs no extra
       // IPC in the normal case. Site access is optional on Chrome and only a
       // click can request it, which the bridge does not have — so an agent whose
       // user has never clipped from the popup would otherwise meet this as an
       // opaque injection error with no stated remedy.
-      if (!(await hasOrigins(CLIP_ORIGINS))) {
+      await requireClipAccess();
+
+      // Firefox returned this error on the first read after a discarded tab
+      // finished `tabs_load`, despite the grant above being held throughout,
+      // and an identical call moments later succeeded. A page still swapping
+      // documents is the likeliest of the causes the engine folds together, so
+      // pause once — but report the engine's own words either way, since one of
+      // those causes is a page that will never be readable.
+      if (isNoInjectionTargetError(result.error)) {
+        await delay(TRANSIENT_EXTRACT_RETRY_MS);
+        result = await this.deps.extract(tabId);
+        if (result.ok && result.payload) return result.payload;
         fail(
-          "not-enabled",
-          "Tabglutton has no access to page contents, so tabs cannot be read or clipped. " +
-            "Ask the user to open the Tabglutton popup and run Devour once — that is where " +
-            "the browser asks for the permission.",
+          "extract-failed",
+          `${result.error ?? "Extraction failed."} ${NO_INJECTION_TARGET_HINT}`,
         );
       }
+
       fail("extract-failed", result.error ?? "Extraction failed.");
     }
     return result.payload;
