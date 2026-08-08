@@ -20,6 +20,7 @@ import {
   reasonLabel,
   selectedTabsInUiOrder,
   sendMessage,
+  trackChromeHeights,
   visibleGroups,
   visibleTabIds,
 } from "./lib.js";
@@ -670,6 +671,11 @@ async function loadLogoMark(): Promise<void> {
 
 void renderShortcutHint();
 void loadLogoMark();
+trackChromeHeights(
+  document.body,
+  document.getElementById("chrome-top"),
+  document.getElementById("chrome-bottom"),
+);
 document.body.classList.add("initial-load");
 void refresh().then(() => {
   requestAnimationFrame(() => {

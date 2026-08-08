@@ -7,10 +7,16 @@ body.cockpit {
   --edge: var(--space-7);
   --content-max: 1500px;
 
+  /* Resting heights of the two floating chrome stacks. `trackChromeHeights`
+     overwrites both from the real elements — these only have to be close enough
+     that the first paint is not visibly wrong, and they are what the layout
+     falls back to if the stacks are ever measured at zero. */
+  --chrome-top: 78px;
+  --chrome-bottom: 69px;
+
+  position: relative;
   height: 100vh;
   overflow: hidden;
-  display: grid;
-  grid-template-rows: auto auto 1fr auto auto;
   background: var(--bone);
   /* subtle off-grain pattern, low contrast — feels like paper, not flat */
   background-image:
@@ -32,16 +38,75 @@ body.cockpit {
   }
 }
 
+/* ---------- floating chrome ---------- */
+
+/* The stacks are inset and transparent; the capsules *inside* them carry the
+   material, so all four edges of the glass show and the list runs past them on
+   every side. That detachment — not the translucency — is what separates this
+   from a vibrant toolbar, which macOS has had since Yosemite.
+   The inset is padding rather than offsets so `trackChromeHeights` still
+   measures the full space the chrome occupies with one `offsetHeight`. */
+.chrome {
+  position: fixed;
+  left: 0;
+  right: 0;
+  z-index: 20;
+  pointer-events: none;
+}
+
+.chrome > * {
+  pointer-events: auto;
+}
+
+.chrome-top {
+  top: 0;
+  padding: var(--space-3) var(--edge) 0;
+}
+
+.chrome-bottom {
+  bottom: 0;
+  padding: 0 var(--edge) var(--space-4);
+}
+
+.action-cluster,
+.kbd-legend,
+.warning,
+.devour-failures {
+  box-shadow:
+    inset 0 1px 0 var(--glass-rim),
+    0 0 0 1px var(--glass-edge),
+    0 14px 34px -18px var(--glass-shade);
+}
+
 /* ---------- header ---------- */
 
+/* At rest there is nothing beneath the header — the queue's top padding clears
+   it — so the material is absent and the controls sit straight on the paper.
+   It arrives only once rows are actually underneath, which is the behaviour
+   that reads as glass and the one thing no screenshot can show. `.chrome-lifted`
+   is set from the queue's scroll position in `devour.ts`. */
 .cockpit-header {
   display: grid;
   grid-template-columns: auto 1fr auto;
   align-items: center;
   gap: var(--space-5);
-  padding: var(--space-5) var(--edge);
-  border-bottom: 1px solid var(--hairline);
-  background: var(--paper);
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-float);
+  background: transparent;
+  transition:
+    background var(--duration) var(--easing-soft),
+    box-shadow var(--duration) var(--easing-soft),
+    backdrop-filter var(--duration) var(--easing-soft);
+}
+
+body.chrome-lifted .cockpit-header {
+  background: var(--glass-dense);
+  -webkit-backdrop-filter: var(--glass-blur-dense);
+  backdrop-filter: var(--glass-blur-dense);
+  box-shadow:
+    inset 0 1px 0 var(--glass-rim),
+    0 0 0 1px var(--glass-edge),
+    0 14px 34px -18px var(--glass-shade);
 }
 
 .brand {
@@ -69,12 +134,13 @@ body.cockpit {
   min-width: 0;
 }
 
+/* The only serif left in the product. Weight 400 because Young Serif ships one
+   weight and anything heavier would be synthesised. */
 .title {
   margin: 0;
   font-family: var(--font-display);
-  font-feature-settings: normal;
   font-size: var(--fs-hero);
-  font-weight: 500;
+  font-weight: 400;
   letter-spacing: var(--track-hero);
   line-height: 1;
   color: var(--ink);
@@ -84,7 +150,7 @@ body.cockpit {
   position: relative;
   display: flex;
   align-items: center;
-  background: var(--bone);
+  background: var(--well);
   border: 1px solid var(--hairline);
   border-radius: var(--radius-pill);
   padding: 0 14px 0 36px;
@@ -100,7 +166,7 @@ body.cockpit {
 
 .header-search:focus-within {
   border-color: var(--accent-ring);
-  background: var(--paper);
+  background: var(--paper-raised);
   box-shadow: 0 0 0 3px var(--accent-ring);
 }
 
@@ -302,13 +368,17 @@ button:not(.primary) > .count-badge {
 
 /* ---------- warning ---------- */
 
+/* Two stacked backgrounds: the danger tint is translucent, and over a scrolling
+   list with nothing behind it the text turned to mud. */
 .warning {
-  margin: var(--space-3) var(--edge) 0;
+  margin: var(--space-3) 0 0;
   font-size: var(--fs-small);
   color: var(--danger);
-  background: var(--danger-soft);
+  background: linear-gradient(var(--danger-soft), var(--danger-soft)), var(--glass-dense);
+  -webkit-backdrop-filter: var(--glass-blur-dense);
+  backdrop-filter: var(--glass-blur-dense);
   border: 1px solid var(--danger-ring);
-  border-radius: var(--radius-2);
+  border-radius: var(--radius-3);
   padding: 8px 12px;
   line-height: 1.4;
 }
@@ -318,12 +388,13 @@ button:not(.primary) > .count-badge {
 /* Queue-only by default; `body.inspecting` (set in devour.ts whenever the pane has
    content) opens the second column. */
 .cockpit-main {
+  position: absolute;
+  inset: 0;
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   gap: var(--space-6);
-  padding: var(--space-5) var(--edge);
+  padding-inline: var(--edge);
   min-height: 0;
-  overflow: hidden;
 }
 
 body.inspecting .cockpit-main {
@@ -342,18 +413,44 @@ body.inspecting .cockpit-main {
 /* Capped to a readable measure. Without this the collapsed state stretches rows
    the full window and flings each group's count and Select button ~1400px from
    the host name they belong to. The cap is close to the width the queue gets
-   when the inspector *is* open, so opening it barely reflows the list. */
+   when the inspector *is* open, so opening it barely reflows the list.
+   `margin-inline: auto` centres that measure: left-aligning it under a
+   full-width header put a centred search bar over a hard-left list with ~600px
+   of void beside it on a wide display.
+   The queue runs the full height of the viewport and pads itself clear of the
+   chrome, so rows scroll *under* the bars rather than stopping at them — that
+   passage is the only thing the glass is describing. */
 .queue {
-  overflow: auto;
+  overflow-y: auto;
   scrollbar-width: thin;
   scrollbar-color: var(--hairline-strong) transparent;
   padding-right: var(--space-3);
+  padding-block: calc(var(--chrome-top) + var(--space-5))
+    calc(var(--chrome-bottom) + var(--space-5));
+  /* Keyboard nav scrolls the focused row in with `block: "nearest"`, which
+     without this parks it beneath the bar it has just travelled under. */
+  scroll-padding-block: calc(var(--chrome-top) + var(--space-3))
+    calc(var(--chrome-bottom) + var(--space-3));
   max-width: 1000px;
   width: 100%;
+  margin-inline: auto;
+  /* Rows dissolve into the gaps around the floating capsules instead of being
+     sliced by the viewport edge. Detached chrome means content is visible above
+     the header and below the actions, and a 12px band of a half-drawn row there
+     reads as a rendering fault rather than as depth. */
+  --queue-fade: var(--space-5);
+  mask-image: linear-gradient(
+    to bottom,
+    transparent 0,
+    #000 var(--queue-fade),
+    #000 calc(100% - var(--queue-fade)),
+    transparent 100%
+  );
 }
 
 body.inspecting .queue {
   max-width: none;
+  margin-inline: 0;
 }
 
 .queue::-webkit-scrollbar {
@@ -365,10 +462,14 @@ body.inspecting .queue {
   border-radius: var(--radius-pill);
 }
 
+/* Opaque, deliberately. It is a content surface — the frontmatter preview and
+   the save path are read closely — and glass here would spend contrast to say
+   nothing. It sits between the bars rather than under them. */
 .inspector {
   display: none;
-  height: 100%;
+  min-height: 0;
   overflow: auto;
+  margin-block: calc(var(--chrome-top) + var(--space-5)) calc(var(--chrome-bottom) + var(--space-5));
   background: var(--paper);
   border: 1px solid var(--hairline);
   border-radius: var(--radius-3);
@@ -397,10 +498,8 @@ body.inspecting .inspector {
 }
 
 .empty p:first-child {
-  font-family: var(--font-display);
-  font-feature-settings: normal;
   font-size: var(--fs-display);
-  font-weight: 500;
+  font-weight: 600;
   letter-spacing: var(--track-display);
   color: var(--ink);
 }
@@ -546,12 +645,13 @@ body.initial-load .group {
   justify-content: center;
 }
 
+/* The letter standing in for a missing favicon: 12px inside a 22px circle. It
+   was set in the display serif, where the serifs are noise at that size and the
+   wordmark's one distinctive voice gets spent on a placeholder. */
 .favicon.fallback {
   border: 1px solid var(--hairline-strong);
   border-radius: 50%;
   color: var(--muted);
-  font-family: var(--font-display);
-  font-feature-settings: normal;
   font-size: 12px;
   font-weight: 600;
   line-height: 1;
@@ -579,13 +679,10 @@ body.initial-load .group {
   color: var(--ink);
 }
 
-.tab:hover .tab-title,
-.tab.focused .tab-title {
-  white-space: normal;
-  overflow: visible;
-  text-overflow: clip;
-  overflow-wrap: anywhere;
-}
+/* A truncated title used to unclamp to a full wrap on hover, which grew the row
+   and shoved every row below it out from under the cursor — in a list built for
+   fast keyboard triage, the one place a layout must not move. The inspector
+   already shows the whole title, and the row keeps its tooltip. */
 
 .tab-meta {
   font-size: var(--fs-tiny);
@@ -641,10 +738,8 @@ body.initial-load .group {
 
 .inspector-setup h3 {
   margin: 0;
-  font-family: var(--font-display);
-  font-feature-settings: normal;
   font-size: var(--fs-display);
-  font-weight: 500;
+  font-weight: 600;
   letter-spacing: var(--track-display);
   color: var(--ink);
 }
@@ -692,10 +787,8 @@ body.initial-load .group {
 }
 
 .inspector-title {
-  font-family: var(--font-display);
-  font-feature-settings: normal;
   font-size: var(--fs-lead);
-  font-weight: 500;
+  font-weight: 600;
   letter-spacing: var(--track-lead);
   line-height: 1.3;
   color: var(--ink);
@@ -778,10 +871,12 @@ body.initial-load .group {
 /* ---------- devour failures ---------- */
 
 .devour-failures {
-  margin: 0 var(--edge) 0;
+  margin: 0 0 var(--space-3);
   padding: var(--space-3) var(--space-4);
-  border-radius: var(--radius-2);
-  background: var(--danger-soft);
+  border-radius: var(--radius-3);
+  background: linear-gradient(var(--danger-soft), var(--danger-soft)), var(--glass-dense);
+  -webkit-backdrop-filter: var(--glass-blur-dense);
+  backdrop-filter: var(--glass-blur-dense);
   border: 1px solid var(--danger-ring);
   font-size: var(--fs-small);
 }
@@ -862,32 +957,85 @@ body.initial-load .group {
 
 /* ---------- action bar ---------- */
 
+/* Three separate floating capsules rather than one bar welded to the bottom
+   edge, so the queue is visible to both sides of them. `order` puts Close after
+   the actions visually while leaving it last in the DOM, where a destructive
+   control belongs in the tab sequence. */
 .action-bar {
   display: flex;
   align-items: center;
-  gap: var(--space-3);
-  padding: var(--space-4) var(--edge);
-  background: var(--paper);
-  border-top: 1px solid var(--hairline);
+  justify-content: center;
+  gap: var(--space-2);
+  padding: 0;
+  /* The bar still spans the full width while only two capsules are visible in
+     it. Without this it would swallow every click on the rows behind that empty
+     space — the cost of detaching chrome is that its box no longer matches what
+     you can see of it. */
+  pointer-events: none;
+}
+
+.action-cluster,
+.kbd-legend {
+  pointer-events: auto;
 }
 
 .action-cluster {
+  order: 0;
   display: flex;
   gap: var(--space-2);
   align-items: center;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-float);
+  background: var(--glass-dense);
+  -webkit-backdrop-filter: var(--glass-blur-dense);
+  backdrop-filter: var(--glass-blur-dense);
+}
+
+.action-divider {
+  width: 1px;
+  align-self: stretch;
+  margin: 0 var(--space-1);
+  background: var(--glass-edge);
 }
 
 .action-spacer {
-  flex: 1;
+  display: none;
 }
 
+/* `--muted-soft` here fell to 3.8:1 once the bar stepped deeper than the
+   content; `--muted` is 4.7:1 light / 4.9:1 dark on the same material. */
+/* Each key/label pair is one flex item, so the container's gap separates pairs
+   instead of separating every keycap from every word. Flat 6px everywhere made
+   `space` equidistant from `move` and `toggle` and you could not tell which one
+   it bound to; the `&nbsp;` that was supposed to bind them did nothing, because
+   a run of text in a flex container is its own anonymous item and takes the gap
+   like anything else. The ratio is what does the work — 5px inside a pair
+   against 16px between them. */
 .kbd-legend {
+  order: 2;
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-4);
   font-size: var(--fs-tiny);
-  color: var(--muted-soft);
-  margin-right: var(--space-3);
+  color: var(--muted);
+  margin-left: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-float);
+  background: var(--glass-dense);
+  -webkit-backdrop-filter: var(--glass-blur-dense);
+  backdrop-filter: var(--glass-blur-dense);
+}
+
+.kbd-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+}
+
+/* j and k are alternatives for one action, so they read as a single unit. */
+.kbd-hint kbd + kbd {
+  margin-left: -3px;
 }
 
 .kbd-legend kbd {
@@ -899,24 +1047,31 @@ body.initial-load .group {
   border-radius: var(--radius-1);
   color: var(--ink-soft);
   background: var(--bone);
-  margin: 0 1px;
+  margin: 0;
 }
 
 /* ---------- toast ---------- */
 
+/* The one element that was already floating over content, so glass costs it
+   nothing structural. It rides above the bottom chrome rather than at a fixed
+   offset, which the Devour-failures panel used to grow up behind. */
 .toast {
   position: fixed;
   left: 50%;
-  bottom: 100px;
+  bottom: calc(var(--chrome-bottom) + var(--space-4));
   transform: translateX(-50%);
   display: flex;
   align-items: center;
   gap: 12px;
   padding: 6px 6px 6px 16px;
-  background: var(--ink);
+  background: var(--toast-glass);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
   color: var(--paper);
   border-radius: var(--radius-pill);
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.22);
+  box-shadow:
+    inset 0 1px 0 var(--toast-rim),
+    0 12px 32px -8px var(--glass-shade);
   font-size: var(--fs-small);
   font-variant-numeric: tabular-nums;
   height: 36px;
@@ -950,20 +1105,28 @@ body.initial-load .group {
 
 /* narrow viewport — let inspector wrap below */
 
+/* One column, and the scroll moves out to `.cockpit-main` so the queue and the
+   inspector travel together as one document. The chrome stays fixed — content
+   still passes under it, which is the whole arrangement. */
 @media (max-width: 980px) {
-  body.cockpit {
-    height: auto;
-    overflow: visible;
-  }
-
   .cockpit-main {
     grid-template-columns: 1fr;
+    overflow-y: auto;
+    padding-block: calc(var(--chrome-top) + var(--space-5))
+      calc(var(--chrome-bottom) + var(--space-5));
+    scroll-padding-block: calc(var(--chrome-top) + var(--space-3))
+      calc(var(--chrome-bottom) + var(--space-3));
+  }
+
+  .queue {
     overflow: visible;
+    padding-block: 0;
+    max-width: none;
+    margin-inline: 0;
   }
 
   .inspector {
-    height: auto;
-    max-height: none;
+    margin-block: 0;
     overflow: visible;
   }
 

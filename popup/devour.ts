@@ -20,6 +20,8 @@ import {
   reasonLabel,
   selectedTabsInUiOrder,
   sendMessage,
+  trackChromeHeights,
+  trackScrollLift,
   visibleGroups,
   visibleTabIds,
 } from "./lib.js";
@@ -932,6 +934,15 @@ browser.runtime.onMessage.addListener((raw: unknown): void => {
 });
 
 void loadLogoMark();
+trackChromeHeights(
+  document.body,
+  document.getElementById("chrome-top"),
+  document.getElementById("chrome-bottom"),
+);
+trackScrollLift(document.body, [
+  document.querySelector<HTMLElement>(".queue"),
+  document.querySelector<HTMLElement>(".cockpit-main"),
+]);
 document.body.classList.add("initial-load");
 void refresh().then(() => {
   requestAnimationFrame(() => {

@@ -164,6 +164,57 @@ export async function sendMessage<T>(msg: unknown): Promise<T | undefined> {
   }
 }
 
+/**
+ * Publish the floating chrome stacks' heights onto `root` as `--chrome-top` /
+ * `--chrome-bottom`, so the scroll region can pad itself clear of bars it
+ * scrolls underneath. Their heights are not knowable from CSS: the warning
+ * banner and the Devour-failures panel appear and disappear inside the stacks,
+ * and a hard-coded inset would either clip the first row or leave a gap. The
+ * observer is never removed — both surfaces live exactly as long as their page.
+ */
+export function trackChromeHeights(
+  root: HTMLElement | null,
+  top: HTMLElement | null,
+  bottom: HTMLElement | null,
+): void {
+  if (!root) return;
+  const publish = (): void => {
+    if (top) root.style.setProperty("--chrome-top", `${Math.round(top.offsetHeight)}px`);
+    if (bottom) root.style.setProperty("--chrome-bottom", `${Math.round(bottom.offsetHeight)}px`);
+  };
+  publish();
+  const observer = new ResizeObserver(publish);
+  if (top) observer.observe(top);
+  if (bottom) observer.observe(bottom);
+}
+
+/**
+ * Toggle `chrome-lifted` on `root` from whether anything is scrolled underneath
+ * the floating chrome. The material is absent at rest — at the top of the list
+ * the queue's padding means there is genuinely nothing behind the header, and a
+ * bar tinted over nothing is the vibrant-toolbar look this is trying not to be.
+ * Two scrollers are passed because the cockpit moves its scroll from `.queue`
+ * out to `.cockpit-main` below 980px; whichever is live answers.
+ */
+export function trackScrollLift(root: HTMLElement, scrollers: (HTMLElement | null)[]): void {
+  const live = scrollers.filter((el): el is HTMLElement => el !== null);
+  if (!live.length) return;
+  let frame = 0;
+  const update = (): void => {
+    frame = 0;
+    root.classList.toggle(
+      "chrome-lifted",
+      live.some((el) => el.scrollTop > 8),
+    );
+  };
+  const onScroll = (): void => {
+    if (frame) return;
+    frame = requestAnimationFrame(update);
+  };
+  for (const el of live) el.addEventListener("scroll", onScroll, { passive: true });
+  update();
+}
+
 export function prettifyShortcut(raw: string): string {
   const isMac = navigator.platform.toLowerCase().includes("mac");
   return raw
