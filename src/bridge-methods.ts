@@ -142,7 +142,7 @@ function tabUrl(tab: browser.tabs.Tab): string | undefined {
 }
 
 /** Defuddle needs a real document; `about:`, `file:`, and the rest never have one. */
-function isHttpUrl(url: string | undefined): boolean {
+export function isHttpUrl(url: string | undefined): boolean {
   return url?.startsWith("http://") === true || url?.startsWith("https://") === true;
 }
 

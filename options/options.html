@@ -79,6 +79,54 @@
       </section>
 
       <section>
+        <h2 class="section-title">Academic papers</h2>
+        <p class="section-intro">
+          Optionally let Zotero Connector identify scholarly items and save them through its normal
+          translator workflow. Everything else continues to Obsidian.
+        </p>
+
+        <div class="setting">
+          <div class="setting-text">
+            <strong>Route papers to Zotero</strong>
+            <small>
+              Includes scholarly translator types and standalone PDFs. Off by default. This local
+              proof of concept requires the patched Connector build described in
+              <code>docs/ZOTERO_POC.md</code>.
+            </small>
+          </div>
+          <div class="setting-control">
+            <label class="switch">
+              <input type="checkbox" id="zoteroRoutingEnabled" />
+              <span class="switch-track" aria-hidden="true">
+                <span class="switch-thumb"></span>
+              </span>
+            </label>
+          </div>
+        </div>
+
+        <div class="setting block">
+          <div class="setting-text">
+            <strong>Connector extension ID</strong>
+            <small>
+              The published Connector is preset. Chrome assigns an unpacked development build a
+              different ID; copy that ID from <code>chrome://extensions</code> when testing the
+              proof of concept.
+            </small>
+          </div>
+          <div class="setting-control">
+            <input
+              type="text"
+              id="zoteroConnectorId"
+              autocomplete="off"
+              autocapitalize="off"
+              autocorrect="off"
+              spellcheck="false"
+            />
+          </div>
+        </div>
+      </section>
+
+      <section>
         <h2 class="section-title">Obsidian</h2>
         <p class="section-intro">
           <strong>Devour</strong> reads each selected tab through Defuddle, files it into your

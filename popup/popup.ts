@@ -1,6 +1,5 @@
 import type {
   ClipFailure,
-  ClipFailureReason,
   ClipSelectedTabsResponse,
   ClosedTabRecord,
   CloseDuplicatesResponse,
@@ -9,14 +8,16 @@ import type {
 } from "../src/background.js";
 import { openOptionsUi } from "../src/open-options.js";
 import { CLIP_ORIGINS, requestOrigins } from "../src/permissions.js";
-import type { Settings } from "../src/storage.js";
+import { hasClipDestination, hasVault, type Settings } from "../src/storage.js";
 import { IS_CHROME } from "../src/target.js";
 import {
+  clipSummary,
   computeDedupCount,
   type DomainGroup,
   hostInitial,
   markdownForTabs,
   prettifyShortcut,
+  reasonLabel,
   selectedTabsInUiOrder,
   sendMessage,
   visibleGroups,
@@ -299,15 +300,6 @@ function renderToast(): void {
   toastTextEl.textContent = `${state.toast.text} · Undo (${state.toast.remainingSec})`;
 }
 
-function reasonLabel(reason: ClipFailureReason): string {
-  switch (reason) {
-    case "extract-failed":
-      return "extract failed";
-    case "trigger-failed":
-      return "open failed";
-  }
-}
-
 function reasonTooltip(f: ClipFailure): string {
   return f.detail?.trim() ?? "";
 }
@@ -455,7 +447,7 @@ async function clipSelected(): Promise<void> {
     }, ms);
   };
 
-  if (!state.settings?.obsidianVault.trim()) {
+  if (!hasClipDestination(state.settings)) {
     clipCurrentBtn.title = "Set Obsidian vault in Options first.";
     state.clipping = true;
     clipCurrentBtn.disabled = true;
@@ -467,7 +459,9 @@ async function clipSelected(): Promise<void> {
   // permissions.request on the click's transient activation, so any earlier
   // await would spend it and the request would reject as gesture-less. Held
   // already (always, on Firefox) this resolves true without showing anything.
-  if (!(await requestOrigins(CLIP_ORIGINS))) {
+  // `hasVault` guards it because only the Obsidian path injects Defuddle — it
+  // has to stay synchronous for the same reason.
+  if (hasVault(state.settings) && !(await requestOrigins(CLIP_ORIGINS))) {
     clipCurrentBtn.title = "Tabglutton needs access to the pages it clips.";
     state.clipping = true;
     clipCurrentBtn.disabled = true;
@@ -496,16 +490,12 @@ async function clipSelected(): Promise<void> {
   }
   mergeClipFailures(tabIds, res.failures);
   await refresh();
-  const summary =
-    res.failed === 0
-      ? `Clipped ${res.succeeded}`
-      : `Clipped ${res.succeeded}, ${res.failed} failed`;
-  restore(summary, res.failed === 0 ? 1400 : 2200);
+  restore(clipSummary(res), res.failed === 0 ? 1400 : 2200);
 }
 
 async function retryFailures(tabIds: number[]): Promise<void> {
   if (state.clipping || !tabIds.length) return;
-  if (!state.settings?.obsidianVault.trim()) return;
+  if (!hasClipDestination(state.settings)) return;
   state.clipping = true;
   render();
   const res = await sendMessage<ClipSelectedTabsResponse>({
