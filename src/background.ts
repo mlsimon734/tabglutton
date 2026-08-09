@@ -417,12 +417,26 @@ const TAB_READY_TIMEOUT_MS = 15000;
 // `tabs_load` runs this over a batch. Nothing is read back after the reload for
 // the mirror-image reason: `tabs.reload` resolves before the navigation starts,
 // so a status read there still reports the pre-reload "complete".
-async function ensureTabReady(tabId: number, timeoutMs: number): Promise<void> {
+//
+// A newly created Firefox tab has a separate placeholder state: tabs.create
+// resolves with `about:blank` already marked "complete" before the requested
+// URL begins loading. Callers waiting for a particular document can supply its
+// URL so neither that placeholder nor an intervening navigation counts.
+async function ensureTabReady(
+  tabId: number,
+  timeoutMs: number,
+  expectedUrl?: string,
+): Promise<void> {
   let cleanup = (): void => {};
   const settled = new Promise<void>((resolve, reject) => {
-    const listener = (updatedTabId: number, changeInfo: { status?: string }): void => {
+    const listener = (
+      updatedTabId: number,
+      changeInfo: { status?: string },
+      updatedTab: Tab,
+    ): void => {
       if (updatedTabId !== tabId) return;
       if (changeInfo.status !== "complete") return;
+      if (expectedUrl !== undefined && updatedTab.url !== expectedUrl) return;
       cleanup();
       resolve();
     };
@@ -439,7 +453,8 @@ async function ensureTabReady(tabId: number, timeoutMs: number): Promise<void> {
 
   try {
     const tab = await browser.tabs.get(tabId);
-    if (!tab.discarded && tab.status === "complete") {
+    const isExpectedDocument = expectedUrl === undefined || tab.url === expectedUrl;
+    if (!tab.discarded && tab.status === "complete" && isExpectedDocument) {
       // Cleared, so `settled` simply never resolves — nothing awaits it here.
       cleanup();
       return;
@@ -557,13 +572,15 @@ async function openObsidianUrl(url: string): Promise<void> {
   if (ephemeralId === undefined) return;
   // The page load is now on the handoff's critical path — tabs.create resolves
   // before the redirect page's module script has issued the obsidian:// launch,
-  // and "complete" is the earliest proof that it has (a module script runs
-  // before the load event). Two things ride on that proof: the close below,
-  // which would otherwise be racing the page load and could drop the clip
-  // outright, and the caller's OBSIDIAN_HANDOFF_GAP_MS pacing — in clipboard
-  // mode the next clip overwrites the OS clipboard this launch has yet to read.
+  // and "complete" for that URL is the earliest proof that it has (a module
+  // script runs before the load event). The URL qualification matters on
+  // Firefox, where the new tab first reports about:blank as already complete.
+  // Two things ride on that proof: the close below, which would otherwise be
+  // racing the page load and could drop the clip outright, and the caller's
+  // OBSIDIAN_HANDOFF_GAP_MS pacing — in clipboard mode the next clip overwrites
+  // the OS clipboard this launch has yet to read.
   try {
-    await ensureTabReady(ephemeralId, OBSIDIAN_LAUNCH_PAGE_TIMEOUT_MS);
+    await ensureTabReady(ephemeralId, OBSIDIAN_LAUNCH_PAGE_TIMEOUT_MS, launchUrl);
   } catch (err) {
     console.warn("[tabglutton] obsidian launch page did not finish loading", err);
   }
