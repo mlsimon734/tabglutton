@@ -135,7 +135,7 @@ async function buildOne(target: Target): Promise<void> {
   cpSync("onboarding/onboarding.css", `${DIST}/onboarding/onboarding.css`);
 
   // obsidian-redirect.{html,js} — the extension-origin launch page used by
-  // openObsidianUrl on Chrome. The .js is emitted by tsc; copy the HTML shell.
+  // openObsidianUrl on both engines. The .js is emitted by tsc; copy the HTML shell.
   mkdirSync(`${DIST}/redirect`, { recursive: true });
   cpSync("redirect/obsidian-redirect.html", `${DIST}/redirect/obsidian-redirect.html`);
 
