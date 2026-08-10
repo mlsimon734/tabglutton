@@ -456,6 +456,15 @@ the cockpit emptying a real backlog (filter → select → Devour → notes land
 
 ## 6. Submission checklist
 
+**The pushed tag is what cuts the GitHub release.** `.github/workflows/release.yml`
+fires on a three-part `v*` tag, verifies it against `package.json`, runs `bun run
+check`, packages, and publishes the release with this version's CHANGELOG section as
+the body. So the GitHub release and the store submission come from one act instead of
+two — 0.2.0 shipped to AMO with the tag pushed but no release cut, because this
+checklist had no line for it. Four-part `sign:dev` tags are local and unpushed and
+never trigger it; the tag pattern refuses them anyway. To rebuild a release for a tag
+that is already pushed, run the workflow manually with the tag as its input.
+
 ```
 [x] Bump version to 0.2.0 in package.json and manifest.json
 [x] Write the 0.2.0 CHANGELOG entry (hand-written: the commits here are not
@@ -464,7 +473,10 @@ the cockpit emptying a real backlog (filter → select → Devour → notes land
                            # UNSAFE_VAR_ASSIGNMENT warnings from bundled Defuddle
 [ ] Merge to main, then tag v0.2.0 there — tagging the release branch before a
     squash merge leaves the tag on a commit main never gets
-[ ] bun run package        # both zips + source zip, from the tagged commit
+[ ] git push origin v0.2.0 — the `release` workflow packages the tagged commit
+    and publishes the GitHub release, body taken from this version's CHANGELOG
+    entry. Download the three zips from that release for the store uploads
+    below; `bun run package` locally is the fallback, not the normal path.
 [x] Screenshots captured and sized — Chrome takes the five native 1280x800
     shots; the popup pair (1200x1200) goes to AMO only, decided in §5
 [x] Build the 440x280 Chrome promo tile — `bun scripts/shoot-promo-tile.ts`

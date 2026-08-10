@@ -1,0 +1,65 @@
+name: release
+
+# Release tags only. `sign:dev` builds carry a fourth version part (v0.2.0.1) and
+# are local and unpushed by design, so they never reach this trigger — the pattern
+# refuses them a second time in case one is ever pushed by hand.
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing release tag to build and publish (e.g. v0.2.0)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - name: Resolve tag
+        id: tag
+        run: echo "tag=${{ inputs.tag || github.ref_name }}" >> "$GITHUB_OUTPUT"
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      # The tag is what AMO and the Chrome Web Store are told the version is, so a
+      # tag that disagrees with the manifest would ship mislabelled artifacts.
+      - name: Verify tag matches package.json version
+        run: |
+          version="$(bun --print 'require("./package.json").version')"
+          if [ "v$version" != "${{ steps.tag.outputs.tag }}" ]; then
+            echo "::error::tag ${{ steps.tag.outputs.tag }} does not match package.json version $version"
+            exit 1
+          fi
+
+      - name: Check
+        run: bun run check
+
+      - name: Package
+        run: bun run package
+
+      - name: Release notes
+        run: bun scripts/release-notes.ts > release-notes.md
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ steps.tag.outputs.tag }}" \
+            --title "${{ steps.tag.outputs.tag }}" \
+            --notes-file release-notes.md \
+            web-ext-artifacts/*.zip

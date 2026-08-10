@@ -31,7 +31,9 @@
     "package:firefox": "bun run build:firefox && bunx web-ext build --source-dir=dist-firefox --artifacts-dir=web-ext-artifacts --filename=tabglutton-firefox-{version}.zip --overwrite-dest",
     "package:chrome": "bun run build:chrome && bunx web-ext build --source-dir=dist-chrome --artifacts-dir=web-ext-artifacts --filename=tabglutton-chrome-{version}.zip --overwrite-dest",
     "sign": "bun scripts/sign.ts",
-    "sign:dev": "bun scripts/sign-dev.ts"
+    "sign:dev": "bun scripts/sign-dev.ts",
+    "release:bump": "bunx commit-and-tag-version --skip.tag",
+    "release:notes": "bun scripts/release-notes.ts"
   },
   "dependencies": {
     "defuddle": "^0.19.0",
