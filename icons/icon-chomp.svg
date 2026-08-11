@@ -1,15 +1,48 @@
+<!--
+  The app icon: the same mark the extension itself shows, on the brand ground.
+
+  The silhouette and bite are copied from icons/logo-mark.svg, which is the canonical
+  artwork — the popup, cockpit, options, and onboarding all fetch that file at runtime and
+  tint it with the accent token. This file cannot reference it (an icon is rasterized
+  standalone and has no stylesheet), so the path data is duplicated and MUST be kept in sync.
+
+  Two things differ from logo-mark.svg on purpose. The mark there is monochrome
+  `currentColor` because the page tints it per theme; an icon has no theme, so it commits to
+  the light-theme pairing (accent #7a4a2c as the ground, bone #f4efe6 as the figure), which
+  is the one that survives on both light and dark browser chrome. And the 0.18-opacity white
+  edge stroke is dropped: it exists to separate the mark from a page behind it, and at 16px
+  it is invisible anyway.
+-->
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
-  <rect width="64" height="64" rx="12" fill="#7a4a2c"/>
-  <!-- fanned stack of three pages -->
-  <rect x="10" y="22" width="30" height="30" rx="3" fill="#f4efe6" opacity="0.55"/>
-  <rect x="15" y="17" width="30" height="30" rx="3" fill="#f4efe6" opacity="0.78"/>
-  <rect x="20" y="12" width="30" height="30" rx="3" fill="#f4efe6"/>
-  <!-- bite through the top-right corner: a single silhouette, not separate protruding scallops -->
-  <path fill="#7a4a2c" d="M64 0v23H50c-1.3-4.9-5.2-8.8-10-11H64Z"/>
-  <circle cx="42.5" cy="12.5" r="2.6" fill="#7a4a2c"/>
-  <circle cx="43.5" cy="16.3" r="3" fill="#7a4a2c"/>
-  <circle cx="46.2" cy="19.3" r="3" fill="#7a4a2c"/>
-  <circle cx="49.6" cy="21.2" r="2.5" fill="#7a4a2c"/>
-  <!-- crumb -->
-  <circle cx="46" cy="8" r="2" fill="#7a4a2c"/>
+  <defs>
+    <mask id="cookie-bite" maskUnits="userSpaceOnUse" x="0" y="0" width="64" height="64">
+      <rect width="64" height="64" fill="#fff" />
+      <circle cx="47.5" cy="17" r="6.5" fill="#000" />
+      <circle cx="44.5" cy="24" r="6.5" fill="#000" />
+      <circle cx="44" cy="31" r="6.5" fill="#000" />
+      <circle cx="49" cy="38" r="6.5" fill="#000" />
+      <circle cx="52" cy="21" r="4.2" fill="#000" />
+      <circle cx="52" cy="28" r="4.2" fill="#000" />
+      <circle cx="53" cy="35" r="4.2" fill="#000" />
+    </mask>
+  </defs>
+
+  <rect width="64" height="64" rx="12" fill="#7a4a2c" />
+
+  <!-- Mark bbox in logo-mark space is x[8,52] y[10,56]; scaled to 40 tall and centred. -->
+  <g transform="translate(5.89 3.3) scale(0.8696)">
+    <path
+      d="M12 56C9.8 56 8 54.2 8 52V20C8 18.3 9.3 17 11 17H13C16.5 17 16 10 19.5 10H26.5C30 10 29.5 17 33 17H50C51.1 17 52 17.9 52 19V52C52 54.2 50.2 56 48 56H12Z"
+      fill="#f4efe6"
+      mask="url(#cookie-bite)"
+    />
+    <g fill="#3b2113" opacity="0.84">
+      <circle cx="23" cy="13.5" r="1.5" />
+      <circle cx="18" cy="26" r="1.7" />
+      <circle cx="31" cy="21" r="1.45" />
+      <circle cx="21" cy="40" r="1.8" />
+      <circle cx="35" cy="44" r="1.55" />
+      <circle cx="28" cy="31" r="1.2" />
+    </g>
+  </g>
 </svg>

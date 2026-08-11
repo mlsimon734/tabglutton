@@ -366,6 +366,44 @@ The two existing captures in `docs/media/` are 2880×1800 retina grabs. Same 1.6
 ratio as 1280×800, so they downscale cleanly — see `docs/media/store/` for the resized
 pair.
 
+### The icon is the extension's own mark, not a second one
+
+`icons/icon-chomp.svg` used to be a different drawing from the one the product shows: a
+fanned stack of three pages, where every surface in the extension renders the tab-with-a-
+cookie-bite silhouette from `icons/logo-mark.svg`. Nobody notices while building, because
+the toolbar icon and the popup header are never in frame together — it took seeing the AMO
+listing beside the popup to catch that the store was advertising a mark the product does
+not use.
+
+The icon is now that same silhouette. It cannot import it — an icon is rasterized standalone
+with no stylesheet — so the geometry is duplicated, which is also true of the promo tile,
+which inlines it to stay a single `file://`-renderable page. Copies are pinned to each other
+by `tests/logo-mark.test.ts` rather than by a comment asking for discipline.
+
+Two deliberate differences in the icon: `logo-mark.svg` is monochrome `currentColor` because
+each surface tints it per theme, and an icon has no theme, so it commits to the light-theme
+pairing (accent `#7a4a2c` ground, bone `#f4efe6` figure) — the pairing that holds on both
+light and dark browser chrome. And the 0.18-opacity white edge stroke is dropped, since it
+exists to separate the mark from a page behind it.
+
+**The icon is drawn twice, because 16px cannot hold the full drawing.** Scaled down, the
+chips became sub-pixel specks that only lowered the contrast of the fill keeping the
+silhouette readable. `icons/icon-chomp-small.svg` drops them and takes the room back as a
+larger glyph (44 units tall against 40); the silhouette and bite are byte-identical to the
+canonical mark, and the test pins the missing chips as deliberate so restoring them means
+arguing with a test.
+
+The bite keeps all seven mask circles at small size even though they step visibly at 16px. A
+three-circle version was tried and reads as a nick rather than a bite — the stepping costs
+less than losing the one thing that makes the mark a _chomped_ tab.
+
+Sizes 16 and 32 come from the small drawing, 48 and 128 from the full one. Regenerate with
+`bun scripts/rasterize-icons.ts`, which exists for that mapping — rasterizing all four from
+one source is the obvious thing to do by hand and silently discards the per-size work.
+Firefox declares both in `manifest.json` (`action.default_icon` and `icons` each carry 16/32
+→ small, 48+ → full); Chrome needs no `build.ts` change, since it already points at the
+PNGs.
+
 ### Shot list
 
 All five slots are filled. The set lives in `docs/media/store/`.
