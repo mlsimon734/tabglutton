@@ -105,25 +105,11 @@ The current history uses a concise imperative subject with optional scope detail
 
 **A PR that changes a visible surface carries screenshots in its description — not "when practical".** The surfaces are the popup, the Devour cockpit, options, and onboarding; a diff touching markup or CSS under `popup/`, `options/`, `onboarding/`, or `redirect/` is not reviewable without images, and needs both themes whenever the change reaches the tokens. Prose cannot carry a layout or a contrast decision, the reviewer cannot see one without building and loading the extension, and a description that only _describes_ a redesign is asking to be approved unseen. Capture with the CDP harness rather than an OS window grab — `scratch-chrome/shoot-store.ts` (dark) and `shoot-light.ts` (light), documented in `docs/STORE.md` §5: exact pixel dimensions, no window chrome, no Screen Recording permission, repeatable after the next UI change. That directory is gitignored and local-only, so it will be absent from a fresh clone and from every worktree but the one it was written in; copy it across rather than reinventing it. GitHub's image upload is session-authenticated and unreachable from `gh`, so the shots are committed on the branch — regenerating whatever the change made stale in `docs/media/` is usually the right place for them — and linked from the description by a `raw.githubusercontent.com` URL pinned to a **commit SHA**, which keeps rendering after the branch is deleted on merge.
 
-## Cloud sessions
-
-A Claude Code cloud session (claude.ai/code, `claude --cloud`) is a fresh Ubuntu x86_64 VM holding a GitHub clone of the branch — no `node_modules`, no local browser, no uncommitted work. `.claude/settings.json` and `.mcp.json` reach it; `~/.claude/` does not, which is why `.claude/skills/` is tracked rather than ignored — its entries are symlinks into `.agents/skills/`, so both directories have to stay out of `.gitignore` or the clone gets a dangling link instead of a skill.
-
-- **Dependencies install themselves.** The `SessionStart` hook in `.claude/settings.json` runs `scripts/cloud-setup.sh`, which exits 0 immediately unless `CLAUDE_CODE_REMOTE=true`. Bun's _package fetching_ is a documented casualty of the cloud egress proxy (running scripts with bun is fine), so that script falls back to `npm install` and says which path it took. Bun stays the local default; never make `npm` the local instruction.
-- **No `just`, no `gh`** in a cloud VM — and this repo has no `justfile` anyway. Everything is a `package.json` script: `bun run check` (the pre-commit gate), `bun run typecheck`, `bun run test`, `bun run lint:js`, `bun run format:check`. Skip `bun run lint` and `lint:ext` unless you need them — they shell out to `web-ext lint`, which builds first.
-- **The live-browser half of the workflow is unavailable.** `bun run start*`, the `tabglutton` MCP server in `.mcp.json`, and the `scratch-chrome/` capture harness all need a real browser on the machine; `scratch-chrome/` is gitignored and absent from any clone. So a cloud session can change pure modules and prove it with `bun test`, but the surfaces this file marks as live-only — `background.ts`, `bridge-client.ts`, `bridge-methods.ts`, the Defuddle content script — and every screenshot a UI PR owes still need a local run.
-- **`.env` is release-signing only.** `WEB_EXT_API_KEY` / `WEB_EXT_API_SECRET` exist for `bun run sign`; no development or test command reads them. Cloud environment variables are stored in plaintext and readable by anyone with access to that environment — there is no secrets store — so do not put them there. Cloud sessions develop and test; they do not sign or publish a release.
-
-**Setup script** for the environment config in the web UI (optional — the `SessionStart` hook already covers dependencies; this only pre-warms them so the first command is fast):
-
-```bash
-bun install || npm install
-exit 0
-```
-
 ## Security & Configuration Tips
 
 Keep browser permissions in `manifest.json` minimal and justify new permissions in the PR. Do not commit generated profiles, packaged zips, or local browser state. WebExtension tooling should always target `dist-firefox/` or `dist-chrome/`, not source directories directly.
+
+`.env`'s `WEB_EXT_API_KEY` / `WEB_EXT_API_SECRET` are **release-signing credentials only** — `bun run sign` and `sign:dev` read them and nothing else does. Developing, building, and the whole of `bun run check` work without them, so a checkout missing `.env` is not a broken checkout.
 
 ## Maintaining this file
 
