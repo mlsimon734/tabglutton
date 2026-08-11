@@ -9,9 +9,12 @@ dist-chrome/
 # the bridge token in extension storage, and a profile added later must not be
 # one `git add -A` away from committing it.
 .dev-profile*/
+# Personal, not shared. Everything else under .claude/ is tracked on purpose:
+# repo-level settings.json and .claude/skills/ are the only agent config that
+# reaches a cloud session (~/.claude/ does not), so a skill left ignored here is
+# a skill that exists locally and nowhere else.
 .claude/settings.local.json
-.claude/skills/
-.agents/
+.claude/.cc-writes/
 skills-lock.json
 .env
 .env.signing
