@@ -107,7 +107,7 @@ The current history uses a concise imperative subject with optional scope detail
 
 ## Cloud sessions
 
-A Claude Code cloud session (claude.ai/code, `claude --cloud`) is a fresh Ubuntu x86_64 VM holding a GitHub clone of the branch — no `node_modules`, no local browser, no uncommitted work. `.claude/settings.json` and `.mcp.json` reach it; `~/.claude/` does not, which is why `.claude/skills/` is tracked rather than ignored.
+A Claude Code cloud session (claude.ai/code, `claude --cloud`) is a fresh Ubuntu x86_64 VM holding a GitHub clone of the branch — no `node_modules`, no local browser, no uncommitted work. `.claude/settings.json` and `.mcp.json` reach it; `~/.claude/` does not, which is why `.claude/skills/` is tracked rather than ignored — its entries are symlinks into `.agents/skills/`, so both directories have to stay out of `.gitignore` or the clone gets a dangling link instead of a skill.
 
 - **Dependencies install themselves.** The `SessionStart` hook in `.claude/settings.json` runs `scripts/cloud-setup.sh`, which exits 0 immediately unless `CLAUDE_CODE_REMOTE=true`. Bun's _package fetching_ is a documented casualty of the cloud egress proxy (running scripts with bun is fine), so that script falls back to `npm install` and says which path it took. Bun stays the local default; never make `npm` the local instruction.
 - **No `just`, no `gh`** in a cloud VM — and this repo has no `justfile` anyway. Everything is a `package.json` script: `bun run check` (the pre-commit gate), `bun run typecheck`, `bun run test`, `bun run lint:js`, `bun run format:check`. Skip `bun run lint` and `lint:ext` unless you need them — they shell out to `web-ext lint`, which builds first.

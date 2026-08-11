@@ -12,7 +12,9 @@ dist-chrome/
 # Personal, not shared. Everything else under .claude/ is tracked on purpose:
 # repo-level settings.json and .claude/skills/ are the only agent config that
 # reaches a cloud session (~/.claude/ does not), so a skill left ignored here is
-# a skill that exists locally and nowhere else.
+# a skill that exists locally and nowhere else. .claude/skills/ entries are
+# symlinks into .agents/skills/, so both have to stay tracked — an ignored
+# target is a dangling symlink in every fresh clone.
 .claude/settings.local.json
 .claude/.cc-writes/
 skills-lock.json
