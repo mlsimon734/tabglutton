@@ -391,6 +391,15 @@ not package contents, and nothing about the upload prompted for them, so an othe
 complete submission looked finished while the product page was blank. Fixing it needs no
 new version and no re-review: it is Developer Hub → **Edit Product Page → Images**.
 
+`bun scripts/amo-listing-images.ts` does the whole set through AMO's own API instead —
+maintainer-only, since it authenticates as the add-on's owner with the same
+`WEB_EXT_API_KEY` / `WEB_EXT_API_SECRET` from `.env` that `sign:dev` uses (an AMO API key is
+one credential per account, not one per purpose). `--verify` reports the live state without
+changing anything, `--icon-only` / `--previews-only` narrow the run, and `--replace` is the
+escape hatch for a listing that was edited by hand. It reconciles against the listing rather
+than tracking progress locally, so re-running it after any interruption uploads only what is
+missing — which is the normal path, not the exceptional one, for the throttle reasons below.
+
 The icon is the surprising half. AMO does **not** read the `icons` key of `manifest.json`
 at all — verified against `addons-server`, not inferred. `Addon.icon_type` is written in
 exactly one place, `AddonFormMedia` in `src/olympia/devhub/forms.py`, whose
