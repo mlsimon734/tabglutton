@@ -104,7 +104,10 @@ and a long list of hard-won browser quirks are in [`docs/BRIDGE.md`](docs/BRIDGE
 
 ## Install
 
-Not in the add-on stores yet. Two ways to run it today:
+**Firefox and Zen** — [on addons.mozilla.org](https://addons.mozilla.org/firefox/addon/tabglutton/).
+Chrome has not been submitted yet; build it from source below.
+
+Two ways to run it from source:
 
 **From source** (either browser):
 

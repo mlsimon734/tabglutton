@@ -95,6 +95,17 @@ confirming before this becomes a plan. Weigh it against what it costs — a sepa
 installed host binary and manifest per browser, replacing today's "install the extension,
 add one line to `.mcp.json`".
 
+▸ **A shipping MCP browser extension already does it this way, which settles the product
+question but not the technical one.** `mcp-chrome` (MIT) connects its extension to an MCP
+server over **native messaging**, via a globally installed `mcp-chrome-bridge` host binary
+with its own `register` step. So "users will not install a host binary" is not a real
+objection — they do. But it is **Chrome-only**, so it is no evidence at all for the
+property this note is actually about: whether an open native-messaging port keeps a
+**Firefox MV3 event page** alive. That still needs measuring. Worth noting the trade runs
+the other way on distribution: their extension is unpacked-only from GitHub releases
+because of that binary, where Tabglutton is a store install plus one `.mcp.json` line. Do
+not spend that advantage cheaply.
+
 ## Lifecycle: nobody launches an app
 
 There is no user-visible application and no manual step per session:

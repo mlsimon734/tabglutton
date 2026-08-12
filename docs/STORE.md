@@ -5,6 +5,19 @@ addons.mozilla.org (AMO) and the Chrome Web Store. Reference material, not a tra
 is left to do on any given day belongs in an issue, not in checkboxes here that go stale
 between readings. AMO is live at `0.2.0`; Chrome has not been submitted.
 
+▸ **Gullet's npm publish is gated on the extension being live, not the other way round.**
+`bunx tabglutton-gullet` is what the options page, `gullet/README.md`, and the r/mcp launch
+post all tell people to run — and the package has never been published, so every one of
+those instructions 404s today. It cannot simply be published to fix that: `0.3.0` carries
+wire protocol 2 and AMO is still serving a protocol-1 extension, so a published sidecar
+would refuse the handshake for every existing user, correctly and confusingly. Publish only
+once the protocol-2 extension is live on **both** stores.
+
+The two versions are deliberately kept equal — extension `0.3.0` ships with Gullet `0.3.0`
+— so "keep them on the same version" is a rule a user can actually follow. Encoding the
+wire protocol in the npm major was considered and dropped: the package was already `0.1.0`
+at protocol 2, and a version that tracks neither the product nor the protocol helps nobody.
+
 ---
 
 ## 1. Standing constraints
