@@ -146,7 +146,16 @@ async function settled(id: number): Promise<void> {
     cleanup();
     throw err;
   }
-  if (existing && existing.state !== "in_progress") {
+  if (!existing) {
+    // The id we were just handed has no record, so it was erased from history —
+    // which only happens once a download is over. Nothing more will be reported
+    // about it, and waiting out the timeout would fail a clip whose file is on
+    // disk, which costs a duplicate when the user re-clips. Inability to check
+    // is not a failure here, the same call the vault verifier makes.
+    cleanup();
+    return;
+  }
+  if (existing.state !== "in_progress") {
     // Cleared, so `done` simply never settles — nothing awaits it after this.
     cleanup();
     if (existing.state === "complete") return;
