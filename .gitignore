@@ -10,6 +10,7 @@ dist-chrome/
 # one `git add -A` away from committing it.
 .dev-profile*/
 .claude/settings.local.json
+.claude/.cc-writes/
 .claude/skills/
 .agents/
 skills-lock.json
