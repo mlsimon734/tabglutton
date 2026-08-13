@@ -133,6 +133,11 @@ async function settled(id: number): Promise<void> {
     };
     browser.downloads.onChanged.addListener(listener);
   });
+  // Marked handled straight away. A download of bytes already in memory can
+  // fail inside the IPC round trip below — before anything awaits `done` — and
+  // an unhandled rejection there would log a spurious error on every one. The
+  // `await` at the end still sees the same rejection.
+  done.catch(() => {});
 
   let existing: browser.downloads.DownloadItem | undefined;
   try {
