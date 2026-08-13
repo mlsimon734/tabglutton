@@ -1,53 +1,42 @@
-# Store submission pack
+# Store listing reference
 
-Everything needed to list Tabglutton on addons.mozilla.org (AMO) and the Chrome Web Store.
-Copy below is paste-ready; decisions that must be settled before uploading are up top.
+Listing copy, store-platform findings, and the image pipeline for Tabglutton on
+addons.mozilla.org (AMO) and the Chrome Web Store. Reference material, not a tracker: what
+is left to do on any given day belongs in an issue, not in checkboxes here that go stale
+between readings. AMO is live at `0.2.0`; Chrome has not been submitted.
+
+▸ **Gullet's npm publish is gated on the extension being live, not the other way round.**
+`bunx tabglutton-gullet` is what the options page, `gullet/README.md`, and the r/mcp launch
+post all tell people to run — and the package has never been published, so every one of
+those instructions 404s today. It cannot simply be published to fix that: `0.3.0` carries
+wire protocol 2 and AMO is still serving a protocol-1 extension, so a published sidecar
+would refuse the handshake for every existing user, correctly and confusingly. Publish only
+once the protocol-2 extension is live on **both** stores.
+
+The two versions are deliberately kept equal — extension `0.3.0` ships with Gullet `0.3.0`
+— so "keep them on the same version" is a rule a user can actually follow. Encoding the
+wire protocol in the npm major was considered and dropped: the package was already `0.1.0`
+at protocol 2, and a version that tracks neither the product nor the protocol helps nobody.
 
 ---
 
-## 1. Decide these first
+## 1. Standing constraints
 
-### Version — release as `0.2.0`, not `0.1.3`
+These bind every release, not just the first one.
 
-Nine unlisted dev builds have already been signed against this add-on, up to **`0.1.3.9`**
-(local tags `v0.1.1` … `v0.1.3.9`). AMO requires an add-on's versions to be unique and
-strictly increasing, and by Firefox's own version comparison `0.1.3 < 0.1.3.1`. Uploading
-`0.1.3` as the first listed version is therefore a regression against builds AMO has
-already seen.
-
-Bump to `0.2.0` in `package.json` and `manifest.json` before packaging. It clears every dev
-build, and "first public release" is a reasonable minor bump anyway.
-
-### Extension ID — keep `tabglutton@addons.local`
-
-The signed dev builds carry this ID and AMO has accepted it nine times, so it is proven.
-Submit the listed version **under the existing AMO add-on**, choosing the listed channel at
-upload — an add-on can carry both channels, and staying on one ID means your own dogfooding
-profile upgrades in place and keeps its extension storage.
-
-Changing the ID would create a second AMO entry, orphan every existing install, and reset
-stored settings. Users never see the ID. Don't.
-
-### Privacy policy URL
-
-```
-https://github.com/mlsimon734/tabglutton/blob/main/PRIVACY.md
-```
-
-Required as a URL by Chrome; AMO takes the text inline (paste the same content). Chrome
-accepts a GitHub-hosted policy.
-
-### Source code submission is mandatory on AMO
-
-`build.ts` sets `minify: true`, so the reviewed code is machine-generated. AMO requires the
-original source plus reproducible build instructions whenever that is true. `bun run
-package` already emits `web-ext-artifacts/tabglutton-source-<version>.zip` via `git archive`
-— upload that alongside the add-on, and paste the reviewer notes in §4.
-
-### Chrome developer account
-
-One-time **$5 USD** registration fee if this is your first Chrome Web Store item. AMO is
-free.
+- **Keep the extension ID `tabglutton@addons.local`.** Changing it creates a second AMO
+  entry, orphans every existing install, and resets stored settings. Users never see it.
+- **AMO submissions must include source.** `build.ts` sets `minify: true`, so the reviewed
+  code is machine-generated, and AMO requires the original plus reproducible build
+  instructions whenever that is true. `bun run package` emits
+  `web-ext-artifacts/tabglutton-source-<version>.zip` via `git archive`; upload it alongside
+  the add-on and paste the reviewer notes from §3.
+- **Versions must be unique and strictly increasing on AMO**, and Firefox compares
+  `0.1.3 < 0.1.3.1` — so the four-part `sign:dev` builds already consumed a range the
+  release version has to clear. This is why the first listed version was `0.2.0` rather than
+  `0.1.3`. Mechanics are in `AGENTS.md` § Versioning.
+- **Privacy policy** is `https://github.com/mlsimon734/tabglutton/blob/main/PRIVACY.md`.
+  Chrome requires a URL and accepts a GitHub-hosted one; AMO takes the same text inline.
 
 ---
 
@@ -243,6 +232,9 @@ rewrites ws://127.0.0.1 to wss:// and breaks the loopback connection.
 
 ## 4. Chrome Web Store
 
+Not yet submitted. Publishing requires a developer account, which carries a one-time **$5
+USD** registration fee; AMO is free.
+
 | Field              | Value                                                           |
 | ------------------ | --------------------------------------------------------------- |
 | Item name          | Tabglutton                                                      |
@@ -355,12 +347,13 @@ Tick **nothing** in the collected-data categories, then affirm all three certifi
 
 ### Specs
 
-| Store  | Required                                                          |
-| ------ | ----------------------------------------------------------------- |
-| Chrome | **exactly 1280×800** or 640×400, PNG or JPEG, at least 1, up to 5 |
-| Chrome | small promo tile 440×280 PNG — ✅ `promo-tile-440x280.png`        |
-| AMO    | PNG/JPEG, no fixed size; 1280×800 is a good default               |
-| Both   | icon 128×128 PNG — `icons/icon-chomp-128.png` already exists      |
+| Store  | Required                                                                        |
+| ------ | ------------------------------------------------------------------------------- |
+| Chrome | **exactly 1280×800** or 640×400, PNG or JPEG, at least 1, up to 5               |
+| Chrome | small promo tile 440×280 PNG — ✅ `promo-tile-440x280.png`                      |
+| Chrome | icon 128×128 PNG — read from the package, `icons/icon-chomp-128.png`            |
+| AMO    | screenshots PNG/JPEG, not animated, under 4 MB; 1280×800 is a good default      |
+| AMO    | icon square PNG/JPEG, ≥ 128×128 — ✅ `amo-icon-512.png`, a Developer Hub upload |
 
 The two existing captures in `docs/media/` are 2880×1800 retina grabs. Same 1.6 aspect
 ratio as 1280×800, so they downscale cleanly — see `docs/media/store/` for the resized
@@ -377,8 +370,8 @@ not use.
 
 The icon is now that same silhouette. It cannot import it — an icon is rasterized standalone
 with no stylesheet — so the geometry is duplicated, which is also true of the promo tile,
-which inlines it to stay a single `file://`-renderable page. Copies are pinned to each other
-by `tests/logo-mark.test.ts` rather than by a comment asking for discipline.
+which inlines it to stay a single `file://`-renderable page. Three copies, pinned to each
+other by `tests/logo-mark.test.ts` rather than by a comment asking for discipline.
 
 Two deliberate differences in the icon: `logo-mark.svg` is monochrome `currentColor` because
 each surface tints it per theme, and an icon has no theme, so it commits to the light-theme
@@ -403,6 +396,69 @@ one source is the obvious thing to do by hand and silently discards the per-size
 Firefox declares both in `manifest.json` (`action.default_icon` and `icons` each carry 16/32
 → small, 48+ → full); Chrome needs no `build.ts` change, since it already points at the
 PNGs.
+
+### AMO listing images are not in the package — and the icon never was
+
+**0.2.0 went live with a placeholder icon and no screenshots.** Both are listing fields,
+not package contents, and nothing about the upload prompted for them, so an otherwise
+complete submission looked finished while the product page was blank. Fixing it needs no
+new version and no re-review: it is Developer Hub → **Edit Product Page → Images**.
+
+`bun scripts/amo-listing-images.ts` does the whole set through AMO's own API instead —
+maintainer-only, since it authenticates as the add-on's owner with the same
+`WEB_EXT_API_KEY` / `WEB_EXT_API_SECRET` from `.env` that `sign:dev` uses (an AMO API key is
+one credential per account, not one per purpose). `--verify` reports the live state without
+changing anything, `--icon-only` / `--previews-only` narrow the run, and `--replace` is the
+escape hatch for a listing that was edited by hand. It reconciles against the listing rather
+than tracking progress locally, so re-running it after any interruption uploads only what is
+missing — which is the normal path, not the exceptional one, for the throttle reasons below.
+
+The icon is the surprising half. AMO does **not** read the `icons` key of `manifest.json`
+at all — verified against `addons-server`, not inferred. `Addon.icon_type` is written in
+exactly one place, `AddonFormMedia` in `src/olympia/devhub/forms.py`, whose
+`ICON_TYPES` is `[('', 'default'), ('image/jpeg', 'jpeg'), ('image/png', 'png')]`; no
+manifest-parsing path touches it, and an empty `icon_type` makes `get_icon_url` return
+`img/addon-icons/default-<size>.png`, the generic puzzle piece. So this is not the
+SVG-versus-PNG question it looks like — a PNG in the manifest would have produced the same
+placeholder. (SVG would be refused on its own terms too: the upload validator answers
+"Icons must be either PNG or JPG.")
+
+Constraints, from `src/olympia/constants/base.py` and `devhub/views.py`:
+
+- Icon: PNG or JPEG, not animated, under 4 MB. AMO derives 32/64/128 from it
+  (`ADDON_ICON_SIZES`) and keeps the original, so upload larger than 128 — hence
+  `amo-icon-512.png`, rendered from `icons/icon-chomp.svg` with
+  `rsvg-convert -w 512 -h 512`, the same source `build.ts` rasterizes for Chrome.
+- Screenshots: PNG or JPEG, not animated, under 4 MB each. The stricter rules — ≥ 1000×750
+  and an exact **4:3** ratio — sit behind the `content-optimization` waffle switch, which
+  production has off (the store's own guidance recommends 1280×800, which is 16:10). If an
+  upload is ever rejected with "Image dimensions must be in the ratio 4:3", that switch is
+  the reason and the whole set needs re-cutting, not one image.
+- AMO thumbnails previews at 533×400 (4:3) and caps the full image at 2400×1800, so the
+  16:10 shots letterbox in the carousel strip and render whole when opened.
+
+All seven images already exist in `docs/media/store/`; the popup pair goes here and only
+here, per the sizing decision below. Upload order, since AMO leads with the first:
+
+1. `cockpit-light-1280x800.png` — the lead
+2. `popup-light.png` — the surface a user actually touches
+3. `cockpit-inspector-light-1280x800.png` — where the note lands
+4. `obsidian-note-1280x800.png` — the outcome
+5. `cockpit-dark-1280x800.png`
+6. `popup-dark.png`
+7. `cockpit-inspector-dark-1280x800.png`
+
+Light first and dark grouped at the end, rather than alternating: the carousel is read
+left to right and a theme flip mid-sequence reads as a different product.
+
+**AMO throttles writes on two clocks, so a full image run does not fit in one sitting.** A
+burst limit refuses after about three writes and clears in under a minute; an hourly cap
+sits behind it and answers "available in 3475 seconds". Nine writes — one icon and eight
+screenshots — therefore span two sittings by design, and neither limit is a failure. Wait
+out the first and re-run for the second; a run reconciles against the listing and uploads
+only what is missing. Note also that AMO resizes the icon in a background task, so the
+`icon_url` hash on the detail endpoint still reports the _previous_ icon for a few seconds
+after a successful upload — re-read it before concluding the upload was a no-op.
 
 ### Shot list
 
@@ -489,52 +545,3 @@ favicon before capturing.
 Optional but high-value for the launch posts, not the stores: a ~20s screen recording of
 the cockpit emptying a real backlog (filter → select → Devour → notes landing in Obsidian
 → Undo). The README already has a slot reserved for it at `docs/media/demo.gif`.
-
----
-
-## 6. Submission checklist
-
-**The pushed tag is what cuts the GitHub release.** `.github/workflows/release.yml`
-fires on a three-part `v*` tag, verifies it against `package.json`, runs `bun run
-check`, packages, and publishes the release with this version's CHANGELOG section as
-the body. So the GitHub release and the store submission come from one act instead of
-two — 0.2.0 shipped to AMO with the tag pushed but no release cut, because this
-checklist had no line for it. Four-part `sign:dev` tags are local and unpushed and
-never trigger it; the tag pattern refuses them anyway. To rebuild a release for a tag
-that is already pushed, run the workflow manually with the tag as its input.
-
-```
-[x] Bump version to 0.2.0 in package.json and manifest.json
-[x] Write the 0.2.0 CHANGELOG entry (hand-written: the commits here are not
-    Conventional Commits, so commit-and-tag-version generates an empty section)
-[x] bun run check          # 336 tests; web-ext lint 0 errors, 3 pre-existing
-                           # UNSAFE_VAR_ASSIGNMENT warnings from bundled Defuddle
-[ ] Merge to main, then tag v0.2.0 there — tagging the release branch before a
-    squash merge leaves the tag on a commit main never gets
-[ ] git push origin v0.2.0 — the `release` workflow packages the tagged commit
-    and publishes the GitHub release, body taken from this version's CHANGELOG
-    entry. Download the three zips from that release for the store uploads
-    below; `bun run package` locally is the fallback, not the normal path.
-[x] Screenshots captured and sized — Chrome takes the five native 1280x800
-    shots; the popup pair (1200x1200) goes to AMO only, decided in §5
-[x] Build the 440x280 Chrome promo tile — `bun scripts/shoot-promo-tile.ts`
-[ ] Commit and push PRIVACY.md so the policy URL resolves on main
-
-AMO
-[ ] Upload tabglutton-firefox-0.2.0.zip to the EXISTING add-on, Listed channel
-[ ] Attach tabglutton-source-0.2.0.zip
-[ ] Paste reviewer notes (§3)
-[ ] Confirm data collection = none on every category
-[ ] Fill listing copy, category Tabs, screenshots (all seven, popup pair included)
-
-Chrome
-[ ] Pay the $5 developer registration fee if not already registered
-[ ] Upload tabglutton-chrome-0.2.0.zip
-[ ] Paste all seven permission justifications + single purpose statement
-[ ] Declare no remote code, no data collection, tick all three certifications
-[ ] Fill listing copy, category Workflow & Planning, the five 1280x800 shots, promo tile
-
-After both are live
-[ ] Update README Install section: replace "Not in the add-on stores yet" with store links
-[ ] Fill the real URLs into docs/LAUNCH.md and post per the schedule there
-```

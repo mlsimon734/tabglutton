@@ -101,9 +101,9 @@ browser being a worse version of a notes app.
 So I built a browser extension that does it in bulk. It's called Tabglutton.
 
 You select a batch of tabs and hit Devour. Each one gets extracted with **Defuddle** — the
-same library Obsidian's own Web Clipper uses, so the notes come out looking exactly like
-the ones you already have — converted to markdown with frontmatter (title, source URL,
-author, site, published date), filed under `Clippings/`, and the tab closes behind it.
+same library Obsidian's own Web Clipper uses, so the article text is picked out the same
+way — converted to markdown with frontmatter (title, source URL, author, site, published
+date), filed under `Clippings/`, and the tab closes behind it.
 
 There's a full-screen view for working through a backlog: tabs grouped by host, an
 inspector that shows you the exact vault path each note will land at before you commit,
@@ -143,8 +143,10 @@ Tabglutton — an MCP server that exposes your live browser tabs: list, read, cl
 **Body**
 
 ````
-Most browser MCP servers drive a *separate* automated browser. This one attaches to the
-browser you already have open, with your sessions and your 400-tab backlog in it.
+Attaching an agent to your real browser isn't new — playwright-mcp's extension and
+mcp-chrome both do it. Two things here are different: this is built for a backlog of
+*hundreds* of tabs rather than the page in front of you, and every close it makes is
+reversible by construction.
 
 It's a WebExtension (Firefox/Zen/Chrome) plus a zero-dependency Bun sidecar. The extension
 dials a loopback WebSocket; the sidecar is the MCP server your agent spawns over stdio.
@@ -397,17 +399,31 @@ The questions you will get, in rough order of certainty.
 **"How is this different from [any of the fifty duplicate-tab extensions]?"**
 The dedup isn't the point and isn't novel; canonicalization quality and the undo are the
 only places it's better. The point is what happens to the tabs that _aren't_ duplicates —
-they become notes instead of staying tabs. No other tab extension has an agent bridge.
+they become notes instead of staying tabs.
+
+Do not claim the agent bridge is unique. playwright-mcp's extension and mcp-chrome both
+attach an agent to a real browser, and r/mcp will know. What holds up: neither has an undo
+(playwright-mcp closes tabs _by index_), neither has a listing contract that survives a
+900-tab backlog, and neither can confirm a clip reached disk before closing the tab —
+because neither has a process sitting next to your vault.
 
 **"Why not just use Web Clipper?"** (r/ObsidianMD)
 You should — for one page. This is for forty, and it closes them behind you. Same
-extractor, so the notes are identical.
+extractor, so the article text is picked out the same way. The frontmatter is Tabglutton's
+own and Web Clipper-compatible, not byte-identical — don't overclaim it.
 
 **"`<all_urls>` is a lot of permission."** (r/firefox, HN)
 Answer in `PRIVACY.md`, and pre-empted in the r/firefox post. Short version: capability,
 not behaviour — no declared content scripts, injection only on explicit action against one
-named tab. Pure dedup use never injects anything. If pressed on why it isn't optional:
-it's a fair ask and worth doing, but it isn't done today — say so rather than arguing.
+named tab. Pure dedup use never injects anything.
+
+**The two engines now differ, and the answer has to match the build being discussed.**
+Firefox declares `host_permissions: ["*://*/*"]`, because Gecko rejects
+`permissions.request` for an origin already declared there. Chrome declares
+`optional_host_permissions` instead and asks at first use — from the popup's Devour, and
+from switching the bridge on — so a Chrome install prompts for nothing about websites. If
+someone asks why it isn't optional, that is now only true of Firefox, and the reason is
+Gecko's behaviour rather than an unwillingness to do it.
 
 **"Isn't letting an LLM close my tabs insane?"**
 Yes, which is why closing is the one thing that's structurally reversible. The undo log is
