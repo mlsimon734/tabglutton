@@ -1,6 +1,6 @@
 {
   "name": "tabglutton",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "private": true,
   "description": "Devour duplicate tabs and save the keepers into Obsidian. For Zen Browser and Firefox.",
   "type": "module",

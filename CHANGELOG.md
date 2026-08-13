@@ -2,6 +2,20 @@
 
 All notable changes to Tabglutton are documented here.
 
+## [0.3.1](https://github.com/mlsimon734/tabglutton/compare/v0.3.0...v0.3.1) (2026-08-12)
+
+Identical to 0.3.0. That version went to AMO's self-distribution channel by mistake, and
+AMO rejects a version number that already exists on the add-on — measured, not assumed:
+uploading 0.3.0 to the listed channel answers "Version 0.3.0 already exists." A version's
+channel cannot be changed after upload and a number is never freed, so the store release
+of this code has to carry the next one.
+
+The submission page is what makes this easy to get wrong. It states the current channel as
+prose ("On your own.") with a small Change link, and the file picker sits directly beneath
+it — the radio buttons live on a separate `/versions/submit/distribution` page, defaulting
+to whatever was used last, which for this add-on is every `sign:dev` build ever signed.
+Go to that page first: `?channel=listed` arrives preselected.
+
 ## [0.3.0](https://github.com/mlsimon734/tabglutton/compare/v0.2.0...v0.3.0) (2026-08-12)
 
 Mostly about trusting the bridge on a real backlog: a clip is now confirmed on disk
