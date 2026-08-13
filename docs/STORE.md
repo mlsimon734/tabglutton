@@ -3,17 +3,17 @@
 Listing copy, store-platform findings, and the image pipeline for Tabglutton on
 addons.mozilla.org (AMO) and the Chrome Web Store. Reference material, not a tracker: what
 is left to do on any given day belongs in an issue, not in checkboxes here that go stale
-between readings. AMO is live at `0.2.0`; Chrome has not been submitted.
+between readings. AMO is live at `0.3.1`; Chrome has not been submitted.
 
 ▸ **Gullet's npm publish is gated on the extension being live, not the other way round.**
 `bunx tabglutton-gullet` is what the options page, `gullet/README.md`, and the r/mcp launch
 post all tell people to run — and the package has never been published, so every one of
-those instructions 404s today. It cannot simply be published to fix that: `0.3.0` carries
-wire protocol 2 and AMO is still serving a protocol-1 extension, so a published sidecar
-would refuse the handshake for every existing user, correctly and confusingly. Publish only
-once the protocol-2 extension is live on **both** stores.
+those instructions 404s today. The protocol half of that gate is now clear: AMO serves
+`0.3.1`, which is wire protocol 2, so a published sidecar would no longer refuse the
+handshake for Firefox users. Chrome is still unsubmitted, so anyone who finds the extension
+there later would meet the same mismatch in reverse.
 
-The two versions are deliberately kept equal — extension `0.3.0` ships with Gullet `0.3.0`
+The two versions are deliberately kept equal — extension `0.3.1` ships with Gullet `0.3.1`
 — so "keep them on the same version" is a rule a user can actually follow. Encoding the
 wire protocol in the npm major was considered and dropped: the package was already `0.1.0`
 at protocol 2, and a version that tracks neither the product nor the protocol helps nobody.
@@ -29,12 +29,28 @@ These bind every release, not just the first one.
 - **AMO submissions must include source.** `build.ts` sets `minify: true`, so the reviewed
   code is machine-generated, and AMO requires the original plus reproducible build
   instructions whenever that is true. `bun run package` emits
-  `web-ext-artifacts/tabglutton-source-<version>.zip` via `git archive`; upload it alongside
-  the add-on and paste the reviewer notes from §3.
+  `web-ext-artifacts/tabglutton-source-<version>.zip` via `git archive`. The source step is
+  **after** the button labelled "Submit Version", not alongside the package — see §3.
+- **The submission flow defaults to the wrong channel, and states it rather than asking.**
+  The upload page prints the current choice as prose ("On your own.") with a small `Change`
+  link, and the file picker sits directly beneath it. The actual radios live on a separate
+  page, and the default is sticky from the last submission — which for this add-on is every
+  `sign:dev` build ever signed, all unlisted. `0.3.0` was lost to this. Always start a store
+  submission from the URL that arrives preselected:
+
+  ```
+  https://addons.mozilla.org/en-US/developers/addon/tabglutton/versions/submit/distribution?channel=listed
+  ```
+
 - **Versions must be unique and strictly increasing on AMO**, and Firefox compares
   `0.1.3 < 0.1.3.1` — so the four-part `sign:dev` builds already consumed a range the
   release version has to clear. This is why the first listed version was `0.2.0` rather than
   `0.1.3`. Mechanics are in `AGENTS.md` § Versioning.
+- **Uniqueness spans both channels, and a version's channel is fixed forever.** Measured:
+  after `0.3.0` went out unlisted, uploading the identical package to the listed channel
+  answers "Version 0.3.0 already exists." There is no promote action, deleting a version
+  does not free its number, and the listed release therefore had to become `0.3.1`. A
+  number spent on the wrong channel is spent.
 - **Privacy policy** is `https://github.com/mlsimon734/tabglutton/blob/main/PRIVACY.md`.
   Chrome requires a URL and accepts a GitHub-hosted one; AMO takes the same text inline.
 
@@ -155,6 +171,32 @@ current-window scope in settings.
 | License            | MIT                                                                                        |
 | Channel            | **Listed** (the existing add-on's unlisted history is unaffected)                          |
 | Tags               | pick from AMO's fixed vocabulary; `tabs`, `productivity`, `bookmarks` are the closest fits |
+
+### The version-upload flow, in the order it actually happens
+
+Measured on the `0.3.1` submission. The step order is not what it looks like from the first
+page, and the source upload is not where the wording implies.
+
+1. **Distribution.** Start at `…/versions/submit/distribution?channel=listed` so the right
+   radio is preselected. Reaching the upload page any other way inherits the last channel
+   used, which is unlisted. Confirm the page reads "On this site." before going on.
+2. **Upload package** — `tabglutton-firefox-<version>.zip`. Validation runs immediately.
+   Expect "no errors and 3 warnings": two are the generic submission checklist, the third is
+   `Unsafe assignment to innerHTML`, which is `onboarding.ts`'s `rulesList.innerHTML = ""`
+   plus bundled Defuddle's `textarea`/`template` decode helpers. Neither takes untrusted
+   input; no tab title or clipped content is ever assigned to `innerHTML`.
+3. **Compatibility** — Firefox and Firefox for Android arrive pre-checked. Leave both.
+4. **Describe Version** — release notes (public, shown on the listing) and notes to
+   reviewer (§3 below). There is **no source field on this page**, which is misleading,
+   because the page's own text talks about source code submission here.
+5. **"Submit Version"** — despite the name, this is not the last step.
+6. **Source code** — _now_ it asks whether the extension uses minifiers or bundlers. Answer
+   **yes** and upload `tabglutton-source-<version>.zip`, then **Continue**. This is the
+   final step; the next page says "Version Submitted".
+
+Automated validation published `0.3.1` without manual review. Confirm the channel actually
+took by querying the API rather than trusting the success page — `filter=all_with_unlisted`
+on `/api/v5/addons/addon/<id>/versions/` returns each version's `channel` and `status`.
 
 ### Data collection disclosure
 
