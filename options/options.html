@@ -127,13 +127,43 @@
       </section>
 
       <section>
-        <h2 class="section-title">Obsidian</h2>
+        <h2 class="section-title">Devour</h2>
         <p class="section-intro">
-          <strong>Devour</strong> reads each selected tab through Defuddle, files it into your
-          Obsidian vault as a markdown note with frontmatter, then closes the tab.
+          <strong>Devour</strong> reads each selected tab through Defuddle, files it as a markdown
+          note with frontmatter, then closes the tab.
         </p>
 
         <div class="setting block">
+          <div class="setting-text">
+            <strong>Destination</strong>
+            <small>
+              Where a devoured page is filed. Tabglutton cannot tell a refused
+              <code>obsidian://</code> handoff from a successful one, so it never switches on your
+              behalf — this is the choice.
+            </small>
+          </div>
+          <div class="setting-control radio-stack">
+            <label class="radio-card">
+              <input type="radio" name="clipDestination" value="obsidian" />
+              <span class="radio-card-body">
+                <strong>Obsidian vault</strong>
+                <small>Hands each note to Obsidian through its <code>obsidian://</code> URL.</small>
+              </span>
+            </label>
+            <label class="radio-card">
+              <input type="radio" name="clipDestination" value="file" />
+              <span class="radio-card-body">
+                <strong>Markdown files</strong>
+                <small>
+                  Saves the same note into your browser's download folder. No Obsidian install and
+                  no vault needed; open the files in any editor.
+                </small>
+              </span>
+            </label>
+          </div>
+        </div>
+
+        <div class="setting block" id="obsidianVaultBlock">
           <div class="setting-text">
             <strong>Obsidian vault</strong>
             <small>
@@ -150,9 +180,10 @@
           <div class="setting-text">
             <strong>Clippings folder</strong>
             <small>
-              Folder in your vault where Devour saves clipped pages. Per-site subfolders are added
-              automatically (e.g. <code>&lt;folder&gt;/GitHub</code>,
-              <code>&lt;folder&gt;/Social</code>). Leave blank to use <code>Clippings</code>.
+              Folder where Devour saves clipped pages — inside your vault, or inside your download
+              folder in file mode. Per-site subfolders are added automatically (e.g.
+              <code>&lt;folder&gt;/GitHub</code>, <code>&lt;folder&gt;/Social</code>). Leave blank
+              to use <code>Clippings</code>.
             </small>
           </div>
           <div class="setting-control">
@@ -160,7 +191,7 @@
           </div>
         </div>
 
-        <div class="setting block">
+        <div class="setting block" id="clipModeBlock">
           <div class="setting-text">
             <strong>Clipping mode</strong>
             <small> How the page content is handed off to Obsidian. </small>

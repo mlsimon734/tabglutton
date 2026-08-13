@@ -177,8 +177,13 @@ export interface ObsidianClipRequest {
   file: string;
 }
 
-/** Vault-relative note path a clip will be filed under, without extension. */
-function clipFilePath(
+/**
+ * Vault-relative note path a clip will be filed under, without extension.
+ * Exported because the file destination (`clip-file.ts`) files a clip at the
+ * same path under the download folder: one base folder, one `site-rules.ts`
+ * subfolder, one per-platform note name, whichever destination is chosen.
+ */
+export function clipNotePath(
   payload: ClipPayload,
   rule: SiteRule | null,
   baseFolder: string,
@@ -223,7 +228,7 @@ export function obsidianClipRequest(
   // the question still produces a name every filesystem accepts.
   platform: FilePlatform = "other",
 ): ObsidianClipRequest {
-  const file = clipFilePath(payload, rule, baseFolder, platform);
+  const file = clipNotePath(payload, rule, baseFolder, platform);
   let url = `obsidian://new?file=${encodeURIComponent(file)}`;
   if (vault) url += `&vault=${encodeURIComponent(vault)}`;
   if (mode === "clipboard") {

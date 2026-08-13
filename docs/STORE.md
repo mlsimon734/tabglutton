@@ -255,6 +255,10 @@ PERMISSIONS
   call. The extension does not read pages the user has not selected.
 - clipboardWrite is used to hand a long note body to Obsidian, because an obsidian:// URL
   cannot carry a full article. It writes only during an explicit clip.
+- downloads writes the clipped note as a markdown file when the user has chosen the file
+  destination instead of an Obsidian vault, so the extension is usable without Obsidian.
+  It writes only during an explicit clip, only into the browser's own download folder, and
+  never reads or opens an existing download.
 - alarms drives the reconnect timer for the optional agent bridge, and is inert while the
   bridge is disabled (the default).
 
@@ -356,6 +360,14 @@ URL cannot carry a full article. Written only during an explicit clip action.
 ```
 Drives the reconnect timer for the optional local agent bridge. Inert while the bridge is
 disabled, which is the default.
+```
+
+**`downloads`**
+
+```
+Saves a clipped page as a markdown file in the browser's download folder, for users who
+have chosen the file destination instead of an Obsidian vault. Written only during an
+explicit clip; existing downloads are never read or opened.
 ```
 
 **Remote code**

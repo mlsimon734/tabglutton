@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import type { PopupTab } from "../src/background.js";
-import { visibleGroups } from "../popup/lib.js";
+import type { ClipSelectedTabsResponse, PopupTab } from "../src/background.js";
+import { clipSummary, visibleGroups } from "../popup/lib.js";
 
 function tab(id: number, host: string): PopupTab {
   return {
@@ -67,5 +67,36 @@ describe("visibleGroups", () => {
     const tabs = [tab(1, "a.com"), tab(2, "b.com"), tab(3, "b.com")];
     const groups = visibleGroups(tabs, "", []);
     expect(groups.map((g) => g.host)).toEqual(["b.com", "a.com"]);
+  });
+});
+
+function summary(partial: Partial<ClipSelectedTabsResponse> = {}): ClipSelectedTabsResponse {
+  return { failed: 0, obsidianSaved: 0, fileSaved: 0, zoteroSaved: 0, failures: [], ...partial };
+}
+
+describe("clipSummary", () => {
+  // Pins the wording the Obsidian and Zotero destinations had before the file
+  // destination existed: adding a third destination must not restate the first.
+  test("Obsidian alone stays a bare count", () => {
+    expect(clipSummary(summary({ obsidianSaved: 3 }))).toBe("Saved 3");
+    expect(clipSummary(summary({ obsidianSaved: 3, failed: 2 }))).toBe("Saved 3, 2 failed");
+  });
+
+  test("Zotero is named, alone or alongside Obsidian", () => {
+    expect(clipSummary(summary({ zoteroSaved: 3 }))).toBe("Saved 3 to Zotero");
+    expect(clipSummary(summary({ zoteroSaved: 3, obsidianSaved: 1 }))).toBe(
+      "Saved 3 to Zotero, 1 to Obsidian",
+    );
+  });
+
+  test("nothing saved still reads as a count", () => {
+    expect(clipSummary(summary())).toBe("Saved 0");
+  });
+
+  test("the file destination is named", () => {
+    expect(clipSummary(summary({ fileSaved: 4 }))).toBe("Saved 4 to files");
+    expect(clipSummary(summary({ fileSaved: 4, zoteroSaved: 1 }))).toBe(
+      "Saved 1 to Zotero, 4 to files",
+    );
   });
 });

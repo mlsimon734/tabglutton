@@ -15,7 +15,15 @@
       "strict_min_version": "142.0"
     }
   },
-  "permissions": ["tabs", "storage", "scripting", "activeTab", "clipboardWrite", "alarms"],
+  "permissions": [
+    "tabs",
+    "storage",
+    "scripting",
+    "activeTab",
+    "clipboardWrite",
+    "alarms",
+    "downloads"
+  ],
   "host_permissions": ["*://*/*"],
   "content_security_policy": {
     "extension_pages": "script-src 'self'; object-src 'self'"
