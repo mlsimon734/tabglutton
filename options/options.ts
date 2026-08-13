@@ -7,7 +7,7 @@ import {
   generateToken,
   isBridgePort,
 } from "../src/bridge-protocol.js";
-import { BRIDGE_ORIGINS, requestOrigins } from "../src/permissions.js";
+import { BRIDGE_ORIGINS, requestDownloads, requestOrigins } from "../src/permissions.js";
 import {
   loadSettings,
   type BridgePortMode,
@@ -215,10 +215,21 @@ for (const el of [
   el.addEventListener("change", () => void save());
 }
 
+// `downloads` is optional, and selecting the file destination is the one moment
+// a user gesture exists to ask for it — the background page, where the writing
+// happens, never has one. A refusal leaves the destination on Obsidian rather
+// than persisting a choice whose every clip could only fail.
 for (const radio of clipDestinationRadios) {
   radio.addEventListener("change", () => {
-    updateClipDestination();
-    void save();
+    void (async () => {
+      // First await in the handler; see requestDownloads on why nothing precedes it.
+      if (selectedClipDestination() === "file" && !(await requestDownloads())) {
+        const obsidian = [...clipDestinationRadios].find((r) => r.value === "obsidian");
+        if (obsidian) obsidian.checked = true;
+      }
+      updateClipDestination();
+      await save();
+    })();
   });
 }
 

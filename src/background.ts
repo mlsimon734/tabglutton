@@ -15,6 +15,7 @@ import {
   type ClipPayload,
   type ObsidianClipRequest,
 } from "./clip-format.js";
+import { hasDownloads } from "./permissions.js";
 import { getFilePlatformOnce } from "./platform.js";
 import { delay } from "./serialize.js";
 import { pickRule } from "./site-rules.js";
@@ -649,7 +650,20 @@ async function destinationForTab(tabId: number, url: string): Promise<TabDestina
   }
   // The chosen destination, not a fallback: file mode never asks about a vault
   // and Obsidian mode never quietly writes a file. See `ClipDestination`.
-  if (clipsToFile(settings)) return { kind: "file" };
+  if (clipsToFile(settings)) {
+    // `downloads` is optional and revocable from the browser's own add-on UI,
+    // so the grant the options page collected may be gone by now. Say so;
+    // `downloads.download` would otherwise throw something opaque per tab.
+    if (!(await hasDownloads())) {
+      return {
+        kind: "failed",
+        reason: "download-failed",
+        detail:
+          "Tabglutton no longer has download access. Re-select the file destination in settings.",
+      };
+    }
+    return { kind: "file" };
+  }
   if (!settings.obsidianVault.trim()) {
     return {
       kind: "failed",

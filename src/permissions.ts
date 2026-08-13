@@ -51,6 +51,38 @@ export async function hasOrigins(origins: string[]): Promise<boolean> {
  * the permission is held, so the pre-check would buy nothing and cost the
  * gesture.
  */
+/**
+ * The file destination writes through `downloads`, which is optional on both
+ * engines rather than required — Firefox renders it as "Download files and read
+ * and modify the browser's download history", and a *newly* required permission
+ * disables an existing Chrome install until the user re-approves it. Neither
+ * cost is worth charging every user for a destination most will never pick.
+ */
+/** Never prompts; safe from the background page. See `hasOrigins`. */
+export async function hasDownloads(): Promise<boolean> {
+  try {
+    return await browser.permissions.contains({ permissions: ["downloads"] });
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Prompt if needed, and report whether the access is now held.
+ *
+ * **Must be the first `await` inside a click handler**, for the transient
+ * activation reason spelled out on `requestOrigins`.
+ */
+export async function requestDownloads(): Promise<boolean> {
+  let granted = false;
+  try {
+    granted = await browser.permissions.request({ permissions: ["downloads"] });
+  } catch (err) {
+    console.warn("[tabglutton] downloads permission request failed", err);
+  }
+  return granted || (await hasDownloads());
+}
+
 export async function requestOrigins(origins: string[]): Promise<boolean> {
   let granted = false;
   try {
