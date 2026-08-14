@@ -178,8 +178,17 @@ muted). All have hover / active / disabled / focus-visible (3px accent ring) sta
 - `.count-badge` — mono, tabular, pill, tinted by context.
 - `.search` / `.header-search` — pill input with leading glyph and a `/` keycap hint.
 - Tab row (`.tab`) — checkbox, favicon (with letter fallback), title+meta body, optional
-  pin icon, hover-revealed actions; left accent bar on hover/focus, `.focused` for keyboard
-  selection (cockpit).
+  markers, hover-revealed actions; left accent bar on hover/focus, `.focused` for keyboard
+  selection (cockpit). The markers (`keep` pill, pin icon) share one `.tab-marks` cell: the
+  row is a five-column grid and a sixth child wraps onto a second line.
+- Section rules (`.section-head`) — **Duplicates** then **Everything else**, an uppercase
+  micro-label with a count note and a select action, no hairline. They exist because
+  duplicate sets are lifted to the top of the queue as their own groups, and the list has to
+  say where that section stops; the headers below it are hosts, not more duplicate sets.
+- Duplicate group — same `.group` shape, headed by the canonical URL its copies share
+  (`.group-key`: mono, cased, not an uppercase label, because it is an address) and an
+  accent `×n` count. The surviving copy leads the set and carries a `keep` pill — accent, as
+  a state indicator, not decoration.
 - Inspector — sectioned preview (head, "Will save to" path, frontmatter `<pre>`, routing
   `<dl>`), uppercase micro section labels.
 - Options — custom toggle `.switch`, `.radio-card` (selected = accent border + soft fill),
