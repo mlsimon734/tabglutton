@@ -6,7 +6,7 @@
 // constant stopped being cosmetic when detached hubs started retiring for newer
 // peers: a value that lags means an upgraded session attaching to a hub from the
 // previous release cannot say it is newer, so the stale hub keeps serving.
-// `tests/gullet-version.test.ts` fails if the two ever drift.
+// `gullet/tests/version.test.ts` fails if the two ever drift.
 
 const root = new URL("..", import.meta.url).pathname;
 const source = `${root}gullet/src/version.ts`;

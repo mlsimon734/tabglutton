@@ -122,6 +122,25 @@ export function orderedBridgePortCandidates(lastPort?: number): number[] {
 export function isBridgePort(value: number): boolean {
   return Number.isInteger(value) && value >= 1024 && value <= 65535;
 }
+
+/**
+ * The ports an election may use: the single configured port if there is one, the
+ * canonical list otherwise, deduped and reduced to ports that can be bound.
+ *
+ * Three sidecar call sites resolve this — the Supervisor's election, a detached
+ * hub's own bind sweep, and the parent watching for the hub it just spawned —
+ * and they have to agree exactly. A hub that binds a candidate its parent is not
+ * watching is indistinguishable, from the parent, from a spawn that never came
+ * up at all.
+ */
+export function bridgePortCandidates(
+  fixed: number | undefined,
+  override?: readonly number[],
+): number[] {
+  const source = fixed === undefined ? (override ?? BRIDGE_PORT_CANDIDATES) : [fixed];
+  return [...new Set(source)].filter(isBridgePort);
+}
+
 export const BRIDGE_HEARTBEAT_MS = 20_000;
 
 /**

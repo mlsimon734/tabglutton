@@ -9,9 +9,8 @@
 
 import {
   BRIDGE_CONNECT_WAIT_MS,
-  BRIDGE_PORT_CANDIDATES,
+  bridgePortCandidates,
   errorMessage,
-  isBridgePort,
   BridgeRequestError,
   type BridgeError,
   type BridgeMethod,
@@ -300,11 +299,7 @@ export class Supervisor implements BridgeBackend {
   }
 
   private candidatePorts(): number[] {
-    const source =
-      this.options.port === undefined
-        ? (this.options.candidates ?? BRIDGE_PORT_CANDIDATES)
-        : [this.options.port];
-    return [...new Set(source)].filter(isBridgePort);
+    return bridgePortCandidates(this.options.port, this.options.candidates);
   }
 
   /**

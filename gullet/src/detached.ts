@@ -25,12 +25,7 @@
 import { mkdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import {
-  BRIDGE_PORT_CANDIDATES,
-  CONFIG_DIR_NAME,
-  errorMessage,
-  isBridgePort,
-} from "../../src/bridge-protocol.js";
+import { bridgePortCandidates, CONFIG_DIR_NAME, errorMessage } from "../../src/bridge-protocol.js";
 import { delay } from "../../src/serialize.js";
 import { Hub } from "./hub.js";
 import { PeerClient } from "./peer.js";
@@ -123,9 +118,7 @@ export function detachedHubArgv(execPath: string, entry: string, port?: number):
  * instead.
  */
 export async function spawnDetachedHub(options: SpawnDetachedHubOptions): Promise<number | null> {
-  const candidates = (
-    options.port === undefined ? (options.candidates ?? BRIDGE_PORT_CANDIDATES) : [options.port]
-  ).filter(isBridgePort);
+  const candidates = bridgePortCandidates(options.port, options.candidates);
   if (candidates.length === 0) return null;
 
   // Losing the log must not lose the hub, so an unwritable directory downgrades
@@ -194,9 +187,9 @@ async function waitForHub(
   do {
     for (const port of candidates) {
       if (foreign.has(port)) continue;
-      if ((await probeCandidate(port)) !== "compatible") continue;
-      if (await sameRealmHubAt(port, token, version)) return port;
-      foreign.add(port);
+      const verdict = await realmAt(port, token, version);
+      if (verdict === "ours") return port;
+      if (verdict === "other-realm") foreign.add(port);
     }
     if (foreign.size === candidates.length) return null;
     await delay(SPAWN_POLL_MS);
@@ -204,24 +197,32 @@ async function waitForHub(
   return null;
 }
 
+/** What is on a port, as far as this decision is concerned. */
+type Realm = "ours" | "other-realm" | "silent";
+
 /**
- * Whether a hub *of our own token realm* holds this port.
+ * Who holds this port: a hub of our own token realm, one of somebody else's, or
+ * nothing that answers at all.
  *
- * The probe alone cannot answer this. It identifies Gullet and its protocol, and
- * that is all it is allowed to do — a markerless local service must never be
- * handed a token proof — but "a Gullet" is not "our Gullet". Two token realms on
- * one machine is a supported configuration, and standing aside for a rival
- * realm's hub would mean the second realm silently never gets a detached hub at
- * all, degrading to an in-process one with nothing to say why. So the probe
- * gates the handshake and the handshake decides, exactly as the Supervisor's own
- * discovery sweep does.
+ * The probe alone cannot answer the first question. It identifies Gullet and its
+ * protocol, and that is all it is allowed to do — a markerless local service must
+ * never be handed a token proof — but "a Gullet" is not "our Gullet". Two token
+ * realms on one machine is a supported configuration, and standing aside for a
+ * rival realm's hub would mean the second realm silently never gets a detached
+ * hub at all, degrading to an in-process one with nothing to say why. So the
+ * probe gates the handshake and the handshake decides, exactly as the
+ * Supervisor's own discovery sweep does.
+ *
+ * The three answers are kept apart because a caller polling for a hub it just
+ * spawned has to tell "not up yet" (poll again) from "somebody else's, forever"
+ * (stop asking) — and both of those are "not ours".
  *
  * Attaching also gives the incumbent its chance to retire: an older hub meeting
  * this peer stands down, the connect fails, and we go on to bind the port it
  * just released.
  */
-async function sameRealmHubAt(port: number, token: string, version: string): Promise<boolean> {
-  if ((await probeCandidate(port)) !== "compatible") return false;
+async function realmAt(port: number, token: string, version: string): Promise<Realm> {
+  if ((await probeCandidate(port)) !== "compatible") return "silent";
   const peer = new PeerClient({
     port,
     token,
@@ -237,9 +238,9 @@ async function sameRealmHubAt(port: number, token: string, version: string): Pro
   });
   try {
     await peer.connect();
-    return true;
+    return "ours";
   } catch {
-    return false;
+    return "other-realm";
   } finally {
     peer.stop();
   }
@@ -277,9 +278,7 @@ export interface DetachedHubOptions {
  * start, one binds, the other finds it and goes away.
  */
 export async function runDetachedHub(options: DetachedHubOptions): Promise<number> {
-  const candidates = (
-    options.port === undefined ? (options.candidates ?? BRIDGE_PORT_CANDIDATES) : [options.port]
-  ).filter(isBridgePort);
+  const candidates = bridgePortCandidates(options.port, options.candidates);
   if (candidates.length === 0) {
     console.error("[gullet] detached hub has no valid port candidate.");
     return 1;
@@ -289,7 +288,7 @@ export async function runDetachedHub(options: DetachedHubOptions): Promise<numbe
   // earlier candidate coming free must not split this token realm away from a
   // hub already running on a later one.
   for (const port of candidates) {
-    if (await sameRealmHubAt(port, options.token, options.version)) {
+    if ((await realmAt(port, options.token, options.version)) === "ours") {
       console.error(`[gullet] a same-token hub already holds 127.0.0.1:${port}; not starting`);
       return 0;
     }

@@ -431,24 +431,21 @@ export class Hub {
 
     this.clearHandshakeTimer(ws);
 
+    // Only another sidecar can retire this hub, and either kind of attachment
+    // does it: an upgrade replaces a stale hub whether the newer Gullet arrives
+    // to serve a session or merely to look. A browser never can — it has no
+    // Gullet version to offer, and `shouldRetireFor` would refuse it anyway.
+    if ((msg.role === "peer" || msg.role === "probe") && this.shouldRetireFor(msg.gullet)) {
+      this.rejectHandshake(ws, "unsupported", this.retirementMessage(msg.gullet));
+      this.retire();
+      return;
+    }
+
     // A caller asking "are you mine?" gets the same proof and nothing else. It
     // is answered before the peer branch because it must never reach the session
     // bookkeeping there — that is the entire difference between the two roles.
-    // It still triggers retirement, so an upgrade replaces a stale hub whether
-    // the newer Gullet arrives to serve a session or merely to look.
     if (msg.role === "probe") {
-      if (this.shouldRetireFor(msg.gullet)) {
-        this.rejectHandshake(ws, "unsupported", this.retirementMessage(msg.gullet));
-        this.retire();
-        return;
-      }
-      this.send(ws, {
-        type: "hello-ack",
-        proto: BRIDGE_PROTO,
-        connectionId: ws.data.connectionId,
-        proof: await deriveProof(this.options.token, msg.nonce),
-        sessions: this.sessions,
-      });
+      await this.sendHelloAck(ws, msg.nonce);
       // The asker closes; this is only the backstop for one that does not.
       //
       // Closing here directly is the obvious move and it loses the answer: the
@@ -467,21 +464,9 @@ export class Hub {
     if (msg.role === "peer") {
       // A peer has proved the token, which is the whole check: it is another
       // Gullet on this machine, and it gets exactly what our own MCP half gets.
-      // Except when it is *newer* than us, which only a hub outliving its
-      // sessions can meet — then the right answer is to stand aside.
-      if (this.shouldRetireFor(msg.gullet)) {
-        this.rejectHandshake(ws, "unsupported", this.retirementMessage(msg.gullet));
-        this.retire();
-        return;
-      }
+      // Registered before the ack, so the count it carries already includes it.
       this.peers.set(ws.data.connectionId, ws);
-      this.send(ws, {
-        type: "hello-ack",
-        proto: BRIDGE_PROTO,
-        connectionId: ws.data.connectionId,
-        proof: await deriveProof(this.options.token, msg.nonce),
-        sessions: this.sessions,
-      });
+      await this.sendHelloAck(ws, msg.nonce);
       console.error(`[gullet] peer sidecar attached (${ws.data.connectionId})`);
       this.publishSessions();
       return;
@@ -497,14 +482,7 @@ export class Hub {
       awaitingPong: false,
     };
     this.connections.set(conn.connectionId, conn);
-    this.send(ws, {
-      type: "hello-ack",
-      proto: BRIDGE_PROTO,
-      connectionId: conn.connectionId,
-      // Prove we know the token too, against the nonce the extension chose.
-      proof: await deriveProof(this.options.token, msg.nonce),
-      sessions: this.sessions,
-    });
+    await this.sendHelloAck(ws, msg.nonce);
     // Quiet while nobody is attached. A detached hub is dialled and dropped once
     // per background-page suspension for as long as the browser runs — that is
     // the design, not an incident — and logging the pair would bury the
@@ -516,6 +494,25 @@ export class Hub {
     // not a browser we can serve, so releasing waiters on `open` would hand
     // them an empty list and waste the wait.
     this.releaseConnectWaiters();
+  }
+
+  /**
+   * Accept a proved handshake, whoever made it. All three kinds of caller get
+   * the identical frame — the counter-proof against the nonce *they* chose, so a
+   * process squatting the port cannot collect their traffic, and the session
+   * count, which every one of them is entitled to read.
+   *
+   * Callers that change the count register themselves before calling: the number
+   * on the ack is the one that includes the connection it answers.
+   */
+  private async sendHelloAck(ws: Bun.ServerWebSocket<SocketData>, nonce: string): Promise<void> {
+    this.send(ws, {
+      type: "hello-ack",
+      proto: BRIDGE_PROTO,
+      connectionId: ws.data.connectionId,
+      proof: await deriveProof(this.options.token, nonce),
+      sessions: this.sessions,
+    });
   }
 
   private rejectHandshake(

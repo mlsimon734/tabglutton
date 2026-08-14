@@ -11,8 +11,6 @@ import { createObsidianVaultLookup, createObsidianVaultPathLookup } from "./obsi
 import { createToolCaller, GULLET_INSTRUCTIONS, GULLET_TOOLS } from "./tools.js";
 import { GULLET_VERSION } from "./version.js";
 
-export { GULLET_VERSION };
-
 export async function main(
   argv: readonly string[],
   env: Readonly<Record<string, string | undefined>>,
