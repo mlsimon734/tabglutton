@@ -520,11 +520,13 @@ body.inspecting .inspector {
   gap: var(--space-5);
 }
 
-.group {
+.group,
+.section-head {
   --i: 0;
 }
 
-body.initial-load .group {
+body.initial-load .group,
+body.initial-load .section-head {
   animation: group-in 260ms var(--easing) both;
   animation-delay: calc(var(--i) * 24ms);
 }
@@ -538,6 +540,36 @@ body.initial-load .group {
     opacity: 1;
     transform: none;
   }
+}
+
+/* Section rules. Duplicates are pulled to the top of the queue as their own
+   section, so the list needs to say where that section ends — the group headers
+   below it are hosts, not more duplicate sets. */
+.section-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+  padding: 0 10px 0 8px;
+}
+
+.section-head + .group {
+  margin-top: calc(-1 * var(--space-3));
+}
+
+.section-title {
+  font-family: var(--font-ui);
+  font-size: var(--fs-small);
+  font-weight: 600;
+  letter-spacing: var(--track-label);
+  text-transform: uppercase;
+  color: var(--ink-soft);
+}
+
+.section-note {
+  flex: 1;
+  font-size: var(--fs-tiny);
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
 }
 
 /* Left padding matches `.tab` so the rule, the host name and the checkboxes
@@ -565,6 +597,16 @@ body.initial-load .group {
   text-overflow: ellipsis;
 }
 
+/* A duplicate set is headed by the canonical URL its copies share, so it reads
+   as the address it is — mono and cased, not an uppercase micro-label. */
+.group-key {
+  font-family: var(--font-mono);
+  font-size: var(--fs-tiny);
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--ink-soft);
+}
+
 .group-count {
   font-family: var(--font-mono);
   font-size: var(--fs-tiny);
@@ -574,6 +616,11 @@ body.initial-load .group {
   border: 1px solid var(--hairline);
   border-radius: var(--radius-pill);
   font-variant-numeric: tabular-nums;
+}
+
+.group-dup .group-count {
+  color: var(--accent);
+  border-color: var(--accent-ring);
 }
 
 .tabs {
@@ -690,6 +737,28 @@ body.initial-load .group {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* Pin and keep share one grid cell — `.tab` has five columns and a sixth child
+   would wrap onto a second row. */
+.tab-marks {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Accent because it is a state indicator: this is the copy Dedup keeps. */
+.keep-pill {
+  font-size: var(--fs-micro);
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: var(--track-label);
+  text-transform: uppercase;
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-radius: var(--radius-pill);
+  padding: 4px 8px;
+  white-space: nowrap;
 }
 
 .pin-icon {

@@ -13,13 +13,14 @@ import { hasClipDestination, hasVault, type Settings } from "../src/storage.js";
 import {
   clipSummary,
   computeDedupCount,
-  type DomainGroup,
+  extraTabIds,
   hostInitial,
   hostOf,
   markdownForTabs,
   reasonLabel,
   selectedTabsInUiOrder,
   sendMessage,
+  type TabGroup,
   trackChromeHeights,
   trackScrollLift,
   visibleGroups,
@@ -36,7 +37,7 @@ interface CockpitState {
   clipping: boolean;
   devourFailures: ClipFailure[];
   focusedTabId: number | null;
-  stickyHostOrder: string[] | null;
+  stickyOrder: string[] | null;
 }
 
 interface ToastState {
@@ -85,7 +86,7 @@ const state: CockpitState = {
   clipping: false,
   devourFailures: [],
   focusedTabId: null,
-  stickyHostOrder: null,
+  stickyOrder: null,
 };
 
 function renderWarning(): void {
@@ -99,7 +100,7 @@ function renderWarning(): void {
   }
 }
 
-function renderEmpty(groups: DomainGroup[]): void {
+function renderEmpty(groups: TabGroup[]): void {
   if (groups.length > 0) {
     emptyEl.hidden = true;
     return;
@@ -117,18 +118,31 @@ function renderEmpty(groups: DomainGroup[]): void {
   }
 }
 
-function groupSelectionState(group: DomainGroup): "none" | "partial" | "all" {
-  let selected = 0;
-  for (const t of group.tabs) {
-    if (state.selected.has(t.id)) selected += 1;
-  }
-  if (selected === 0) return "none";
-  if (selected === group.tabs.length) return "all";
-  return "partial";
+/**
+ * What a group's Select button offers. In a duplicate set that is the extras —
+ * the keeper is the tab you are choosing to live with, so offering to select it
+ * alongside them would be offering to close the lot.
+ */
+function selectableTabs(group: TabGroup): PopupTab[] {
+  if (group.kind !== "duplicate") return group.tabs;
+  return group.tabs.filter((t) => t.id !== group.keeperId);
 }
 
-function setGroupSelection(group: DomainGroup, select: boolean): void {
-  for (const t of group.tabs) {
+/**
+ * Read against the whole group, not just what Select offers: a keeper ticked by
+ * hand is part of the selection, and a button reading "Select extras" over a
+ * group with a checked row in it is describing a state that isn't there.
+ */
+function groupSelectionState(group: TabGroup): "none" | "partial" | "all" {
+  const anySelected = group.tabs.some((t) => state.selected.has(t.id));
+  if (!anySelected) return "none";
+  return selectableTabs(group).every((t) => state.selected.has(t.id)) ? "all" : "partial";
+}
+
+function setGroupSelection(group: TabGroup, select: boolean): void {
+  // Deselect clears the whole group — including a keeper the user ticked, which
+  // is exactly the selection the button claims to be clearing.
+  for (const t of select ? selectableTabs(group) : group.tabs) {
     if (select) state.selected.add(t.id);
     else state.selected.delete(t.id);
   }
@@ -147,26 +161,72 @@ function updateFocusedRowVisuals(): void {
   }
 }
 
-function renderGroup(group: DomainGroup): HTMLLIElement {
+/** The "Duplicates" / "Everything else" rules that separate the two sections. */
+function renderSectionHead(title: string, dups: TabGroup[] | null): HTMLLIElement {
   const li = document.createElement("li");
-  li.className = "group";
+  li.className = "section-head";
+
+  const titleEl = document.createElement("span");
+  titleEl.className = "section-title";
+  titleEl.textContent = title;
+  li.append(titleEl);
+
+  if (!dups) return li;
+
+  const extras = extraTabIds(dups);
+  const noteEl = document.createElement("span");
+  noteEl.className = "section-note";
+  noteEl.textContent = `${extras.length} extra ${extras.length === 1 ? "tab" : "tabs"} · ${dups.length} ${dups.length === 1 ? "set" : "sets"}`;
+
+  const allSelected = extras.every((id) => state.selected.has(id));
+  const selectBtn = document.createElement("button");
+  selectBtn.className = "select-toggle quiet";
+  selectBtn.type = "button";
+  selectBtn.textContent = `${allSelected ? "Deselect" : "Select"} all ${extras.length}`;
+  selectBtn.title = "Select every copy Dedup would close, across all sets";
+  selectBtn.addEventListener("click", () => {
+    for (const id of extras) {
+      if (allSelected) state.selected.delete(id);
+      else state.selected.add(id);
+    }
+    render();
+  });
+
+  li.append(noteEl, selectBtn);
+  return li;
+}
+
+function renderGroup(group: TabGroup): HTMLLIElement {
+  const dup = group.kind === "duplicate";
+  const li = document.createElement("li");
+  li.className = dup ? "group group-dup" : "group";
 
   const header = document.createElement("div");
   header.className = "group-header";
 
   const hostEl = document.createElement("span");
-  hostEl.className = "group-host";
-  hostEl.textContent = group.host;
+  hostEl.className = dup ? "group-host group-key" : "group-host";
+  hostEl.textContent = group.label;
+  if (dup) hostEl.title = group.label;
 
   const countEl = document.createElement("span");
   countEl.className = "group-count";
-  countEl.textContent = `${group.tabs.length}`;
+  countEl.textContent = dup ? `×${group.tabs.length}` : `${group.tabs.length}`;
 
   const sel = groupSelectionState(group);
   const selectBtn = document.createElement("button");
   selectBtn.className = `select-toggle quiet ${sel}`;
   selectBtn.type = "button";
-  selectBtn.textContent = sel === "all" ? "Deselect" : sel === "partial" ? "Select rest" : "Select";
+  selectBtn.textContent =
+    sel === "all"
+      ? "Deselect"
+      : sel === "partial"
+        ? "Select rest"
+        : dup
+          ? "Select extras"
+          : "Select";
+  selectBtn.title =
+    sel === "all" ? "Deselect these tabs" : dup ? "Select every copy but the one Dedup keeps" : "";
   selectBtn.addEventListener("click", () => {
     setGroupSelection(group, sel !== "all");
     render();
@@ -184,7 +244,39 @@ function renderGroup(group: DomainGroup): HTMLLIElement {
   return li;
 }
 
-function renderTab(tab: PopupTab, group: DomainGroup): HTMLDivElement {
+/**
+ * The trailing markers share one cell. `.tab` is a five-column grid and a sixth
+ * child wraps onto a second row, which a duplicate keeper that is also pinned
+ * would otherwise do.
+ */
+function renderMarks(tab: PopupTab, group: TabGroup): HTMLSpanElement | null {
+  const marks: HTMLElement[] = [];
+
+  if (group.kind === "duplicate" && tab.id === group.keeperId) {
+    const keep = document.createElement("span");
+    keep.className = "keep-pill";
+    keep.textContent = "keep";
+    keep.title = "Dedup keeps this copy — the most recently used one";
+    marks.push(keep);
+  }
+
+  if (tab.pinned) {
+    const pin = document.createElement("span");
+    pin.className = "pin-icon";
+    pin.title = "Pinned tab";
+    pin.setAttribute("aria-label", "Pinned");
+    pin.append(makePinIcon());
+    marks.push(pin);
+  }
+
+  if (!marks.length) return null;
+  const wrap = document.createElement("span");
+  wrap.className = "tab-marks";
+  wrap.append(...marks);
+  return wrap;
+}
+
+function renderTab(tab: PopupTab, group: TabGroup): HTMLDivElement {
   const row = document.createElement("div");
   row.className = "tab";
   row.dataset.tabId = String(tab.id);
@@ -222,14 +314,8 @@ function renderTab(tab: PopupTab, group: DomainGroup): HTMLDivElement {
 
   row.append(checkbox, fav, body);
 
-  if (tab.pinned) {
-    const pin = document.createElement("span");
-    pin.className = "pin-icon";
-    pin.title = "Pinned tab";
-    pin.setAttribute("aria-label", "Pinned");
-    pin.append(makePinIcon());
-    row.append(pin);
-  }
+  const marks = renderMarks(tab, group);
+  if (marks) row.append(marks);
 
   const actions = document.createElement("div");
   actions.className = "tab-actions";
@@ -559,19 +645,29 @@ function addDef(dl: HTMLElement, term: string, definition: string): void {
 
 /* ---------- render ---------- */
 
+/** Duplicates first under their own rule, then the domain groups under theirs. */
+function renderList(groups: TabGroup[]): HTMLLIElement[] {
+  const dups = groups.filter((g) => g.kind === "duplicate");
+  const rest = groups.filter((g) => g.kind !== "duplicate");
+  const items: HTMLLIElement[] = [];
+  if (dups.length) {
+    items.push(renderSectionHead("Duplicates", dups));
+    for (const g of dups) items.push(renderGroup(g));
+    if (rest.length) items.push(renderSectionHead("Everything else", null));
+  }
+  for (const g of rest) items.push(renderGroup(g));
+  items.forEach((li, idx) => li.style.setProperty("--i", String(Math.min(idx, 12))));
+  return items;
+}
+
 function render(): void {
   renderWarning();
-  const groups = visibleGroups(state.scopedTabs, state.filter, state.stickyHostOrder);
-  if (state.stickyHostOrder === null) {
-    state.stickyHostOrder = groups.map((g) => g.host);
+  const groups = visibleGroups(state.scopedTabs, state.filter, state.settings, state.stickyOrder);
+  if (state.stickyOrder === null) {
+    state.stickyOrder = groups.map((g) => g.key);
   }
   renderEmpty(groups);
-  groupsEl.replaceChildren();
-  groups.forEach((g, idx) => {
-    const li = renderGroup(g);
-    li.style.setProperty("--i", String(Math.min(idx, 12)));
-    groupsEl.append(li);
-  });
+  groupsEl.replaceChildren(...renderList(groups));
   renderSelectionSummary(visibleTabIds(groups));
   renderDedupBadge();
   renderToast();
@@ -605,7 +701,7 @@ async function closeTabs(tabIds: number[]): Promise<void> {
 }
 
 function selectedForOps(): PopupTab[] {
-  const groups = visibleGroups(state.scopedTabs, state.filter, state.stickyHostOrder);
+  const groups = visibleGroups(state.scopedTabs, state.filter, state.settings, state.stickyOrder);
   return selectedTabsInUiOrder(groups, state.selected);
 }
 
@@ -792,7 +888,7 @@ async function undoDedup(): Promise<void> {
 /* ---------- keyboard ---------- */
 
 function focusableTabIds(): number[] {
-  const groups = visibleGroups(state.scopedTabs, state.filter, state.stickyHostOrder);
+  const groups = visibleGroups(state.scopedTabs, state.filter, state.settings, state.stickyOrder);
   return visibleTabIds(groups);
 }
 
@@ -876,11 +972,11 @@ dedupBtn.addEventListener("click", () => void runDedup());
 optionsBtn.addEventListener("click", () => void openOptionsUi());
 filterInput.addEventListener("input", () => {
   state.filter = filterInput.value;
-  state.stickyHostOrder = null;
+  state.stickyOrder = null;
   render();
 });
 selectAllBtn.addEventListener("click", () => {
-  const groups = visibleGroups(state.scopedTabs, state.filter, state.stickyHostOrder);
+  const groups = visibleGroups(state.scopedTabs, state.filter, state.settings, state.stickyOrder);
   const ids = visibleTabIds(groups);
   const allSelected = ids.length > 0 && ids.every((id) => state.selected.has(id));
   if (allSelected) {
