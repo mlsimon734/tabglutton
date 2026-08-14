@@ -17,6 +17,20 @@ type TokenConfig = {
   token: string;
   /** File or command source, retried by Supervisor when it is temporarily unavailable. */
   resolveToken?: TokenResolver;
+  /**
+   * Whether a Gullet that finds no hub should spawn a detached one and attach
+   * to it, rather than binding the port itself. On by default; `--no-detach`
+   * pins the old session-scoped shape, which is what to reach for when
+   * debugging the hub, since it puts the hub's logs back on this process's
+   * stderr.
+   */
+  detach: boolean;
+  /**
+   * This process *is* the detached hub. Set only by the flag the spawner
+   * passes; there is no configuration file or environment route to it, because
+   * nothing but a spawn should ever produce one.
+   */
+  detachedHub: boolean;
 };
 
 export type GulletConfig =
@@ -29,10 +43,17 @@ export const TOKEN_COMMAND_TIMEOUT_MS = 5_000;
 
 export const USAGE = `tabglutton-gullet — Tabglutton's agent bridge sidecar
 
-  bunx tabglutton-gullet [--port <auto|1024-65535>] [--token <token>]
+  bunx tabglutton-gullet [--port <auto|1024-65535>] [--token <token>] [--no-detach]
 
   --port   automatic discovery by default, or a fixed loopback port (env TABGLUTTON_PORT)
   --token  shared token from Tabglutton's options page (env TABGLUTTON_TOKEN)
+
+  --no-detach  serve the browser from this process instead of a detached hub
+
+By default the first Gullet that finds no hub running starts one that outlives
+it, and attaches to it as a peer; later sessions attach to the same hub. That is
+what lets the browser hold a connection that predates your agent session. The
+hub exits by itself after six idle hours, and stands aside for a newer Gullet.
 
 GULLET_PORT / GULLET_TOKEN are accepted as aliases — users know this as
 Tabglutton, "gullet" is only the sidecar's internal name.
@@ -48,12 +69,15 @@ environment: process arguments are visible to other local users.`;
 interface ParsedFlags {
   port?: string;
   token?: string;
+  detach?: boolean;
+  detachedHub?: boolean;
 }
 
 interface FileConfig {
   port?: string | number;
   tokenFile?: string;
   tokenCommand?: string;
+  detach?: boolean;
 }
 
 export interface TokenCommandResult {
@@ -89,23 +113,35 @@ export async function loadConfig(
   const rawPort =
     flags.port ?? firstDefined(env, "TABGLUTTON_PORT", "GULLET_PORT") ?? fileConfig.port;
   const selection = parsePort(rawPort);
+  const mode: HubMode = {
+    // A detached hub never spawns another one; it *is* the answer.
+    detach: (flags.detach ?? fileConfig.detach ?? true) && flags.detachedHub !== true,
+    detachedHub: flags.detachedHub ?? false,
+  };
+
+  // The spawner hands the token over stdin rather than argv, which `ps` would
+  // publish. Resolving one here would be at best redundant and at worst wrong —
+  // a `tokenCommand` re-run in a process with no terminal can block on a locked
+  // secret manager forever.
+  if (mode.detachedHub) return assembleConfig(selection, mode, "");
 
   // A flag or variable that is present but empty still counts as "the token was
   // configured here", so it stops the search rather than falling through to the
   // file sources — hence `!== undefined` rather than a truthiness check.
   const directToken = flags.token ?? firstDefined(env, "TABGLUTTON_TOKEN", "GULLET_TOKEN");
-  if (directToken !== undefined) return assembleConfig(selection, directToken.trim());
+  if (directToken !== undefined) return assembleConfig(selection, mode, directToken.trim());
 
   const dotEnv = await readOptionalFile(join(runtime.cwd, ".env"), runtime);
   if (dotEnv !== null) {
     const token = firstDefined(parseDotEnv(dotEnv), "TABGLUTTON_TOKEN", "GULLET_TOKEN");
-    if (token !== undefined) return assembleConfig(selection, token.trim());
+    if (token !== undefined) return assembleConfig(selection, mode, token.trim());
   }
 
   if (fileConfig.tokenCommand !== undefined) {
     const command = fileConfig.tokenCommand;
     return assembleConfig(
       selection,
+      mode,
       "",
       tokenCommandResolver(command, dirname(paths.configFile), env, runtime),
     );
@@ -116,17 +152,20 @@ export async function loadConfig(
     dirname(paths.configFile),
     paths.home,
   );
-  return assembleConfig(selection, "", tokenFileResolver(tokenFile, runtime));
+  return assembleConfig(selection, mode, "", tokenFileResolver(tokenFile, runtime));
 }
+
+type HubMode = Pick<TokenConfig, "detach" | "detachedHub">;
 
 function assembleConfig(
   selection: "auto" | number,
+  mode: HubMode,
   token: string,
   resolveToken?: TokenResolver,
 ): GulletConfig {
   return selection === "auto"
-    ? { portMode: "auto", token, resolveToken }
-    : { portMode: "fixed", port: selection, token, resolveToken };
+    ? { portMode: "auto", token, resolveToken, ...mode }
+    : { portMode: "fixed", port: selection, token, resolveToken, ...mode };
 }
 
 function parseFlags(argv: readonly string[]): ParsedFlags {
@@ -140,6 +179,15 @@ function parseFlags(argv: readonly string[]): ParsedFlags {
         break;
       case "--token":
         parsed.token = inline ?? requireValue(flag, argv[++i]);
+        break;
+      case "--detach":
+        parsed.detach = true;
+        break;
+      case "--no-detach":
+        parsed.detach = false;
+        break;
+      case "--detached-hub":
+        parsed.detachedHub = true;
         break;
       default:
         throw new ConfigError(`Unknown argument ${arg}.\n\n${USAGE}`);
@@ -226,7 +274,7 @@ async function readFileConfig(path: string, runtime: ConfigRuntime): Promise<Fil
     );
   }
 
-  const allowed = new Set(["port", "tokenFile", "tokenCommand"]);
+  const allowed = new Set(["port", "tokenFile", "tokenCommand", "detach"]);
   const unknown = Object.keys(parsedConfig).find((key) => !allowed.has(key));
   if (unknown !== undefined) throw new ConfigError(`Unknown key "${unknown}" in ${path}.`);
 
@@ -245,6 +293,12 @@ async function readFileConfig(path: string, runtime: ConfigRuntime): Promise<Fil
       throw new ConfigError(`"port" in ${path} must be "auto" or a number.`);
     }
     config.port = parsedConfig.port;
+  }
+  if (parsedConfig.detach !== undefined) {
+    if (typeof parsedConfig.detach !== "boolean") {
+      throw new ConfigError(`"detach" in ${path} must be true or false.`);
+    }
+    config.detach = parsedConfig.detach;
   }
   config.tokenFile = nonEmptyString("tokenFile", "path");
   config.tokenCommand = nonEmptyString("tokenCommand", "command");

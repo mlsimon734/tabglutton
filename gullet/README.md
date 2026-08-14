@@ -69,12 +69,12 @@ tools appear under that namespace, and the token is `TABGLUTTON_TOKEN`. `GULLET_
    bun run /path/to/tabglutton/gullet/gullet.ts
    ```
 
-4. **Start a session.** The agent spawns Gullet, Gullet elects an approved port, and the
-   extension's reconnect loop finds it — typically within a few seconds (it rotates probes
-   every 3s while the browser's extension page is awake), worst case ~30 seconds (the alarm
-   cadence, when the page had suspended). The toolbar badge shows a terracotta dot while the
-   connection is live. When the session ends, Gullet exits and the extension goes back to idle
-   dialling.
+4. **Start a session.** The agent spawns Gullet, which attaches to the background hub —
+   starting one on an approved port if none is running yet (see _The background hub_ below).
+   The browser is usually connected to it already; if it is not, its reconnect loop finds it
+   within a few seconds while its extension page is awake, worst case ~30 seconds when the
+   page had suspended. The toolbar badge shows a terracotta dot while the connection is live.
+   When the session ends its Gullet exits, and the hub stays listening for the next one.
 
 There is no app to launch and no per-session step. Multiple browsers can be connected at
 once — a Zen window and a Chrome profile, say — and each tool call picks one with the
@@ -127,6 +127,26 @@ multiple Claude Code and Codex sessions converge even if an earlier candidate la
 
 Diagnostics go to **stderr**; stdout is the MCP transport and carries nothing else.
 
+### The background hub
+
+The process your agent harness spawns does not talk to the browser itself. The first one to
+find no hub running starts a small **detached hub** and attaches to it; every session after
+that attaches to the same one. The point is the browser's side of it: with a hub always
+listening, the browser holds a connection that already exists when your session starts,
+instead of one that has to be discovered and dialled each time — which is where this bridge
+has historically lost its first tool call.
+
+It stays out of the way by design. It exits by itself after six hours with no session
+attached, it stands aside when a newer Gullet arrives, it keeps your browser's background
+page awake only while a session is actually attached, and it holds nothing beyond the same
+loopback port, token, and origin check every other part of the bridge uses. Its log is
+`${XDG_STATE_HOME:-$HOME/.local/state}/tabglutton/hub.log`, rewritten each time a hub
+starts.
+
+Pass `--no-detach` (or `"detach": false` in `config.json`) to serve the browser from the
+session process instead, which is the older behaviour and the easier one to debug — the
+hub's diagnostics then come out on that process's stderr with everything else.
+
 ## Tools
 
 | Tool         | What it does                                                                                                                                                                                    |
@@ -170,18 +190,24 @@ tabs are yours to open by hand.
 
 ## Troubleshooting
 
-**Several agent sessions at once.** Supported, and nothing needs configuring. The first
-Gullet to start binds the port and serves the browser; later ones attach to it and proxy
-through, so every session sees the same tabs. When the one holding the port exits, the
-others re-race and one takes over within a second. You may see more `bun run gullet` processes
-than you have sessions — some MCP clients spawn more than one — which is harmless now that
-losing the race is not fatal.
+**Several agent sessions at once.** Supported, and nothing needs configuring. Sessions
+attach to the shared background hub described above and proxy through it, so every session
+sees the same tabs. You may see more `tabglutton-gullet` processes than you have sessions —
+some MCP clients spawn more than one, and one of them is the hub, which is meant to outlive
+all of them.
+
+**A Gullet process that will not go away.** That is the hub, and it is doing its job:
+holding the browser's connection open between your sessions. It exits on its own after six
+idle hours, retires when a newer Gullet attaches, and takes a `SIGTERM` if you want it gone
+now. `--no-detach` keeps every future session's hub inside the session process instead.
 
 **"No browser is connected."** The bridge is off in Tabglutton's settings, no token has
 been generated, fixed-port settings do not match, or the browser has not re-dialled yet — a first
 call waits up to 45s for the browser's backstop alarm (30s cadence, on Firefox too) to
 fire and the dial to land, so this answer normally means configuration, not timing. The
-settings page shows live connection status.
+settings page shows live connection status. A browser with no session attached deliberately
+lets its background page suspend, so it is _usually_ but not always connected between
+sessions; the wait covers that gap.
 
 **Tool calls cancelled by the client.** A first call can legitimately hold for the 45s
 connect wait, and a slow method holds for its own 45s request budget after that — ~90s

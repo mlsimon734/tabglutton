@@ -10,20 +10,20 @@
 import {
   BRIDGE_CONNECT_WAIT_MS,
   BRIDGE_PORT_CANDIDATES,
-  BRIDGE_PROBE_HEADER,
-  classifyBridgeProbe,
   errorMessage,
   isBridgePort,
   BridgeRequestError,
   type BridgeError,
   type BridgeMethod,
-  type BridgeProbeIdentity,
 } from "../../src/bridge-protocol.js";
 import { delay } from "../../src/serialize.js";
 import type { TokenResolver } from "./config.js";
+import { spawnDetachedHub } from "./detached.js";
 import { Hub } from "./hub.js";
 import { PeerClient } from "./peer.js";
+import { probeCandidate } from "./probe.js";
 import type { ConnectionSummary } from "./select.js";
+import { GULLET_VERSION } from "./version.js";
 
 export interface BridgeBackend {
   connections(): Promise<ConnectionSummary[]>;
@@ -68,7 +68,20 @@ const TOKEN_RETRY_MAX_MS = 30_000;
  * re-read on every tool call, so a port that frees up later heals in place.
  */
 const ELECTION_START_TIMEOUT_MS = 4_000;
-const DISCOVERY_PROBE_TIMEOUT_MS = 500;
+
+/**
+ * How many rounds may try to spawn a detached hub before this process gives up
+ * on the idea and binds the port itself for the rest of its life.
+ *
+ * Without a bound, an environment where the spawn cannot work — a read-only
+ * install, a sandbox that refuses `fork`, an entry path that no longer exists —
+ * would start a doomed process on every election round, forever, while the
+ * session it belongs to sat there with no bridge. Two attempts distinguishes a
+ * lost race (the other spawn won, and we found its hub) from a spawn that will
+ * never work, and the fallback is not a degraded mode: it is exactly what Gullet
+ * did before detached hubs existed.
+ */
+const DETACH_ATTEMPTS = 2;
 
 export type BackendRole = "hub" | "peer" | "electing";
 
@@ -86,6 +99,15 @@ export interface SupervisorOptions {
   startTimeoutMs?: number;
   /** Overrides BRIDGE_CONNECT_WAIT_MS. Exists so tests need not wait out the window. */
   connectWaitMs?: number;
+  /**
+   * Start a hub that outlives this process rather than binding one here. On by
+   * default; `--no-detach` turns it off.
+   */
+  detach?: boolean;
+  /** Where a spawned hub writes its diagnostics. */
+  hubLogPath?: string;
+  /** Injected so tests exercise the election without starting real processes. */
+  spawnHub?: (options: { token: string; port?: number }) => Promise<number | null>;
 }
 
 export class Supervisor implements BridgeBackend {
@@ -105,6 +127,8 @@ export class Supervisor implements BridgeBackend {
    * start's bounded wait are answered instead of parked on `settling` forever.
    */
   private electionFault: BridgeError | null = null;
+  /** Spawn attempts spent; see DETACH_ATTEMPTS. */
+  private detachAttempts = 0;
 
   constructor(options: SupervisorOptions) {
     this.options = options;
@@ -228,11 +252,21 @@ export class Supervisor implements BridgeBackend {
         if (await this.tryExistingHub(port, observations)) return;
       }
 
+      // No hub exists, so make one that is not ours to lose. Between this and
+      // the binding sweep below is the whole difference the detached hub makes:
+      // the browser's connection stops being scoped to this agent session.
+      // Everything here is best-effort — a spawn that does not land falls
+      // through to binding in-process, which is what this always did.
+      if (await this.trySpawnedHub(observations)) return;
+
       for (const port of ports) {
         if (this.stopped) return;
         // Binding is still the atomic election. The only new rule is that a
         // loser re-checks the exact port it lost before considering the next.
-        const hub = new Hub({ port, token: this.token });
+        // No `detached` here, so this hub counts itself as one session: its
+        // lifetime is this agent session's, which is what made a live socket
+        // proof of entitlement in the first place.
+        const hub = new Hub({ port, token: this.token, version: GULLET_VERSION });
         try {
           hub.listen();
           this.hub = hub;
@@ -273,6 +307,58 @@ export class Supervisor implements BridgeBackend {
     return [...new Set(source)].filter(isBridgePort);
   }
 
+  /**
+   * Start a detached hub and attach to it as a peer.
+   *
+   * Note what this deliberately does *not* do: trust the port it is handed. The
+   * spawned hub runs the same canonical candidate order and may land anywhere in
+   * it, and between its bind and our attach a rival could in principle have
+   * taken over — so the answer is treated as a hint about *where to look*, and
+   * `tryExistingHub` still probes and proves the token before anything is sent.
+   */
+  private async trySpawnedHub(observations: Map<number, string>): Promise<boolean> {
+    if (this.options.detach === false) return false;
+    if (this.detachAttempts >= DETACH_ATTEMPTS) return false;
+    this.detachAttempts += 1;
+
+    const spawn =
+      this.options.spawnHub ??
+      ((options: { token: string; port?: number }) =>
+        spawnDetachedHub({
+          ...options,
+          version: GULLET_VERSION,
+          ...(this.options.candidates === undefined ? {} : { candidates: this.options.candidates }),
+          ...(this.options.hubLogPath === undefined ? {} : { logPath: this.options.hubLogPath }),
+        }));
+
+    let port: number | null;
+    try {
+      port = await spawn({
+        token: this.token,
+        ...(this.options.port === undefined ? {} : { port: this.options.port }),
+      });
+    } catch (err) {
+      console.error(`[gullet] detached hub did not start: ${errorMessage(err)}`);
+      return false;
+    }
+    if (this.stopped || port === null) {
+      if (port === null) {
+        console.error(
+          "[gullet] no detached hub answered in time; serving the browser from this process",
+        );
+      }
+      return false;
+    }
+    const attached = await this.tryExistingHub(port, observations);
+    // The budget counts spawns that got us *nowhere*, not spawns. A session can
+    // legitimately need several over its life — the hub it was using retires for
+    // an upgrade, or is killed — and charging those against the same allowance
+    // would silently drop a long-running session back to the session-scoped hub
+    // this whole path exists to replace, with nothing in any log saying so.
+    if (attached) this.detachAttempts = 0;
+    return attached;
+  }
+
   /** Probe first; only a marked, protocol-compatible endpoint receives a proof. */
   private async tryExistingHub(port: number, observations: Map<number, string>): Promise<boolean> {
     const identity = await probeCandidate(port);
@@ -284,6 +370,7 @@ export class Supervisor implements BridgeBackend {
     const peer = new PeerClient({
       port,
       token: this.token,
+      version: GULLET_VERSION,
       onLost: () => this.reelect(),
     });
     try {
@@ -389,38 +476,4 @@ async function rivalHubPorts(candidates: number[], activePort: number | null): P
     others.map(async (port) => ((await probeCandidate(port)) === "compatible" ? port : null)),
   );
   return probes.filter((port): port is number => port !== null);
-}
-
-type CandidateProbe = BridgeProbeIdentity | "silent";
-
-async function probeCandidate(port: number): Promise<CandidateProbe> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), DISCOVERY_PROBE_TIMEOUT_MS);
-  try {
-    const response = await fetch(`http://127.0.0.1:${port}/`, { signal: controller.signal });
-    const header = response.headers.get(BRIDGE_PROBE_HEADER);
-    if (header !== null) {
-      // Nothing reads the body on this path, and an unconsumed one holds its
-      // pooled connection open — every 400ms-5s, per candidate, while a round
-      // keeps failing.
-      void response.body?.cancel();
-      return classifyBridgeProbe(header, "");
-    }
-    return classifyBridgeProbe(null, await responseHead(response));
-  } catch {
-    return "silent";
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-async function responseHead(response: Response): Promise<string> {
-  const reader = response.body?.getReader();
-  if (!reader) return "";
-  try {
-    const { value } = await reader.read();
-    return value ? new TextDecoder().decode(value.slice(0, 128)) : "";
-  } finally {
-    void reader.cancel();
-  }
 }

@@ -9,15 +9,18 @@ import {
   BRIDGE_CONNECT_WAIT_MS,
   BRIDGE_HANDSHAKE_TIMEOUT_MS,
   BRIDGE_HEARTBEAT_MS,
+  BRIDGE_IDLE_HEARTBEAT_MS,
   BRIDGE_PROBE_HEADER,
   BRIDGE_PROBE_BODY_PREFIX,
   BRIDGE_PROTO,
   BRIDGE_REQUEST_TIMEOUT_MS,
   BridgeRequestError,
+  compareGulletVersions,
   deriveProof,
   parseMessage,
   proofsMatch,
   randomNonce,
+  RETIRING_FOR_NEWER_PEER,
   toBridgeError,
   type BridgeMethod,
   type HelloMessage,
@@ -31,6 +34,14 @@ import {
 import type { ConnectionSummary } from "./select.js";
 
 const EXTENSION_ORIGIN_PREFIXES = ["moz-extension://", "chrome-extension://"];
+
+/**
+ * How long a connection has to answer the ping fired when a session attaches,
+ * before it is treated as the half-open socket it probably is. A loopback pong
+ * returns in microseconds; this is slack for a busy event loop on either end,
+ * not a budget anything legitimately spends.
+ */
+const IDLE_CONNECTION_GRACE_MS = 2_000;
 
 export function isExtensionOrigin(origin: string | null): boolean {
   if (!origin) return false;
@@ -77,6 +88,22 @@ export interface HubOptions {
   token: string;
   /** Overridable so tests need not wait out the real deadline. */
   handshakeTimeoutMs?: number;
+  /**
+   * This hub has no MCP session of its own — it was spawned to outlive them.
+   *
+   * The only thing it changes is arithmetic: a session-scoped hub serves its own
+   * agent and therefore always counts one session, while a detached one counts
+   * nothing until a peer attaches. That number is what the extension spends its
+   * keepalive against, so getting it wrong either pins a browser awake forever
+   * or lets it suspend mid-session.
+   */
+  detached?: boolean;
+  /** This hub's own version, offered to peers deciding whether it should retire. */
+  version?: string;
+  /** Sessions crossed into or out of zero. The detached runner's idle clock. */
+  onSessionsChange?: (count: number) => void;
+  /** A newer peer asked us to stand aside; the runner exits on this. */
+  onRetire?: () => void;
 }
 
 export class Hub {
@@ -87,8 +114,13 @@ export class Hub {
   private readonly peers = new Map<string, Bun.ServerWebSocket<SocketData>>();
   private server: Bun.Server<SocketData> | null = null;
   private heartbeat: ReturnType<typeof setInterval> | null = null;
+  /** Cadence the running heartbeat was armed at, so it is only ever re-armed on a change. */
+  private heartbeatMs = 0;
+  /** One-shot verdict on connections held through an idle spell; see syncHeartbeat. */
+  private staleSweep: ReturnType<typeof setTimeout> | null = null;
   private readonly connectWaiters = new Set<() => void>();
   private nextId = 1;
+  private retiring = false;
 
   constructor(options: HubOptions) {
     this.options = options;
@@ -125,12 +157,15 @@ export class Hub {
         close: (ws) => this.onClose(ws),
       },
     });
-    this.heartbeat = setInterval(() => this.pingAll(), BRIDGE_HEARTBEAT_MS);
+    this.syncHeartbeat();
   }
 
   stop(): void {
     if (this.heartbeat !== null) clearInterval(this.heartbeat);
     this.heartbeat = null;
+    this.heartbeatMs = 0;
+    if (this.staleSweep !== null) clearTimeout(this.staleSweep);
+    this.staleSweep = null;
     // Release anyone mid-wait; nothing will ever connect now, and a pending
     // timer would keep the process alive past the shutdown that triggered this.
     this.releaseConnectWaiters();
@@ -158,6 +193,85 @@ export class Hub {
       label,
       extVersion,
     }));
+  }
+
+  /**
+   * Agent sessions this hub serves: its attached peers, plus its own MCP half
+   * unless it was spawned without one. This is the number the extension spends
+   * its keepalive against — see SessionsMessage in bridge-protocol.
+   */
+  get sessions(): number {
+    return this.peers.size + (this.options.detached ? 0 : 1);
+  }
+
+  /**
+   * Announce the session count and re-pace the heartbeat to match it.
+   *
+   * Called on every peer arrival and departure rather than only on the crossing
+   * of zero: the message is a handful of bytes on an already-open loopback
+   * socket, and a browser that reconnects mid-session must be able to learn the
+   * count from its hello-ack alone, which means the count has to be right at all
+   * times rather than merely at the edges.
+   */
+  private publishSessions(): void {
+    const count = this.sessions;
+    for (const conn of this.connections.values()) {
+      this.send(conn.socket, { type: "sessions", count });
+    }
+    // The roster, at the one moment someone is there to read it. Idle churn is
+    // deliberately silent (see completeHandshake), which would otherwise leave a
+    // log that says nothing at all about whether a browser is reachable — the
+    // first thing anyone diagnosing this hub wants to know.
+    if (count === 1) {
+      const roster = this.summaries().map((c) => `${c.label} (${c.connectionId})`);
+      console.error(`[gullet] browsers connected: ${roster.join(", ") || "none"}`);
+    }
+    this.syncHeartbeat();
+    this.options.onSessionsChange?.(count);
+  }
+
+  /**
+   * Fast beat while a session is attached, slow beat while none is — see
+   * BRIDGE_IDLE_HEARTBEAT_MS. Re-arming an interval restarts its countdown, so
+   * this returns early unless the cadence actually changed; without that guard
+   * a hub with several peers coming and going would keep pushing the next beat
+   * away and never send one.
+   */
+  private syncHeartbeat(): void {
+    if (this.server === null) return;
+    const wanted = this.sessions > 0 ? BRIDGE_HEARTBEAT_MS : BRIDGE_IDLE_HEARTBEAT_MS;
+    if (this.heartbeat !== null && this.heartbeatMs === wanted) return;
+    const speedingUp = this.heartbeat !== null && wanted < this.heartbeatMs;
+    if (this.heartbeat !== null) clearInterval(this.heartbeat);
+    this.heartbeatMs = wanted;
+    this.heartbeat = setInterval(() => this.pingAll(), wanted);
+    // Speeding up means a session just attached, and the connections we are
+    // holding were last checked up to BRIDGE_IDLE_HEARTBEAT_MS ago. Waiting a
+    // further beat to find out one of them is dead would spend that session's
+    // first call on a request that can only time out, so ask now.
+    //
+    // A fresh ask, not a verdict: `awaitingPong` is cleared first because a slow
+    // beat may have gone out microseconds ago with its pong still in flight, and
+    // dropping a healthy browser over that would be this fix causing the outage
+    // it exists to prevent. The next beat is what judges the answer.
+    if (speedingUp) {
+      for (const conn of this.connections.values()) conn.awaitingPong = false;
+      this.pingAll();
+      // And judge the answer well before the next beat. A connection last
+      // checked up to five minutes ago may be half-open — a slept laptop is the
+      // realistic case, where no FIN ever arrives — and `connectionsWithin`
+      // returns it immediately, so the session's first call would be routed into
+      // a dead socket and burn the full BRIDGE_REQUEST_TIMEOUT_MS. Worse, that
+      // symptom is indistinguishable from the open "first tabs_list times out"
+      // question in docs/BRIDGE.md, so it would be misread as that. A loopback
+      // pong returns in microseconds; anything still unanswered after this is
+      // not coming.
+      if (this.staleSweep !== null) clearTimeout(this.staleSweep);
+      this.staleSweep = setTimeout(() => {
+        this.staleSweep = null;
+        this.pingAll();
+      }, IDLE_CONNECTION_GRACE_MS);
+    }
   }
 
   /**
@@ -317,17 +431,59 @@ export class Hub {
 
     this.clearHandshakeTimer(ws);
 
+    // A caller asking "are you mine?" gets the same proof and nothing else. It
+    // is answered before the peer branch because it must never reach the session
+    // bookkeeping there — that is the entire difference between the two roles.
+    // It still triggers retirement, so an upgrade replaces a stale hub whether
+    // the newer Gullet arrives to serve a session or merely to look.
+    if (msg.role === "probe") {
+      if (this.shouldRetireFor(msg.gullet)) {
+        this.rejectHandshake(ws, "unsupported", this.retirementMessage(msg.gullet));
+        this.retire();
+        return;
+      }
+      this.send(ws, {
+        type: "hello-ack",
+        proto: BRIDGE_PROTO,
+        connectionId: ws.data.connectionId,
+        proof: await deriveProof(this.options.token, msg.nonce),
+        sessions: this.sessions,
+      });
+      // The asker closes; this is only the backstop for one that does not.
+      //
+      // Closing here directly is the obvious move and it loses the answer: the
+      // client verifies the counter-proof, which is an await, and a close event
+      // arriving inside it settles the connect as a failure before the ack it is
+      // still checking can settle it as a success. The symptom is a realm check
+      // that reports "not mine" about a hub that is — so the caller binds a
+      // second hub in the same realm, or declines to.
+      ws.data.handshakeTimer = setTimeout(
+        () => ws.close(),
+        this.options.handshakeTimeoutMs ?? BRIDGE_HANDSHAKE_TIMEOUT_MS,
+      );
+      return;
+    }
+
     if (msg.role === "peer") {
       // A peer has proved the token, which is the whole check: it is another
       // Gullet on this machine, and it gets exactly what our own MCP half gets.
+      // Except when it is *newer* than us, which only a hub outliving its
+      // sessions can meet — then the right answer is to stand aside.
+      if (this.shouldRetireFor(msg.gullet)) {
+        this.rejectHandshake(ws, "unsupported", this.retirementMessage(msg.gullet));
+        this.retire();
+        return;
+      }
       this.peers.set(ws.data.connectionId, ws);
       this.send(ws, {
         type: "hello-ack",
         proto: BRIDGE_PROTO,
         connectionId: ws.data.connectionId,
         proof: await deriveProof(this.options.token, msg.nonce),
+        sessions: this.sessions,
       });
       console.error(`[gullet] peer sidecar attached (${ws.data.connectionId})`);
+      this.publishSessions();
       return;
     }
 
@@ -347,8 +503,15 @@ export class Hub {
       connectionId: conn.connectionId,
       // Prove we know the token too, against the nonce the extension chose.
       proof: await deriveProof(this.options.token, msg.nonce),
+      sessions: this.sessions,
     });
-    console.error(`[gullet] ${conn.label} connected (${conn.connectionId}, v${conn.extVersion})`);
+    // Quiet while nobody is attached. A detached hub is dialled and dropped once
+    // per background-page suspension for as long as the browser runs — that is
+    // the design, not an incident — and logging the pair would bury the
+    // connections that happened during a session under thousands that did not.
+    if (this.sessions > 0) {
+      console.error(`[gullet] ${conn.label} connected (${conn.connectionId}, v${conn.extVersion})`);
+    }
     // Only once the handshake passes: a socket that cannot prove the token is
     // not a browser we can serve, so releasing waiters on `open` would hand
     // them an empty list and waste the wait.
@@ -369,13 +532,61 @@ export class Hub {
     this.clearHandshakeTimer(ws);
     if (this.peers.delete(ws.data.connectionId)) {
       console.error(`[gullet] peer sidecar detached (${ws.data.connectionId})`);
+      this.publishSessions();
       return;
     }
     const conn = this.connections.get(ws.data.connectionId);
     if (!conn) return;
     this.connections.delete(conn.connectionId);
     this.rejectPending(conn, `${conn.label} disconnected mid-request.`);
-    console.error(`[gullet] ${conn.label} disconnected (${conn.connectionId})`);
+    // Silent while idle, for the reason the connect line is — see completeHandshake.
+    if (this.sessions > 0) {
+      console.error(`[gullet] ${conn.label} disconnected (${conn.connectionId})`);
+    }
+  }
+
+  /**
+   * Whether an attaching peer is new enough that we should get out of its way.
+   *
+   * Only a detached hub ever answers yes. A session-scoped hub shares its
+   * lifetime with the agent that spawned it, so it cannot be the stale one; and
+   * retiring it would take its own MCP session down with it, which is a far
+   * worse outcome than serving a version-old peer for a few minutes.
+   */
+  private shouldRetireFor(peerVersion: string | undefined): boolean {
+    if (!this.options.detached || this.retiring) return false;
+    const ours = this.options.version;
+    if (!ours || !peerVersion) return false;
+    return compareGulletVersions(peerVersion, ours) > 0;
+  }
+
+  private retirementMessage(peerVersion: string | undefined): string {
+    return (
+      `${RETIRING_FOR_NEWER_PEER}: this hub runs Gullet ${this.options.version} and the ` +
+      `attaching sidecar runs ${peerVersion}. Shutting down so the newer one can take the port.`
+    );
+  }
+
+  /**
+   * Stand aside for a newer sidecar. Drops everything so the port is free by the
+   * time that sidecar re-races for it — a retire that left the socket bound
+   * would send it straight back into the loop it just escaped.
+   *
+   * Deferred by a tick, because the caller has just queued the `hello-error`
+   * explaining why, and `stop()` force-closes every socket including that one.
+   * The frame has been observed arriving anyway, which is precisely why this is
+   * worth pinning down: a teardown that races its own explanation would fail
+   * only under load, and the symptom would be a hub that vanishes for no
+   * recorded reason.
+   */
+  private retire(): void {
+    if (this.retiring) return;
+    this.retiring = true;
+    console.error("[gullet] retiring: a newer Gullet asked for the port");
+    setTimeout(() => {
+      this.stop();
+      this.options.onRetire?.();
+    }, 0);
   }
 
   // Guards against half-open sockets the OS has not torn down yet: a browser
