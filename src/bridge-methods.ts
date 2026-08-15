@@ -8,6 +8,7 @@
 // before it happens.
 
 import { clipContentHash } from "./clip-hash.js";
+import { clipDownloadPath, saveClipFile } from "./clip-file.js";
 import { markdownForClip, OBSIDIAN_HANDOFF_GAP_MS, resolveClipRequest } from "./clip-format.js";
 import type { ClipPayload } from "./clip-format.js";
 import {
@@ -25,6 +26,8 @@ import {
   type BridgeMethod,
   type BridgeTab,
   type ClosedTabEntry,
+  type FileClipResult,
+  type ObsidianClipResult,
   type TabClipResult,
   type TabLoadOutcome,
   type TabReadResult,
@@ -35,9 +38,9 @@ import {
 } from "./bridge-protocol.js";
 import { getFilePlatformOnce } from "./platform.js";
 import { createTaskQueue, delay } from "./serialize.js";
-import { pickRule } from "./site-rules.js";
-import type { Settings } from "./storage.js";
-import { CLIP_ORIGINS, hasOrigins } from "./permissions.js";
+import { pickRule, type SiteRule } from "./site-rules.js";
+import { clipDestinationFor, type Settings } from "./storage.js";
+import { CLIP_ORIGINS, hasDownloads, hasOrigins } from "./permissions.js";
 import { IS_CHROME } from "./target.js";
 import {
   appendBatch,
@@ -649,52 +652,29 @@ export class BridgeMethodRunner {
     };
   }
 
+  /**
+   * File a tab the way the popup's Devour would, into whichever destination the
+   * user chose. The two are not interchangeable in what they can promise: the
+   * download is confirmed on disk before this returns, while the `obsidian://`
+   * handoff is unobservable from here and is left for Gullet to confirm.
+   */
   private async tabClip(raw: unknown): Promise<TabClipResult> {
     const params = parseTabClipParams(raw);
     const settings = this.deps.getSettings();
-    // An override stands alone: it is the destination the user named, so a
-    // vault they have not configured is not a reason to refuse. `vault-missing`
-    // only means "nowhere to file this", which an override answers.
-    const vault = params.vault ?? settings.obsidianVault.trim();
-    if (!vault) {
-      fail("vault-missing", "No Obsidian vault is configured in Tabglutton's settings.");
-    }
-
     const payload = await this.readTab(params.tabId);
     const rule = pickRule(payload.url);
     const content = markdownForClip(payload);
 
-    // Taken from the request rather than derived again, so the path reported to
-    // the agent is by construction the one the `obsidian://` URL was built from.
-    const file = await this.handoff(async () => {
-      const request = await resolveClipRequest(
-        payload,
-        vault,
-        content,
-        rule,
-        settings.clipMode,
-        settings.clippingsBaseFolder,
-        await getFilePlatformOnce(),
-        (text) => this.deps.copyToClipboardViaTab(params.tabId, text),
-      );
-      await this.deps.openObsidianUrl(request.url);
-      return request.file;
-    });
+    const filed =
+      clipDestinationFor(settings, params.vault) === "file"
+        ? await this.fileClip(params.tabId, payload, rule, content, settings)
+        : await this.obsidianClip(params.tabId, payload, rule, content, settings, params.vault);
+    if (!params.close) return filed;
 
-    const filed = {
-      tabId: params.tabId,
-      title: payload.title,
-      url: payload.url,
-      file,
-      vault,
-      contentHash: await clipContentHash(content),
-    };
-    if (!params.close) return { ...filed, closed: false };
-
-    // Nothing past here fails the call: the note is already in Obsidian, so a
-    // close that does not happen is a partial success, not a failure.
+    // Nothing past here fails the call: the note is already filed, so a close
+    // that does not happen is a partial success, not a failure.
     const batchId = await this.recordForClose(params.tabId);
-    if (batchId === null) return { ...filed, closed: false };
+    if (batchId === null) return filed;
 
     try {
       await browser.tabs.remove(params.tabId);
@@ -707,10 +687,119 @@ export class BridgeMethodRunner {
       // id rollover rejects over a tab that is merely renumbered), so ask.
       if (await tabExists(params.tabId)) {
         await reconcileBatch(batchId, []);
-        return { ...filed, closed: false };
+        return filed;
       }
     }
     return { ...filed, closed: true, batchId };
+  }
+
+  /**
+   * The Obsidian destination: compose the note, hand it to the OS, and report
+   * the path it was *asked* to write. Nothing here can confirm it arrived — a
+   * refused launch looks exactly like a taken one (docs/ENGINEERING.md §Clip
+   * verification) — hence `confirmedBy: "nobody"` until Gullet says otherwise.
+   */
+  private async obsidianClip(
+    tabId: number,
+    payload: ClipPayload,
+    rule: SiteRule | null,
+    content: string,
+    settings: Settings,
+    override: string | undefined,
+  ): Promise<ObsidianClipResult> {
+    // An override stands alone: it is the destination the caller named, so a
+    // vault the user has not configured is not a reason to refuse. `vault-missing`
+    // only means "nowhere to file this", which an override answers.
+    const vault = override ?? settings.obsidianVault.trim();
+    if (!vault) {
+      fail(
+        "vault-missing",
+        "No Obsidian vault is configured in Tabglutton's settings, and clips are not set to save as files either.",
+      );
+    }
+
+    // Taken from the request rather than derived again, so the path reported to
+    // the agent is by construction the one the `obsidian://` URL was built from.
+    const file = await this.handoff(async () => {
+      const request = await resolveClipRequest(
+        payload,
+        vault,
+        content,
+        rule,
+        settings.clipMode,
+        settings.clippingsBaseFolder,
+        await getFilePlatformOnce(),
+        (text) => this.deps.copyToClipboardViaTab(tabId, text),
+      );
+      await this.deps.openObsidianUrl(request.url);
+      return request.file;
+    });
+
+    return {
+      tabId,
+      title: payload.title,
+      url: payload.url,
+      destination: "obsidian",
+      file,
+      vault,
+      contentHash: await clipContentHash(content),
+      confirmedBy: "nobody",
+      closed: false,
+    };
+  }
+
+  /**
+   * The file destination: the same note, written to the download folder. It
+   * proves itself — `saveClipFile` resolves only once the browser reports the
+   * download complete — so this is the one clip that comes back already
+   * confirmed, and Gullet has nothing to add.
+   *
+   * Outside `handoff`: that queue serializes the OS clipboard the `obsidian://`
+   * route borrows, and a download touches neither it nor an external app.
+   */
+  private async fileClip(
+    tabId: number,
+    payload: ClipPayload,
+    rule: SiteRule | null,
+    content: string,
+    settings: Settings,
+  ): Promise<FileClipResult> {
+    const path = clipDownloadPath(
+      payload,
+      rule,
+      settings.clippingsBaseFolder,
+      await getFilePlatformOnce(),
+    );
+    let file: string;
+    try {
+      file = await saveClipFile(path, content);
+    } catch (err) {
+      // `downloads` is optional and revocable from the browser's own add-on UI,
+      // and the bridge has no gesture with which to ask for it back. Checked
+      // only once the write has already failed, like `requireClipAccess`: the
+      // clip that works pays no extra IPC for it.
+      if (!(await hasDownloads())) {
+        fail(
+          "not-enabled",
+          "Tabglutton no longer has permission to save downloads, so clips cannot be written as files. " +
+            "Ask the user to re-select the file destination in Tabglutton's settings — that is where the browser asks for it.",
+        );
+      }
+      fail(
+        "internal",
+        `The clip could not be written to the download folder: ${errorMessage(err)}`,
+      );
+    }
+
+    return {
+      tabId,
+      title: payload.title,
+      url: payload.url,
+      destination: "file",
+      file,
+      confirmedBy: "browser",
+      closed: false,
+    };
   }
 
   /**

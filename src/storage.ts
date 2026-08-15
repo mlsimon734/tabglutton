@@ -1,4 +1,9 @@
-import { BRIDGE_PORT_CANDIDATES, DEFAULT_BRIDGE_PORT, isBridgePort } from "./bridge-protocol.js";
+import {
+  BRIDGE_PORT_CANDIDATES,
+  DEFAULT_BRIDGE_PORT,
+  isBridgePort,
+  type ClipDestination,
+} from "./bridge-protocol.js";
 import type { NormalizeOpts } from "./normalize.js";
 import { IS_CHROME } from "./target.js";
 import { DEFAULT_ZOTERO_CONNECTOR_ID } from "./zotero.js";
@@ -6,12 +11,8 @@ import { DEFAULT_ZOTERO_CONNECTOR_ID } from "./zotero.js";
 export type ScopeMode = "hidden-false" | "current-window";
 export type ClipMode = "clipboard" | "legacy-uri";
 export type BridgePortMode = "auto" | "fixed";
-/**
- * Where Devour files a clipped page. Never inferred: the extension cannot tell
- * a refused `obsidian://` handoff from a successful one, so "we noticed it
- * failed, saving a file instead" would be a guess. The user picks.
- */
-export type ClipDestination = "obsidian" | "file";
+/** Where Devour files a clipped page — declared with the wire contract, which now carries it. */
+export type { ClipDestination };
 
 export interface Settings {
   stripFragment: boolean;
@@ -85,6 +86,20 @@ export function hasVault(settings: Settings | null): boolean {
 /** Whether clips are written as files rather than handed to Obsidian. */
 export function clipsToFile(settings: Settings | null): boolean {
   return settings?.clipDestination === "file";
+}
+
+/**
+ * Where one clip goes. The setting decides, with one exception: naming a vault
+ * names Obsidian. `tab_clip`'s `vault` override is a destination the caller
+ * stated outright, and filing it as a download instead would answer a request
+ * the user made with one they did not — the same reason a blank override is a
+ * `bad-request` rather than a fallback to settings.
+ */
+export function clipDestinationFor(
+  settings: Settings,
+  vaultOverride: string | undefined,
+): ClipDestination {
+  return vaultOverride ? "obsidian" : settings.clipDestination;
 }
 
 /**

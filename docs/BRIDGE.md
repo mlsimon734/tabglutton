@@ -403,16 +403,41 @@ extension and Gullet so the contract is typechecked from one definition.
 
 ## Tool surface (v2)
 
-| MCP tool     | Backing APIs                                           | Notes                                                                                                                                                                                                                                                                                                        |
-| ------------ | ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `tabs_list`  | `tabs.query`                                           | id, title, url, `windowId` (hoisted when shared), and — only when true — `lastAccessed`, `discarded`, `pinned`, `active`, `hidden`. Filtered with `query`, ordered with `sort`, capped by `limit`, or collapsed to counts with `groupBy: "domain"`. **On Zen, covers the active workspace only.** See below. |
-| `tabs_load`  | `tabs.reload` + `tabs.onUpdated`                       | Wakes discarded tabs so they can be read. Batched (≤20), three at a time, under a 30s deadline; per-tab `ready`/`pending`/`failed`. Gated on a settings toggle, default off — answers `not-enabled` until then.                                                                                              |
-| `tab_read`   | `scripting.executeScript` + existing `clip-current.ts` | Returns Defuddle markdown + metadata. Fails cleanly on discarded tabs (see below).                                                                                                                                                                                                                           |
-| `tab_clip`   | existing `clip-format.ts` + `obsidian://new` handoff   | Files into the vault exactly as manual Devour does, including the extension-origin redirect-page dance on both engines. An optional `vault` overrides the destination for that one call. See below.                                                                                                          |
-| `tabs_close` | `tabs.remove`                                          | Batched, ids deduplicated. Entries (title, url, pinned, window, index, private) are recorded in an undo log in `storage.local` _before_ the removal, and the batch id comes back with the result.                                                                                                            |
-| `undo_close` | reopen from the log                                    | Safety valve for the one destructive act. Omit the batch id to undo the most recent.                                                                                                                                                                                                                         |
+| MCP tool     | Backing APIs                                                                          | Notes                                                                                                                                                                                                                                                                                                        |
+| ------------ | ------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `tabs_list`  | `tabs.query`                                                                          | id, title, url, `windowId` (hoisted when shared), and — only when true — `lastAccessed`, `discarded`, `pinned`, `active`, `hidden`. Filtered with `query`, ordered with `sort`, capped by `limit`, or collapsed to counts with `groupBy: "domain"`. **On Zen, covers the active workspace only.** See below. |
+| `tabs_load`  | `tabs.reload` + `tabs.onUpdated`                                                      | Wakes discarded tabs so they can be read. Batched (≤20), three at a time, under a 30s deadline; per-tab `ready`/`pending`/`failed`. Gated on a settings toggle, default off — answers `not-enabled` until then.                                                                                              |
+| `tab_read`   | `scripting.executeScript` + existing `clip-current.ts`                                | Returns Defuddle markdown + metadata. Fails cleanly on discarded tabs (see below).                                                                                                                                                                                                                           |
+| `tab_clip`   | existing `clip-format.ts` + `obsidian://new` handoff, or `clip-file.ts` + `downloads` | Files exactly as manual Devour does, into whichever destination `clipDestination` names — the vault (including the extension-origin redirect-page dance on both engines) or a markdown file. An optional `vault` overrides the destination for that one call. See below.                                     |
+| `tabs_close` | `tabs.remove`                                                                         | Batched, ids deduplicated. Entries (title, url, pinned, window, index, private) are recorded in an undo log in `storage.local` _before_ the removal, and the batch id comes back with the result.                                                                                                            |
+| `undo_close` | reopen from the log                                                                   | Safety valve for the one destructive act. Omit the batch id to undo the most recent.                                                                                                                                                                                                                         |
 
 Deliberately absent: navigate, click, type, evaluate.
+
+▸ **`tab_clip` read `obsidianVault` directly, and that was a split rather than a
+limitation.** When `clipDestination` landed, a user set to `file` had a working popup and an
+agent clip that failed on a missing vault
+([#38](https://github.com/mlsimon734/tabglutton/issues/38)). The setting is the user's
+answer to "where do clips go", so the bridge obeys it rather than keeping a second,
+Obsidian-only notion of the same thing. The two destinations are not equal in what they can
+promise, though, and the result says so instead of flattening them: `destination` is
+`"obsidian"` or `"file"`, and `confirmedBy` is `"browser"`, `"gullet"`, or `"nobody"`.
+
+A file clip is confirmed by the browser. `saveClipFile` resolves only once the download
+reaches `state: "complete"`, which is precisely what an `obsidian://` handoff can never
+report, so the extension has already answered from closer to the disk than Gullet ever
+stands — and it answers with the path the browser says it wrote, since
+`conflictAction: "uniquify"` makes the requested name a prediction. Gullet therefore skips
+verification entirely for that destination. Re-checking the download folder would verify the
+same fact from further away, against a directory that is not a configured location the way a
+vault is and a name it cannot predict. `"nobody"` is the honest third answer and is not a
+failure: the note went to Obsidian and no vault check could run, which is the same fail-open
+contract `unknown` has always had.
+
+Gullet still sends `close: false` for both destinations. The destination is in the answer,
+not in the question, so forwarding the caller's `close: true` to find out would already have
+closed an Obsidian tab unverified. A file clip pays one extra round trip for that, which is
+the cheaper of the two mistakes.
 
 ▸ **`tab_clip`'s `vault` overrides a destination, it does not change a setting.** The
 motivating case is a two-vault user: an agent-managed vault that agents file into by
@@ -425,7 +450,9 @@ A per-call parameter expresses the same intent and expires by construction, so t
 radius of an agent's mistake is exactly one note. The tool description therefore says to use
 it **only when the user names a vault**, and the result reports the `vault` it filed into on
 every clip, override or not — an agent that cannot see where a note went cannot tell the
-user, and this is precisely the call where that matters.
+user, and this is precisely the call where that matters. Naming a vault also names Obsidian
+for a user whose `clipDestination` is `file`: the override is a destination stated outright,
+and writing a download instead would answer the request with a different one.
 
 It does not fall back to the configured vault on a
 blank string: `obsidianClipRequest` appends `&vault=` only for a truthy value, so a blank

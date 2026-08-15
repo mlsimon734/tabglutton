@@ -80,12 +80,13 @@ function downloadUrlFor(markdown: string): string {
 const DOWNLOAD_SETTLE_TIMEOUT_MS = 15000;
 
 /**
- * Writes one clip and resolves only once it is on disk. Devour closes the tab
- * on success, and unlike the `obsidian://` handoff — which is indistinguishable
- * from a refused one, hence Gullet's whole verification layer — this
- * destination can prove the file exists, so it proves it before the tab goes.
+ * Writes one clip and resolves only once it is on disk, answering with the path
+ * the browser reports having written. Devour closes the tab on success, and
+ * unlike the `obsidian://` handoff — which is indistinguishable from a refused
+ * one, hence Gullet's whole verification layer — this destination can prove the
+ * file exists, so it proves it before the tab goes.
  */
-export async function saveClipFile(path: string, markdown: string): Promise<void> {
+export async function saveClipFile(path: string, markdown: string): Promise<string> {
   const url = downloadUrlFor(markdown);
   try {
     const id = await browser.downloads.download({
@@ -99,10 +100,27 @@ export async function saveClipFile(path: string, markdown: string): Promise<void
       saveAs: false,
     });
     await settled(id);
+    return (await landedPath(id)) ?? path;
   } finally {
     // Object URLs must outlive the download that reads them (MDN says exactly
     // this); data URLs carry their own bytes and have nothing to release.
     if (url.startsWith("blob:")) URL.revokeObjectURL(url);
+  }
+}
+
+/**
+ * What the browser actually wrote, absolute. Worth the extra round trip because
+ * `conflictAction: "uniquify"` renames a clip whose name is taken, so the
+ * requested path is a prediction and this is the answer — and the agent reading
+ * a `tab_clip` result has no other way to find the note. Unreadable history is
+ * not a failure (see `settled`); the caller falls back to what it asked for.
+ */
+async function landedPath(id: number): Promise<string | undefined> {
+  try {
+    const [item] = await browser.downloads.search({ id });
+    return item?.filename || undefined;
+  } catch {
+    return undefined;
   }
 }
 

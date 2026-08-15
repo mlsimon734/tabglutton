@@ -90,7 +90,7 @@ one-time token setup command, and point Claude Code or Codex at
 | `tabs_list`  | Metadata for every tab in scope — cheap across hundreds |
 | `tab_read`   | Full Defuddle extraction of one page                    |
 | `tabs_load`  | Wake tabs the browser unloaded, so they become readable |
-| `tab_clip`   | File a tab into Obsidian, optionally closing it         |
+| `tab_clip`   | File a tab where Devour files it, optionally closing it |
 | `tabs_close` | Close a batch, returning a `batchId`                    |
 | `undo_close` | Reverse any batch                                       |
 

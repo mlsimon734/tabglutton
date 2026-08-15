@@ -31,14 +31,17 @@ When you Devour a tab (or an agent calls `tab_read` / `tab_clip`), Tabglutton ru
 [Defuddle](https://github.com/kepano/defuddle) inside that page to extract the article
 text, and converts it to markdown. That extraction happens entirely in your browser.
 
-The result goes to exactly two places, both of them on your own computer:
+The result goes to exactly three places, all of them on your own computer:
 
 1. **Your Obsidian vault**, through the `obsidian://` protocol. Because a URL cannot carry
    a long article, the note body is placed on your system clipboard and Obsidian reads it
    from there; the URL carries only the destination and the frontmatter. (You can switch
    to URL-only mode in settings, which avoids the clipboard at the cost of failing on long
    pages.)
-2. **A local MCP server**, but only if you have turned the agent bridge on. See below.
+2. **A markdown file in your download folder**, if you chose that destination in settings
+   instead of Obsidian. It is written through the browser's own downloads API, touches no
+   clipboard, and leaves the file exactly where every other download goes.
+3. **A local MCP server**, but only if you have turned the agent bridge on. See below.
 
 Page content is never written to extension storage, never sent over the public internet,
 and never seen by the developer.
@@ -77,6 +80,7 @@ reads is governed by that agent's own privacy policy, not this one.
 | `storage`                | Persist the settings and undo log described above.                                                                             |
 | `clipboardWrite`         | Hand a long note body to Obsidian, which a `obsidian://` URL cannot carry.                                                     |
 | `alarms`                 | Drive the agent bridge's reconnect timer. Unused when the bridge is off.                                                       |
+| `downloads` (optional)   | Write the clip as a markdown file, only if you pick that destination. Never requested otherwise, and revocable at any time.    |
 
 The broad host permission is the one worth being precise about: it is a capability, not a
 behaviour. Tabglutton does not run on pages in the background, does not read pages you have

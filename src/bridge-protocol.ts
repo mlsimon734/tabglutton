@@ -764,29 +764,70 @@ export interface TabReadResult {
 
 export interface TabClipParams {
   tabId: number;
-  /** Close the tab once Obsidian has been handed the note. Default false. */
+  /** Close the tab once the note has been filed. Default false. */
   close?: boolean;
   /**
    * File into this vault instead of the configured one, for this call only.
-   * Nothing is persisted — the next clip goes back to settings.
+   * Nothing is persisted — the next clip goes back to settings. Naming a vault
+   * also names Obsidian as the destination, for a user whose setting is `file`.
    */
   vault?: string;
 }
 
-export interface TabClipResult {
+/**
+ * Where a clip is filed. Never inferred: the extension cannot tell a refused
+ * `obsidian://` handoff from a successful one, so "we noticed it failed, saving
+ * a file instead" would be a guess. The user picks it in settings, and
+ * `tab_clip`'s `vault` override names Obsidian for one call.
+ *
+ * Declared here rather than in `storage.ts` because it now crosses the wire:
+ * both halves of a clip's report — which destination filed it, and who is in a
+ * position to confirm it — are the same distinction.
+ */
+export type ClipDestination = "obsidian" | "file";
+
+/**
+ * Who established that a clip is on disk. Nothing is closed over a clip nobody
+ * could confirm, so this says whose word the close rests on.
+ *
+ * - `browser` — the file destination. `saveClipFile` resolves only once the
+ *   browser reports the download `complete`, so the extension watched the bytes
+ *   land. This is the one destination that can prove itself.
+ * - `gullet` — the Obsidian destination, verified against the vault on disk by
+ *   the sidecar (see gullet/src/clip-verify.ts). The extension never reports
+ *   this: an `obsidian://` handoff is unobservable from inside the browser.
+ * - `nobody` — the note was handed to Obsidian and no vault check could run.
+ *   The clip may well have landed; nothing here proves it.
+ */
+export type ClipConfirmedBy = "browser" | "gullet" | "nobody";
+
+interface TabClipFiling {
   tabId: number;
   title: string;
   url: string;
-  /** Vault-relative note path the clip was filed under. */
+  /**
+   * Where the note went. Vault-relative and extension-less for Obsidian (which
+   * appends `.md`); the path the browser reported writing, for a file.
+   */
   file: string;
+  /**
+   * Whose proof the clip rests on. Gullet upgrades `nobody` to `gullet` when it
+   * finds the note, so the value an agent sees may be stronger than the one the
+   * extension sent.
+   */
+  confirmedBy: ClipConfirmedBy;
+  closed: boolean;
+  /** Present when `close` was honoured — pass to `undo_close` to reopen. */
+  batchId?: string;
+}
+
+export interface ObsidianClipResult extends TabClipFiling {
+  destination: "obsidian";
   /**
    * Vault the note was handed to. Always reported, so a clip that used an
    * override says so rather than leaving the agent to assume it worked.
    */
   vault: string;
-  closed: boolean;
-  /** Present when `close` was honoured — pass to `undo_close` to reopen. */
-  batchId?: string;
   /**
    * SHA-256, hex, of the exact note text handed to Obsidian.
    *
@@ -797,10 +838,17 @@ export interface TabClipResult {
    *
    * Optional because an older extension does not send it and the sidecar must
    * keep working against one. Identical in both clip modes: clipboard and
-   * legacy-uri carry the same text by different roads.
+   * legacy-uri carry the same text by different roads. Absent from a file clip,
+   * which nothing has to attribute — the browser already watched it land.
    */
   contentHash?: string;
 }
+
+export interface FileClipResult extends TabClipFiling {
+  destination: "file";
+}
+
+export type TabClipResult = ObsidianClipResult | FileClipResult;
 
 export interface TabsCloseParams {
   tabIds: number[];
