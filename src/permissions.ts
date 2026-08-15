@@ -40,25 +40,15 @@ export async function hasOrigins(origins: string[]): Promise<boolean> {
 }
 
 /**
- * Prompt if needed, and report whether the access is now held.
+ * Whether the `downloads` permission is held. Never prompts; safe from the
+ * background page, for the same reason as `hasOrigins`.
  *
- * **Must be the first `await` inside a click handler.** Chrome gates
- * `permissions.request` on transient user activation, and awaiting any other
- * extension API first drops the activation off the callstack — the request then
- * rejects with "may only be called from a user gesture" even though a real
- * click is what got us here. That is also why there is no `hasOrigins` check in
- * front of it: `request()` already resolves `true` without showing anything when
- * the permission is held, so the pre-check would buy nothing and cost the
- * gesture.
- */
-/**
  * The file destination writes through `downloads`, which is optional on both
  * engines rather than required — Firefox renders it as "Download files and read
  * and modify the browser's download history", and a *newly* required permission
  * disables an existing Chrome install until the user re-approves it. Neither
  * cost is worth charging every user for a destination most will never pick.
  */
-/** Never prompts; safe from the background page. See `hasOrigins`. */
 export async function hasDownloads(): Promise<boolean> {
   try {
     return await browser.permissions.contains({ permissions: ["downloads"] });
@@ -83,6 +73,18 @@ export async function requestDownloads(): Promise<boolean> {
   return granted || (await hasDownloads());
 }
 
+/**
+ * Prompt if needed, and report whether the access is now held.
+ *
+ * **Must be the first `await` inside a click handler.** Chrome gates
+ * `permissions.request` on transient user activation, and awaiting any other
+ * extension API first drops the activation off the callstack — the request then
+ * rejects with "may only be called from a user gesture" even though a real
+ * click is what got us here. That is also why there is no `hasOrigins` check in
+ * front of it: `request()` already resolves `true` without showing anything when
+ * the permission is held, so the pre-check would buy nothing and cost the
+ * gesture.
+ */
 export async function requestOrigins(origins: string[]): Promise<boolean> {
   let granted = false;
   try {
