@@ -4,13 +4,12 @@
 import { errorMessage } from "../../src/bridge-protocol.js";
 import { Supervisor } from "./backend.js";
 import { ConfigError, loadConfig, USAGE } from "./config.js";
+import { detachedHubLogPath, runDetachedHub } from "./detached.js";
 import { serveStdio } from "./mcp.js";
 import { createClipVerifier } from "./clip-verify.js";
 import { createObsidianVaultLookup, createObsidianVaultPathLookup } from "./obsidian-vaults.js";
 import { createToolCaller, GULLET_INSTRUCTIONS, GULLET_TOOLS } from "./tools.js";
-
-/** Reported to the MCP client on initialize. Keep in step with gullet/package.json. */
-export const GULLET_VERSION = "0.1.0";
+import { GULLET_VERSION } from "./version.js";
 
 export async function main(
   argv: readonly string[],
@@ -29,6 +28,23 @@ export async function main(
     return 1;
   }
 
+  // The detached hub is a different program wearing the same binary: no MCP
+  // server, no stdio contract, no agent. It reads its token from stdin (argv is
+  // world-readable and this token is the whole of the bridge's authentication)
+  // and then does nothing but serve the browser until it is no longer wanted.
+  if (config.detachedHub) {
+    const token = (await Bun.stdin.text()).trim();
+    if (!token) {
+      console.error("[gullet] a detached hub needs its token on stdin.");
+      return 1;
+    }
+    return runDetachedHub({
+      token,
+      version: GULLET_VERSION,
+      ...(config.portMode === "fixed" ? { port: config.port } : {}),
+    });
+  }
+
   // Misconfiguration is not fatal. The MCP server starts regardless so that tool
   // calls can explain the fix and the agent can relay it; exiting instead kills
   // the session before `initialize`, and every client reports that the same
@@ -37,6 +53,8 @@ export async function main(
     ...(config.portMode === "fixed" ? { port: config.port } : {}),
     token: config.token,
     resolveToken: config.resolveToken,
+    detach: config.detach,
+    hubLogPath: detachedHubLogPath(env),
   });
 
   // Losing the port is no longer a failure. Whoever binds it serves the browser

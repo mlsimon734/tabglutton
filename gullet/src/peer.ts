@@ -49,6 +49,18 @@ function peerDeadlineMs(op: PeerRequestMessage["op"]): number {
 export interface PeerOptions {
   port: number;
   token: string;
+  /**
+   * Our own version, offered so a hub older than us can stand aside rather than
+   * serve stale code — see `gullet` on the hello and `shouldRetireFor` in hub.ts.
+   */
+  version: string;
+  /**
+   * `"probe"` completes the same mutual proof and is then done: it answers "is
+   * this hub in my token realm?" without being counted as a session. Used by the
+   * detached hub's own election, which must be able to ask that question without
+   * flapping the browser's keepalive entitlement or resetting a hub's idle clock.
+   */
+  role?: "peer" | "probe";
   /** The hub went away. The supervisor uses this to start a re-election. */
   onLost: () => void;
 }
@@ -137,7 +149,8 @@ export class PeerClient {
           browser: "firefox",
           extVersion: "peer",
           label: "peer",
-          role: "peer",
+          role: this.options.role ?? "peer",
+          gullet: this.options.version,
           nonce: this.clientNonce,
           proof: await deriveProof(this.options.token, msg.nonce),
         });

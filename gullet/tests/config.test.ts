@@ -134,6 +134,45 @@ describe("CLI and environment precedence", () => {
     });
   });
 
+  // Detaching is the default because the whole point of a hub that outlives the
+  // session is that no one has to know it exists. The flag is for debugging,
+  // where you want the hub's logs on this process's stderr.
+  test("detaches by default, and --no-detach turns it off", async () => {
+    expect((await parsed([])).detach).toBe(true);
+    expect((await parsed(["--no-detach"])).detach).toBe(false);
+    expect((await parsed(["--detach"])).detach).toBe(true);
+  });
+
+  test("a config file can turn detaching off, and a flag still overrides it", async () => {
+    const files = {
+      "/home/michael/.config/tabglutton/config.json": '{"detach":false}',
+    };
+    const env = { HOME: "/home/michael" };
+    expect((await loadConfig([], env, runtime(files))).detach).toBe(false);
+    expect((await loadConfig(["--detach"], env, runtime(files))).detach).toBe(true);
+  });
+
+  test("rejects a non-boolean detach rather than reading it as truthy", async () => {
+    await expect(
+      loadConfig(
+        [],
+        { HOME: "/home/michael" },
+        runtime({ "/home/michael/.config/tabglutton/config.json": '{"detach":"yes"}' }),
+      ),
+    ).rejects.toThrow(/"detach"/);
+  });
+
+  // The spawned hub reads its token from stdin, so resolving one here would at
+  // best be redundant work and at worst a `tokenCommand` blocking forever on a
+  // locked secret manager in a process with no terminal.
+  test("--detached-hub takes no token from the environment and never re-detaches", async () => {
+    const config = await parsed(["--detached-hub"], { TABGLUTTON_TOKEN: "from-env" });
+    expect(config.detachedHub).toBe(true);
+    expect(config.token).toBe("");
+    expect(config.resolveToken).toBeUndefined();
+    expect(config.detach).toBe(false);
+  });
+
   test("rejects unknown arguments with usage text", async () => {
     expect(parsed(["--daemon"])).rejects.toThrow(/Unknown argument --daemon/);
   });
@@ -209,7 +248,13 @@ describe("loadConfig()", () => {
         '{"tokenCommand":"secret command","port":5004}',
     };
     const fromDotEnv = await loadConfig([], { HOME: "/home/michael" }, runtime(files));
-    expect(fromDotEnv).toEqual({ portMode: "fixed", port: 5004, token: "dot-primary" });
+    expect(fromDotEnv).toEqual({
+      portMode: "fixed",
+      port: 5004,
+      token: "dot-primary",
+      detach: true,
+      detachedHub: false,
+    });
 
     const fromEnv = await loadConfig(
       [],

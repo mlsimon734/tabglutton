@@ -11,6 +11,7 @@ import {
   parseMessage,
   proofsMatch,
   randomNonce,
+  RETIRING_FOR_NEWER_PEER,
   type BridgeMessage,
 } from "../../src/bridge-protocol.js";
 import { Hub, isExtensionOrigin } from "../src/hub.js";
@@ -437,5 +438,231 @@ describe("unauthenticated sockets", () => {
     await Bun.sleep(150);
     expect(h.summaries()).toHaveLength(1);
     expect(ext.socket.readyState).toBe(WebSocket.OPEN);
+  });
+});
+
+/**
+ * The count that replaced "a live socket means somebody is waiting".
+ *
+ * That inference held only while every hub died with the agent session that
+ * spawned it. A detached one does not, so the extension needs to be told — and
+ * being told wrong is expensive in both directions: too high pins a browser's
+ * background page awake around the clock for nobody, too low lets it suspend out
+ * from under a session's first call.
+ */
+describe("session accounting", () => {
+  function startDetachedHub(version = "1.0.0"): Hub {
+    const created = new Hub({ port: 0, token: TOKEN, detached: true, version });
+    created.listen();
+    hub = created;
+    return created;
+  }
+
+  /** A sidecar attaching as a peer, which is what a session *is* to a hub. */
+  async function attachPeer(port: number, version?: string): Promise<FakeExtension> {
+    const peer = new FakeExtension(port, "moz-extension://gullet-peer");
+    const challenge = await peer.next();
+    if (challenge.type !== "challenge")
+      throw new Error(`expected challenge, got ${challenge.type}`);
+    peer.send({
+      type: "hello",
+      proto: BRIDGE_PROTO,
+      browser: "firefox",
+      extVersion: "peer",
+      label: "peer",
+      role: "peer",
+      ...(version === undefined ? {} : { gullet: version }),
+      nonce: randomNonce(),
+      proof: await deriveProof(TOKEN, challenge.nonce),
+    });
+    return peer;
+  }
+
+  test("a session-scoped hub counts itself, because its life is the session's", async () => {
+    const h = startHub();
+    const ext = new FakeExtension(h.port);
+    await ext.handshake();
+    expect(h.sessions).toBe(1);
+  });
+
+  test("a detached hub counts nothing until a session attaches", async () => {
+    const h = startDetachedHub();
+    expect(h.sessions).toBe(0);
+    const peer = await attachPeer(h.port);
+    await peer.next(); // hello-ack
+    expect(h.sessions).toBe(1);
+  });
+
+  test("the count rides the hello-ack, so a browser reconnecting mid-session learns it", async () => {
+    const h = startDetachedHub();
+    const first = await attachPeer(h.port);
+    await first.next();
+
+    // The browser was not connected when the session started — the ordinary case
+    // for a detached hub, whose browser suspends and redials all day.
+    const ext = new FakeExtension(h.port);
+    const challenge = await ext.next();
+    if (challenge.type !== "challenge") throw new Error("expected challenge");
+    const nonce = randomNonce();
+    ext.send({
+      type: "hello",
+      proto: BRIDGE_PROTO,
+      browser: "firefox",
+      extVersion: EXT_VERSION,
+      label: "Zen",
+      nonce,
+      proof: await deriveProof(TOKEN, challenge.nonce),
+    });
+    const ack = await ext.next();
+    expect(ack.type).toBe("hello-ack");
+    expect(ack.type === "hello-ack" ? ack.sessions : undefined).toBe(1);
+  });
+
+  test("a connected browser is told when a session arrives and when the last one leaves", async () => {
+    const h = startDetachedHub();
+    const ext = new FakeExtension(h.port);
+    await ext.handshake();
+
+    // Skipping pings rather than asserting their absence: a session arriving is
+    // exactly when the hub re-checks the connections it has been holding at the
+    // slow idle cadence, so a beat between these two is correct behaviour.
+    const nextSessions = async (): Promise<BridgeMessage> => {
+      for (;;) {
+        const msg = await ext.next();
+        if (msg.type !== "ping") return msg;
+      }
+    };
+
+    const peer = await attachPeer(h.port);
+    await peer.next();
+    expect(await nextSessions()).toEqual({ type: "sessions", count: 1 });
+
+    peer.socket.close();
+    expect(await nextSessions()).toEqual({ type: "sessions", count: 0 });
+  });
+
+  // Version skew only became reachable when hubs started outliving sessions: an
+  // upgrade leaves the old one holding the port, and every arriving session
+  // resets its idle clock, so nothing else would ever move it.
+  test("a detached hub stands aside for a newer sidecar", async () => {
+    const h = startDetachedHub("1.0.0");
+    const peer = await attachPeer(h.port, "1.0.1");
+    const answer = await peer.next();
+    expect(answer.type).toBe("hello-error");
+    expect(answer.type === "hello-error" ? answer.error.message : "").toContain(
+      RETIRING_FOR_NEWER_PEER,
+    );
+    // Retiring means releasing the port, not merely refusing: the peer's next
+    // move is to re-race for it, and a hub still bound would send it straight
+    // back into the loop it just escaped.
+    await Bun.sleep(50);
+    expect(await fetch(`http://127.0.0.1:${h.port}/`).catch(() => null)).toBeNull();
+  });
+
+  test("an older or equal sidecar attaches normally", async () => {
+    const h = startDetachedHub("1.0.0");
+    const same = await attachPeer(h.port, "1.0.0");
+    expect((await same.next()).type).toBe("hello-ack");
+    const older = await attachPeer(h.port, "0.9.9");
+    expect((await older.next()).type).toBe("hello-ack");
+    expect(h.sessions).toBe(2);
+  });
+
+  // Asking "are you mine?" must not make the asker a session. A real attachment
+  // would broadcast `sessions: 1` and then `0` to every connected browser, and a
+  // browser whose socket dropped between those two frames would hold its page
+  // awake for a hub serving nobody — while every check reset the hub's own idle
+  // clock, so visitors alone could keep an abandoned hub alive.
+  test("a probe proves the realm without being counted as a session", async () => {
+    const h = startDetachedHub();
+    const probe = new FakeExtension(h.port, "moz-extension://gullet-peer");
+    const challenge = await probe.next();
+    if (challenge.type !== "challenge") throw new Error("expected challenge");
+    const nonce = randomNonce();
+    probe.send({
+      type: "hello",
+      proto: BRIDGE_PROTO,
+      browser: "firefox",
+      extVersion: "peer",
+      label: "peer",
+      role: "probe",
+      gullet: "1.0.0",
+      nonce,
+      proof: await deriveProof(TOKEN, challenge.nonce),
+    });
+
+    // The proof still comes back both ways — this is a realm check, not a peek.
+    const ack = await probe.next();
+    expect(ack.type).toBe("hello-ack");
+    if (ack.type !== "hello-ack") throw new Error("unreachable");
+    expect(proofsMatch(ack.proof, await deriveProof(TOKEN, nonce))).toBe(true);
+    expect(h.sessions).toBe(0);
+
+    // The asker closes; the hub's own close is a backstop that must not race the
+    // ack it just sent, or the realm check reports "not mine" about a hub that is.
+    probe.socket.close();
+    await Bun.sleep(50);
+    expect(h.sessions).toBe(0);
+  });
+
+  test("a probe that never closes is reaped rather than held forever", async () => {
+    const h = new Hub({ port: 0, token: TOKEN, detached: true, handshakeTimeoutMs: 60 });
+    h.listen();
+    hub = h;
+    const probe = new FakeExtension(h.port, "moz-extension://gullet-peer");
+    const challenge = await probe.next();
+    if (challenge.type !== "challenge") throw new Error("expected challenge");
+    probe.send({
+      type: "hello",
+      proto: BRIDGE_PROTO,
+      browser: "firefox",
+      extVersion: "peer",
+      label: "peer",
+      role: "probe",
+      nonce: randomNonce(),
+      proof: await deriveProof(TOKEN, challenge.nonce),
+    });
+    expect((await probe.next()).type).toBe("hello-ack");
+    const closed = new Promise<void>((resolve) => {
+      probe.socket.addEventListener("close", () => resolve());
+    });
+    await closed;
+    expect(h.sessions).toBe(0);
+  });
+
+  test("a probe from a newer sidecar still retires an outdated hub", async () => {
+    // Otherwise an upgrade would replace a stale hub only when a session
+    // attached, never when the newly spawned hub merely looked first — which is
+    // the order that actually happens.
+    const h = startDetachedHub("1.0.0");
+    const probe = new FakeExtension(h.port, "moz-extension://gullet-peer");
+    const challenge = await probe.next();
+    if (challenge.type !== "challenge") throw new Error("expected challenge");
+    probe.send({
+      type: "hello",
+      proto: BRIDGE_PROTO,
+      browser: "firefox",
+      extVersion: "peer",
+      label: "peer",
+      role: "probe",
+      gullet: "2.0.0",
+      nonce: randomNonce(),
+      proof: await deriveProof(TOKEN, challenge.nonce),
+    });
+    const answer = await probe.next();
+    expect(answer.type).toBe("hello-error");
+    expect(answer.type === "hello-error" ? answer.error.message : "").toContain(
+      RETIRING_FOR_NEWER_PEER,
+    );
+  });
+
+  test("a session-scoped hub never retires, however new the peer", async () => {
+    // It would take its own agent session down with it, which is strictly worse
+    // than serving one version-old peer for a few minutes.
+    const h = new Hub({ port: 0, token: TOKEN, version: "1.0.0" });
+    h.listen();
+    hub = h;
+    const peer = await attachPeer(h.port, "99.0.0");
+    expect((await peer.next()).type).toBe("hello-ack");
   });
 });

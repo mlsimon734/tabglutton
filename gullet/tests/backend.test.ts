@@ -29,10 +29,20 @@ function freePort(): number {
   return port;
 }
 
+/**
+ * `detach: false` throughout this file, and deliberately so.
+ *
+ * What these tests own is the in-process election — who binds, who attaches,
+ * what happens when the winner exits — and that path is still reached in
+ * production every time a spawn is unavailable or `--no-detach` is set. Leaving
+ * detaching on would have each case start real hub processes that outlive the
+ * test run, and would test the spawn rather than the election. The spawn has its
+ * own tests below, with the process replaced by an injected function.
+ */
 async function supervisor(port: number): Promise<Supervisor> {
   // Zero connect wait: every expectation below either has a browser already
   // attached (instant regardless) or asserts the empty list.
-  const s = track(new Supervisor({ port, token: TOKEN, connectWaitMs: 0 }));
+  const s = track(new Supervisor({ port, token: TOKEN, connectWaitMs: 0, detach: false }));
   await s.start();
   return s;
 }
@@ -41,7 +51,7 @@ async function autoSupervisor(
   candidates: readonly number[],
   token: string = TOKEN,
 ): Promise<Supervisor> {
-  const s = track(new Supervisor({ candidates, token, connectWaitMs: 0 }));
+  const s = track(new Supervisor({ candidates, token, connectWaitMs: 0, detach: false }));
   await s.start();
   return s;
 }
@@ -57,6 +67,7 @@ async function watchedSupervisor(
       port,
       token: TOKEN,
       connectWaitMs: 0,
+      detach: false,
       onRoleChange: (role) => {
         current = role;
         for (let i = waiters.length - 1; i >= 0; i--) {
@@ -236,7 +247,7 @@ describe("hub/peer election", () => {
     const stranger = track(new Hub({ port, token: "some-other-token" }));
     stranger.listen();
 
-    const sup = track(new Supervisor({ port, token: TOKEN, startTimeoutMs: 300 }));
+    const sup = track(new Supervisor({ port, token: TOKEN, startTimeoutMs: 300, detach: false }));
     // Start a tool call before the first sweep publishes its fault. It must use
     // the same bounded wait as start(), then re-read the reason instead of
     // parking forever on an election that keeps retrying underneath.
@@ -260,7 +271,7 @@ describe("hub/peer election", () => {
     stranger.listen();
 
     const sup = track(
-      new Supervisor({ port, token: TOKEN, startTimeoutMs: 300, connectWaitMs: 0 }),
+      new Supervisor({ port, token: TOKEN, startTimeoutMs: 300, connectWaitMs: 0, detach: false }),
     );
     await expect(sup.start()).rejects.toThrow();
     stranger.stop();
@@ -282,6 +293,7 @@ describe("hub/peer election", () => {
         port,
         token: "",
         connectWaitMs: 0,
+        detach: false,
         resolveToken: async () => {
           attempts += 1;
           if (attempts === 1) throw new Error("1Password is locked (stderr from op)");
@@ -313,7 +325,13 @@ describe("hub/peer election", () => {
     for (const stranger of strangers) stranger.listen();
 
     const sup = track(
-      new Supervisor({ candidates, token: TOKEN, startTimeoutMs: 300, connectWaitMs: 0 }),
+      new Supervisor({
+        candidates,
+        token: TOKEN,
+        startTimeoutMs: 300,
+        connectWaitMs: 0,
+        detach: false,
+      }),
     );
     await expect(sup.start()).rejects.toThrow();
     strangers[1]?.stop();
@@ -334,5 +352,116 @@ describe("hub/peer election", () => {
     // Two sidecars, no browser: a peer must never be mistaken for a target,
     // or tab calls would be routed at another sidecar.
     expect(await hub.connections()).toEqual([]);
+  });
+});
+
+// The spawn is replaced by a function that starts a hub in this process, which
+// is the one difference from production that matters here: what is under test is
+// the *election's* use of a detached hub — that it prefers one, attaches as a
+// peer rather than binding, and survives one that never arrives.
+describe("detached hub election", () => {
+  /** Stands in for the spawned process, starting a real hub on a real port. */
+  function fakeSpawn(port: number, detached = true): () => Promise<number | null> {
+    return async () => {
+      const spawned = track(new Hub({ port, token: TOKEN, detached, version: "9.9.9" }));
+      spawned.listen();
+      return port;
+    };
+  }
+
+  test("a sidecar that finds no hub spawns one and attaches to it as a peer", async () => {
+    const port = freePort();
+    let spawns = 0;
+    const sup = track(
+      new Supervisor({
+        port,
+        token: TOKEN,
+        connectWaitMs: 0,
+        spawnHub: async () => {
+          spawns += 1;
+          return fakeSpawn(port)();
+        },
+      }),
+    );
+    await sup.start();
+    expect(spawns).toBe(1);
+
+    // The proof that it attached rather than bound: the browser dials the hub
+    // the spawn created, and this supervisor — which has no socket to it — can
+    // still see the connection.
+    const browser = await fakeBrowser(port, null);
+    const seen = await sup.connections();
+    expect(seen).toHaveLength(1);
+    expect(seen[0]?.label).toBe("Zen");
+    browser.close();
+  });
+
+  test("a second session attaches to the existing hub without spawning another", async () => {
+    const port = freePort();
+    let spawns = 0;
+    const spawnHub = async (): Promise<number | null> => {
+      spawns += 1;
+      return fakeSpawn(port)();
+    };
+    const first = track(new Supervisor({ port, token: TOKEN, connectWaitMs: 0, spawnHub }));
+    await first.start();
+    const second = track(new Supervisor({ port, token: TOKEN, connectWaitMs: 0, spawnHub }));
+    await second.start();
+
+    // One hub, two sessions. The second found the first's hub in the discovery
+    // sweep, which runs before any spawn is considered.
+    expect(spawns).toBe(1);
+    const browser = await fakeBrowser(port, null);
+    expect(await first.connections()).toHaveLength(1);
+    expect(await second.connections()).toHaveLength(1);
+    browser.close();
+  });
+
+  test("a spawn that never answers falls back to serving the browser in-process", async () => {
+    const port = freePort();
+    let spawns = 0;
+    const sup = track(
+      new Supervisor({
+        port,
+        token: TOKEN,
+        connectWaitMs: 0,
+        spawnHub: async () => {
+          spawns += 1;
+          return null;
+        },
+      }),
+    );
+    // The whole point of the fallback: a detached hub that cannot start is a
+    // slower session, never a session without a bridge.
+    await sup.start();
+    expect(spawns).toBe(1);
+    const browser = await fakeBrowser(port, null);
+    expect(await sup.connections()).toHaveLength(1);
+    browser.close();
+  });
+
+  test("a spawn that throws is survived, and stops being attempted", async () => {
+    const port = freePort();
+    let spawns = 0;
+    const sup = track(
+      new Supervisor({
+        port,
+        token: TOKEN,
+        connectWaitMs: 0,
+        startTimeoutMs: 300,
+        spawnHub: () => {
+          spawns += 1;
+          return Promise.reject(new Error("fork: Resource temporarily unavailable"));
+        },
+      }),
+    );
+    await sup.start();
+    const browser = await fakeBrowser(port, null);
+    expect(await sup.connections()).toHaveLength(1);
+    // One round, one attempt. An environment where the spawn can never work must
+    // not start a doomed process on every election round for the life of the
+    // session.
+    expect(spawns).toBe(1);
+    browser.close();
   });
 });

@@ -12,6 +12,7 @@ import {
   groupTabsByDomain,
   isBridgeMethod,
   matchesTabQuery,
+  bridgePortCandidates,
   orderedBridgePortCandidates,
   parseMessage,
   parseTabClipParams,
@@ -53,6 +54,19 @@ describe("automatic bridge discovery", () => {
   test("ignores stale or unknown cached ports", () => {
     expect(orderedBridgePortCandidates(5000)).toEqual([...BRIDGE_PORT_CANDIDATES]);
     expect(orderedBridgePortCandidates()).toEqual([...BRIDGE_PORT_CANDIDATES]);
+  });
+
+  test("resolves the election's candidates: fixed port wins, otherwise the canonical list", () => {
+    expect(bridgePortCandidates(undefined)).toEqual([...BRIDGE_PORT_CANDIDATES]);
+    expect(bridgePortCandidates(5000)).toEqual([5000]);
+    // A fixed port replaces the list rather than joining it — a configured port
+    // is an instruction, not a preference.
+    expect(bridgePortCandidates(5000, [4589])).toEqual([5000]);
+  });
+
+  test("drops unbindable and repeated candidates, so nothing is probed twice", () => {
+    expect(bridgePortCandidates(80)).toEqual([]);
+    expect(bridgePortCandidates(undefined, [4589, 4589, 80, 20317])).toEqual([4589, 20317]);
   });
 
   test("requires the current protocol marker before a candidate is compatible", () => {

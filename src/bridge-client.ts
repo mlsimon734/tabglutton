@@ -88,15 +88,22 @@ const FAST_RETRIES_PER_WAKE = 8;
  * timer) and took a further ~30s to return, so a third of the time there was no
  * bridge and tool calls answered "no browser is connected".
  *
- * The fix is to touch a real API on a timer, for as long as a sidecar is
- * connected. The connection is the entitlement: Gullet is spawned by an agent
- * harness and exits with it, so a live socket already means a session is open
- * and no browser is held awake for nobody. Tying this to *requests* instead —
- * the first shape of it — kept the page awake only for a few minutes after each
- * tool call, which left the connect-then-idle gap uncovered: the socket came up,
- * nothing was asked of it, the page suspended, and the agent's first real call
- * found no browser. The linger below now governs only how long we stay awake
- * *after* a socket drops, which is the window a redial has to land in.
+ * The fix is to touch a real API on a timer, for as long as an agent session is
+ * attached. Tying this to *requests* instead — the first shape of it — kept the
+ * page awake only for a few minutes after each tool call, which left the
+ * connect-then-idle gap uncovered: the socket came up, nothing was asked of it,
+ * the page suspended, and the agent's first real call found no browser. The
+ * linger below now governs only how long we stay awake *after* a socket drops,
+ * which is the window a redial has to land in.
+ *
+ * **A live socket used to be the entitlement, and is not any more.** It was a
+ * sound proxy while every hub was spawned by an agent harness and died with it:
+ * a connection could only exist because a session did. A hub that outlives its
+ * sessions (docs/BRIDGE.md) breaks that inference in the expensive direction —
+ * staying connected around the clock would mean never suspending, spending
+ * wakeups on nobody — so the hub now says how many sessions it is serving and
+ * `sessions` below is what gates this. An older hub sends no count, and absent
+ * still means entitled, because for that hub the old inference is still true.
  */
 const KEEPALIVE_PING_MS = 20_000;
 const KEEPALIVE_LINGER_MS = 5 * 60_000;
@@ -214,6 +221,11 @@ export class BridgeClient {
    * from the drop rather than from whenever we last connected or served.
    */
   private keepaliveUntil = 0;
+  /**
+   * Agent sessions the connected hub reports, or null for a hub that does not
+   * report any. Null is *entitled*: see the keepalive notes above.
+   */
+  private sessions: number | null = null;
   private awaitingPong = false;
   /** A probe is in flight; `phase` is still "closed", so ticks need their own guard. */
   private probing = false;
@@ -653,6 +665,7 @@ export class BridgeClient {
         this.clearHandshakeTimer();
         this.clearFastRetry();
         this.setPhase("open");
+        this.sessions = typeof msg.sessions === "number" ? msg.sessions : null;
         this.startHeartbeat(socket);
         const settings = this.deps.getSettings();
         if (
@@ -666,15 +679,39 @@ export class BridgeClient {
             void saveBridgeLastPort(this.socketPort);
           }
         }
-        // On connect, not on first request. A connected sidecar is *itself* the
-        // proof that someone is using this: Gullet is spawned by an agent
-        // harness and lives exactly as long as the session does, so there is no
-        // such thing as a connection nobody wants. Waiting for a request instead
-        // left the gap that actually bit — connect, sit idle, get suspended out
-        // from under the socket before the agent's first call, and answer that
-        // call with "no browser is connected" after the full connect wait.
-        this.armKeepalive();
-        console.log("[tabglutton] bridge connected as", msg.connectionId);
+        // On connect, not on first request — waiting for a request left the gap
+        // that actually bit: connect, sit idle, get suspended out from under the
+        // socket before the agent's first call, and answer that call with "no
+        // browser is connected" after the full connect wait. What connecting no
+        // longer settles is whether anyone is *there*; `syncKeepalive` asks the
+        // count for that.
+        this.syncKeepalive();
+        console.log(
+          "[tabglutton] bridge connected as",
+          msg.connectionId,
+          this.sessions === null ? "" : `(${this.sessions} agent session(s))`,
+        );
+        return;
+      }
+      case "sessions": {
+        if (this.phase !== "open") return;
+        // Guarded exactly as the ack is, and for a sharper reason: `parseMessage`
+        // validates `type` and casts the rest, so a malformed frame would set
+        // this to `undefined` — which is neither null nor above zero, so the
+        // keepalive and the heartbeat would both switch off and stay off for the
+        // life of the connection. That fails *closed*, suspending the page under
+        // a live agent session: the exact regression the count exists to
+        // prevent, reached through the field meant to prevent it.
+        if (typeof msg.count !== "number") return;
+        this.sessions = msg.count;
+        // Both directions matter and they are not symmetric. Upwards is a
+        // session starting, and the page must be awake before its first call
+        // arrives. Downwards is the last one exiting, and holding the page any
+        // longer would be the wakeups-for-nobody this count exists to stop —
+        // the redial linger has nothing to cover, because there is no session
+        // left to be waiting on the reconnect.
+        this.syncKeepalive();
+        this.syncHeartbeat(socket);
         return;
       }
       case "hello-error":
@@ -726,12 +763,44 @@ export class BridgeClient {
     socket.send(JSON.stringify(msg));
   }
 
+  /**
+   * Whether an agent session is waiting on this browser — the thing that used to
+   * be implied by having a socket at all. See KEEPALIVE_PING_MS.
+   */
+  private get entitled(): boolean {
+    return this.sessions === null || this.sessions > 0;
+  }
+
+  /** Hold the page awake, or stop holding it, per the current entitlement. */
+  private syncKeepalive(): void {
+    if (this.entitled) this.armKeepalive();
+    else this.stopKeepalive();
+  }
+
+  /**
+   * Run our own heartbeat only while entitled.
+   *
+   * On Gecko this is merely tidy — WebSocket traffic resets no idle timer there,
+   * which is the whole reason the keepalive above has to make a real API call.
+   * On Chrome it is the other half of the entitlement: a sent or received
+   * WebSocket message *is* activity for an MV3 worker, so a 20s beat into an
+   * idle detached hub would keep the worker resident forever and hand back
+   * exactly the cost the count was added to avoid. Incoming pings are still
+   * answered either way — a `pong` we owe is not ours to withhold, and the hub
+   * drops to its own slow cadence for the same reason we stop here.
+   */
+  private syncHeartbeat(socket: WebSocket): void {
+    if (this.entitled) this.startHeartbeat(socket);
+    else this.stopHeartbeat();
+  }
+
   // Application-level ping rather than a WebSocket control frame, so that a
   // half-open socket is detected here rather than being answered by the browser
   // itself. It does *not* keep the background page alive — see the keepalive
   // constants above; assuming it did is what hid the reconnect churn.
   private startHeartbeat(socket: WebSocket): void {
     this.stopHeartbeat();
+    if (!this.entitled) return;
     this.awaitingPong = false;
     this.heartbeat = setInterval(() => {
       if (this.socket !== socket || socket.readyState !== WebSocket.OPEN) {
@@ -854,6 +923,11 @@ export class BridgeClient {
     this.socket = null;
     this.socketToken = "";
     this.socketPort = null;
+    // Cleared rather than carried: the next socket may reach a different hub
+    // entirely, and inheriting a count from the last one would either pin the
+    // page against a hub serving nobody or let it suspend against one that is.
+    // Null is the honest starting state, and it errs towards staying awake.
+    this.sessions = null;
     this.phase = "closed";
     if (socket && socket.readyState <= WebSocket.OPEN) {
       try {
