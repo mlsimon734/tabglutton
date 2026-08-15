@@ -46,10 +46,16 @@ Connect to your agent of choice to triage high signal content, determined by you
 
 ### 1. Dedup
 
-The toolbar badge counts duplicate tabs in scope. Open the popup to see them grouped by
-canonical URL, then close them all in one action — the keeper is chosen by `lastAccessed`,
-then `active`, then `pinned`. A toast offers Undo for ~6 seconds and restores tabs to
-their original positions.
+The toolbar badge counts duplicate tabs in scope. Open the popup or the cockpit and they
+are the first thing on the list: a **Duplicates** section, one group per canonical URL,
+with the copy that survives marked `keep` and every other copy sitting under it — so the
+badge's number is something you can read before you act on it. The keeper is chosen by
+`lastAccessed`, then `active`, then `pinned`.
+
+Close them all with **Dedup**, a whole set with its **Select extras** button, or the lot
+with **Select all _n_** on the section rule — the last two put the copies in the normal
+selection, so they can be devoured into Obsidian instead of just closed. A toast offers
+Undo for ~6 seconds and restores tabs to their original positions.
 
 URLs are canonicalized first (`src/normalize.ts`): lowercased host, `www.` and trailing
 slash stripped, tracking params (`utm_*`, `fbclid`, `gclid`, `si`, …) dropped, remaining

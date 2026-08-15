@@ -122,7 +122,42 @@ export function orderedBridgePortCandidates(lastPort?: number): number[] {
 export function isBridgePort(value: number): boolean {
   return Number.isInteger(value) && value >= 1024 && value <= 65535;
 }
+
+/**
+ * The ports an election may use: the single configured port if there is one, the
+ * canonical list otherwise, deduped and reduced to ports that can be bound.
+ *
+ * Three sidecar call sites resolve this — the Supervisor's election, a detached
+ * hub's own bind sweep, and the parent watching for the hub it just spawned —
+ * and they have to agree exactly. A hub that binds a candidate its parent is not
+ * watching is indistinguishable, from the parent, from a spawn that never came
+ * up at all.
+ */
+export function bridgePortCandidates(
+  fixed: number | undefined,
+  override?: readonly number[],
+): number[] {
+  const source = fixed === undefined ? (override ?? BRIDGE_PORT_CANDIDATES) : [fixed];
+  return [...new Set(source)].filter(isBridgePort);
+}
+
 export const BRIDGE_HEARTBEAT_MS = 20_000;
+
+/**
+ * Heartbeat cadence while no agent session is attached to the hub — see
+ * `sessions` on the hello-ack for what that means and why it exists.
+ *
+ * It has to sit comfortably above *both* engines' background-idle timeouts
+ * (~30s), because on Chrome a WebSocket message is itself activity: a beat every
+ * 20s into an idle detached hub's browser connection would reset the MV3 idle
+ * timer forever and pin the service worker for nobody, which is the exact cost
+ * the entitlement exists to avoid. Five minutes is far past that line while
+ * still noticing a hung browser eventually. The resolution loss is bounded and
+ * deliberate: a hub with no session has nothing in flight to protect, and the
+ * fast cadence is restored the instant one attaches.
+ */
+export const BRIDGE_IDLE_HEARTBEAT_MS = 5 * 60_000;
+
 export const BRIDGE_REQUEST_TIMEOUT_MS = 45_000;
 /**
  * Deadline for the token exchange, measured from the socket *opening*. By then
@@ -239,8 +274,67 @@ export interface HelloMessage {
    * peers rather than dying, so several agent sessions share one connection.
    * Everything after the handshake differs by role, so it has to be settled
    * inside it.
+   *
+   * `"probe"` is a peer that only wants the answer to "are you mine?". It
+   * completes the same mutual proof and is then closed, without ever being
+   * counted as a session — because a caller asking that question is not one, and
+   * counting it would flap the browser's keepalive entitlement and reset a hub's
+   * idle clock every time anyone looked at it.
    */
-  role?: "browser" | "peer";
+  role?: "browser" | "peer" | "probe";
+  /**
+   * The attaching sidecar's own version, sent only by peers. `proto` settles
+   * whether two ends can speak at all; this settles which of two that *can*
+   * should be the one still running. It matters only once a hub can outlive the
+   * session that spawned it: a detached hub started before an upgrade would
+   * otherwise keep serving old code to every new session for as long as sessions
+   * kept arriving, since each one resets its idle clock. So a hub older than the
+   * peer attaching to it retires instead — see RETIRING_FOR_NEWER_PEER.
+   */
+  gullet?: string;
+}
+
+/**
+ * Prefix of the `hello-error` an outdated hub sends before shutting down.
+ *
+ * A marker in a human-readable message, not a control signal: the peer needs no
+ * special handling, because a refused attachment already falls through to the
+ * same round's binding sweep, which finds the port this hub is in the middle of
+ * releasing. It exists so the reason is greppable in a log and assertable in a
+ * test — "the hub stood aside for me" and "the hub refused me" produce identical
+ * behaviour and would otherwise be indistinguishable after the fact.
+ */
+export const RETIRING_FOR_NEWER_PEER = "retiring-for-newer-peer";
+
+/**
+ * Compare two dotted numeric versions, the shape this project actually emits
+ * (`major.minor.patch`, plus `sign:dev`'s fourth build counter).
+ *
+ * A version with any non-numeric component is unreadable, and an unreadable one
+ * compares as **equal** rather than being coerced into an ordering. That is the
+ * only safe direction for the single thing this decides: whether a running hub
+ * should shut itself down for an arriving peer. Coercing the unreadable part to
+ * zero looks harmless and is not — it makes `1.0.0-beta.2` parse as a *fourth*
+ * component and outrank `1.0.0`, so a prerelease would retire the release.
+ */
+export function compareGulletVersions(a: string, b: string): number {
+  const parts = (value: string): number[] | null => {
+    const components = value.split(".");
+    // Whole-component digits, because `parseInt` stops at the first non-digit
+    // and would read "0-beta" as a perfectly good 0 — which is the coercion this
+    // function exists to refuse.
+    if (!components.every((part) => /^\d+$/.test(part))) return null;
+    const numbers = components.map(Number);
+    return numbers.every((n) => Number.isSafeInteger(n)) ? numbers : null;
+  };
+  const left = parts(a);
+  const right = parts(b);
+  if (!left || !right) return 0;
+  for (let i = 0; i < Math.max(left.length, right.length); i++) {
+    const diff = (left[i] ?? 0) - (right[i] ?? 0);
+    if (diff !== 0) return diff < 0 ? -1 : 1;
+  }
+  return 0;
 }
 
 export interface HelloAckMessage {
@@ -248,6 +342,36 @@ export interface HelloAckMessage {
   proto: number;
   connectionId: string;
   proof: string;
+  /**
+   * Agent sessions this hub is currently serving — see SessionsMessage.
+   *
+   * **Absent means "assume one".** A hub old enough not to send it is one whose
+   * lifetime *is* an agent session, so a connection to it was already proof of
+   * entitlement; reading the missing field as zero would switch the keepalive
+   * off against exactly the hubs that need it most.
+   */
+  sessions?: number;
+}
+
+/**
+ * How many agent sessions the hub is serving, sent on every transition through
+ * zero. This is the extension's entitlement to hold its background page awake.
+ *
+ * A session-scoped hub is spawned by an agent harness and dies with it, so a
+ * live socket was itself proof that somebody was waiting on the browser — which
+ * is what justified `KEEPALIVE_PING_MS` pinning the event page. A **detached**
+ * hub outlives every session, so that proof is gone: staying connected around
+ * the clock would mean never suspending, spending wakeups on nobody. The hub
+ * knows the answer (it counts its attached peers, plus its own MCP half when it
+ * has one) and says so; the extension keeps the page awake only while the count
+ * is above zero, and otherwise lets itself suspend and redial on the next wake.
+ *
+ * Deliberately a count rather than a flag: it costs the same and it is the
+ * number a user staring at a bridge that will not stay connected wants to see.
+ */
+export interface SessionsMessage {
+  type: "sessions";
+  count: number;
 }
 
 export interface HelloErrorMessage {
@@ -284,6 +408,7 @@ export type ServerMessage =
   | HelloAckMessage
   | HelloErrorMessage
   | RequestMessage
+  | SessionsMessage
   | PingMessage
   | PongMessage;
 
@@ -744,6 +869,7 @@ const MESSAGE_TYPES: ReadonlySet<string> = new Set([
   "hello-error",
   "request",
   "response",
+  "sessions",
   "ping",
   "pong",
 ]);

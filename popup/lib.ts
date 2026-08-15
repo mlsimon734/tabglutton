@@ -1,10 +1,27 @@
 import type { ClipFailureReason, ClipSelectedTabsResponse, PopupTab } from "../src/background.js";
-import { normalizeUrl } from "../src/normalize.js";
+import { groupDuplicates, pickKeeper } from "../src/dedup.js";
 import { normalizeOptsFrom, type Settings } from "../src/storage.js";
 
-export interface DomainGroup {
+/**
+ * A duplicate set (several tabs sharing one canonical URL) or a domain bucket.
+ * Duplicates are their own groups and are *removed* from the domain buckets, so
+ * every tab still renders exactly once — which is what lets selection, the
+ * keyboard queue, and every bulk action keep working off the group list
+ * unchanged. They sort ahead of everything else because they are the cheapest
+ * decision on the list: nothing is lost by closing a copy of a tab you kept.
+ */
+export type TabGroupKind = "duplicate" | "domain";
+
+export interface TabGroup {
+  kind: TabGroupKind;
+  /** Identity for sticky ordering: `dup:<canonical url>` or `host:<host>`. */
+  key: string;
+  /** Header text — the shared canonical URL for a duplicate set, else the host. */
+  label: string;
   host: string;
   tabs: PopupTab[];
+  /** The copy Dedup keeps, first in `tabs`. Null on domain groups. */
+  keeperId: number | null;
 }
 
 export function hostOf(url: string | undefined): string {
@@ -40,15 +57,85 @@ export function tabMatches(tab: PopupTab, ts: string[]): boolean {
   return matchTokens(`${tab.url ?? ""}\n${tab.title ?? ""}`, ts);
 }
 
+function byPosition(a: PopupTab, b: PopupTab): number {
+  return (a.windowId ?? 0) - (b.windowId ?? 0) || a.index - b.index;
+}
+
+/**
+ * Sort one section. Groups the user has already seen hold their slot (that is
+ * what `rank` carries), so selecting or closing inside a group cannot reshuffle
+ * the list under the cursor; everything new falls in by size.
+ */
+function sortSection(groups: TabGroup[], rank: Map<string, number> | null): void {
+  groups.sort((a, b) => {
+    if (rank) {
+      const ra = rank.get(a.key);
+      const rb = rank.get(b.key);
+      if (ra !== undefined && rb !== undefined) return ra - rb;
+      if (ra !== undefined) return -1;
+      if (rb !== undefined) return 1;
+    }
+    return b.tabs.length - a.tabs.length || a.label.localeCompare(b.label);
+  });
+}
+
+/**
+ * The duplicate sets among `tabs`, keeper first in each. Keeper selection is
+ * `pickKeeper` itself, not a copy of its rule: the pill this puts on a row is a
+ * claim about what the Dedup button will do, and it has to stay true.
+ */
+export function duplicateGroups(tabs: PopupTab[], settings: Settings | null): TabGroup[] {
+  if (!settings) return [];
+  return groupDuplicates(tabs, normalizeOptsFrom(settings)).map((set) => {
+    const keeper = pickKeeper(set.tabs);
+    const extras = set.tabs.filter((t) => t.id !== keeper.id).sort(byPosition);
+    return {
+      kind: "duplicate" as const,
+      key: `dup:${set.key}`,
+      label: set.key,
+      host: hostOf(keeper.url),
+      tabs: [keeper, ...extras],
+      keeperId: keeper.id,
+    };
+  });
+}
+
+/** The copies Dedup would close — every tab in a duplicate set but its keeper. */
+export function extraTabIds(groups: TabGroup[]): number[] {
+  const ids: number[] = [];
+  for (const g of groups) {
+    if (g.kind !== "duplicate") continue;
+    for (const t of g.tabs) {
+      if (t.id !== g.keeperId) ids.push(t.id);
+    }
+  }
+  return ids;
+}
+
 export function visibleGroups(
   scopedTabs: PopupTab[],
   filter: string,
-  stickyHostOrder?: readonly string[] | null,
-): DomainGroup[] {
+  settings: Settings | null,
+  stickyOrder?: readonly string[] | null,
+): TabGroup[] {
   const ts = tokens(filter);
+  const matching = new Set(scopedTabs.filter((tab) => tabMatches(tab, ts)).map((t) => t.id));
+
+  // Duplicate sets are found across the whole scope and shown *whole* as soon as
+  // one copy matches the filter. Detecting them among the matching tabs instead
+  // would let a filter split a set and pin `keep` on a copy Dedup is about to
+  // close — the button has never been filtered, and the pill is a claim about it.
+  const dups = duplicateGroups(scopedTabs, settings).filter((g) =>
+    g.tabs.some((t) => matching.has(t.id)),
+  );
+  const claimed = new Set<number>();
+  for (const g of dups) {
+    for (const t of g.tabs) claimed.add(t.id);
+  }
+
   const byHost = new Map<string, PopupTab[]>();
   for (const tab of scopedTabs) {
-    if (!tabMatches(tab, ts)) continue;
+    if (!matching.has(tab.id) || claimed.has(tab.id)) continue;
     const host = hostOf(tab.url);
     let bucket = byHost.get(host);
     if (!bucket) {
@@ -57,28 +144,20 @@ export function visibleGroups(
     }
     bucket.push(tab);
   }
-  const groups: DomainGroup[] = [];
+  const domains: TabGroup[] = [];
   for (const [host, tabs] of byHost) {
-    tabs.sort((a, b) => (a.windowId ?? 0) - (b.windowId ?? 0) || a.index - b.index);
-    groups.push({ host, tabs });
+    tabs.sort(byPosition);
+    domains.push({ kind: "domain", key: `host:${host}`, label: host, host, tabs, keeperId: null });
   }
-  if (stickyHostOrder && stickyHostOrder.length) {
-    const rank = new Map(stickyHostOrder.map((h, i) => [h, i] as const));
-    groups.sort((a, b) => {
-      const ra = rank.get(a.host);
-      const rb = rank.get(b.host);
-      if (ra !== undefined && rb !== undefined) return ra - rb;
-      if (ra !== undefined) return -1;
-      if (rb !== undefined) return 1;
-      return b.tabs.length - a.tabs.length || a.host.localeCompare(b.host);
-    });
-  } else {
-    groups.sort((a, b) => b.tabs.length - a.tabs.length || a.host.localeCompare(b.host));
-  }
-  return groups;
+
+  const rank =
+    stickyOrder && stickyOrder.length ? new Map(stickyOrder.map((k, i) => [k, i] as const)) : null;
+  sortSection(dups, rank);
+  sortSection(domains, rank);
+  return [...dups, ...domains];
 }
 
-export function visibleTabIds(groups: DomainGroup[]): number[] {
+export function visibleTabIds(groups: TabGroup[]): number[] {
   const ids: number[] = [];
   for (const g of groups) {
     for (const t of g.tabs) ids.push(t.id);
@@ -101,20 +180,16 @@ export function markdownForTabs(tabs: PopupTab[]): string {
     .join("\n");
 }
 
+/**
+ * What the Dedup button would close, over the whole scope — deliberately not
+ * filtered, because the button is not either.
+ */
 export function computeDedupCount(scopedTabs: PopupTab[], settings: Settings | null): number {
   if (!settings) return 0;
-  const opts = normalizeOptsFrom(settings);
-  const counts = new Map<string, number>();
-  for (const tab of scopedTabs) {
-    const key = normalizeUrl(tab.url, opts);
-    if (!key) continue;
-    counts.set(key, (counts.get(key) ?? 0) + 1);
-  }
-  let dups = 0;
-  for (const n of counts.values()) {
-    if (n > 1) dups += n - 1;
-  }
-  return dups;
+  return groupDuplicates(scopedTabs, normalizeOptsFrom(settings)).reduce(
+    (n, g) => n + g.tabs.length - 1,
+    0,
+  );
 }
 
 /** Both popups render the same failure vocabulary; keep them from drifting. */
@@ -149,7 +224,7 @@ export function clipSummary(res: ClipSelectedTabsResponse): string {
   return res.failed === 0 ? `Saved ${saved}` : `Saved ${saved}, ${res.failed} failed`;
 }
 
-export function selectedTabsInUiOrder(groups: DomainGroup[], selected: Set<number>): PopupTab[] {
+export function selectedTabsInUiOrder(groups: TabGroup[], selected: Set<number>): PopupTab[] {
   const out: PopupTab[] = [];
   for (const g of groups) {
     for (const t of g.tabs) {
