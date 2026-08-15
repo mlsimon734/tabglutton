@@ -191,6 +191,11 @@ every existing install would defeat the migration. Fixed mode remains one click 
 - The set is ordered, short, non-contiguous, and append-only within a bridge protocol major
   version. Ordering is part of the election contract; two compatible sidecars must never
   see the same candidates in a different order.
+- `bridgePortCandidates()` beside it is the one resolver: fixed port if configured, the
+  canonical set otherwise, deduped and filtered to bindable ports. All three sidecar call
+  sites — the Supervisor's election, a detached hub's bind sweep, and the parent watching
+  for the hub it spawned — go through it, so the order cannot drift between them. It was
+  three inlined copies, and two of them had already lost the dedupe.
 - Additional ports get the same recorded scrutiny as 4589: unassigned by IANA, absent from
   Chromium and Gecko restricted-port lists, and checked for real developer-tool defaults.
   “The next few numbers” is explicitly not a selection rule — the neighbourhood around 4589
