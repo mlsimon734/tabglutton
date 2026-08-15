@@ -2,7 +2,7 @@
 // webextension-polyfill global first (see writePolyfillGlobal in build.ts). A
 // bare "webextension-polyfill" import here would not set the global anyway.
 import { type ClipDestination, loadSettings, saveSettings } from "../src/storage.js";
-import { requestDownloads } from "../src/permissions.js";
+import { hasDownloads, requestDownloads } from "../src/permissions.js";
 import { BUILT_IN_RULES } from "../src/site-rules.js";
 import { IS_CHROME } from "../src/target.js";
 import { vaultWarningFor } from "../src/vault-warning.js";
@@ -112,21 +112,46 @@ function selectObsidian(): void {
   for (const radio of destinationRadios) radio.checked = radio.value === "obsidian";
 }
 
+const DOWNLOADS_REFUSED =
+  "Download access was declined, so files would have nowhere to go — the destination is back on Obsidian. Choose Markdown files again to ask once more.";
+const DOWNLOADS_REVOKED =
+  "Tabglutton no longer has permission to save downloads, so the destination is back on Obsidian. Choose Markdown files to grant it again.";
+
+/**
+ * The region is never `hidden`. A `role="status"` element that is hidden until
+ * it has text is not in the accessibility tree when the text arrives, so a
+ * screen-reader user would have their destination reverted with nothing spoken.
+ * Empty, it collapses to no height — see the `:empty` rule in onboarding.css.
+ */
+function setDownloadsWarning(message: string): void {
+  downloadsWarning.textContent = message;
+}
+
+/**
+ * A pending grant request does not block the page — Gecko's doorhanger is
+ * non-modal — so a second choice can land while the first is still waiting.
+ * Only the newest request gets to speak for the page; an older one resolving
+ * late would otherwise write its verdict over a selection it no longer
+ * describes. The persisted value is written by the newest handler either way.
+ */
+let destinationGeneration = 0;
+
 // `downloads` is optional, and the destination click is the one moment in
 // onboarding a user gesture exists to ask for it — the background page, where
 // the writing happens, never has one. A refusal reverts to Obsidian rather than
 // persisting a choice whose every clip could only fail, and says how to ask
-// again; the same trade the options page makes, so nobody is left on a dead end.
+// again. Reverting is also what makes that remedy possible: the file radio goes
+// back to unchecked, so clicking it fires `change` again. Re-selecting a radio
+// that is already checked fires nothing at all.
 for (const radio of destinationRadios) {
   radio.addEventListener("change", () => {
     void (async () => {
+      const generation = ++destinationGeneration;
       // First await in the handler; see requestDownloads on why nothing precedes it.
       const refused = selectedDestination() === "file" && !(await requestDownloads());
+      if (generation !== destinationGeneration) return;
       if (refused) selectObsidian();
-      downloadsWarning.textContent = refused
-        ? "Download access was declined, so files would have nowhere to go — the destination is back on Obsidian. Choose Markdown files again to ask once more."
-        : "";
-      downloadsWarning.hidden = !refused;
+      setDownloadsWarning(refused ? DOWNLOADS_REFUSED : "");
       applyDestination();
       // Also written on Done; persisted here so a walkthrough abandoned midway
       // does not silently keep the destination the user just moved off.
@@ -257,6 +282,17 @@ async function init(): Promise<void> {
     radio.checked = radio.value === settings.clipDestination;
   }
   vaultInput.value = settings.obsidianVault;
+  // A stored file destination is only real while the grant behind it is, and
+  // that grant can be taken back from the browser's own extension settings.
+  // Rendering it as a working choice would send the user out of onboarding into
+  // a destination whose every clip fails — and re-selecting the already-checked
+  // radio fires no `change`, so they would have no way to ask for it back.
+  // Revert, say why, and persist: the radio is then unchecked and clickable.
+  if (settings.clipDestination === "file" && !(await hasDownloads())) {
+    selectObsidian();
+    setDownloadsWarning(DOWNLOADS_REVOKED);
+    await saveSettings({ clipDestination: "obsidian" });
+  }
   applyDestination();
   updateVaultWarning();
   renderRules();
