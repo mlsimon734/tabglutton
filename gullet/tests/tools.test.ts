@@ -510,6 +510,39 @@ describe("tab-scoped tools", () => {
     expect(sent[0]).toMatchObject({ params: { tabId: 7, close: false } });
   });
 
+  // The hole in "the browser can prove this one": `settled()` is fail-open when
+  // the download's record has already been erased, and an erased record is as
+  // consistent with an interrupted write as a finished one. Fail-open is not a
+  // confirmation, and only a confirmation may cost a tab.
+  test("tab_clip keeps the tab when the browser could not confirm the file", async () => {
+    const { call, sent } = caller([zen], () => ({ destination: "file", confirmedBy: "nobody" }), {
+      verifyClip: async () => "landed",
+    });
+    const result = await call("tab_clip", { tabId: 7, close: true });
+    // Not an error: the file may well be there, and a failed tab_clip would
+    // provoke a re-clip.
+    expect(result.isError).toBeUndefined();
+    expect(payload(result)).toMatchObject({ destination: "file", confirmedBy: "nobody" });
+    expect(payload(result)).toMatchObject({ closed: false });
+    expect(JSON.stringify(payload(result))).toContain("closeSkipped");
+    // No path is reported either — the same missing record is why.
+    expect(payload(result)).not.toHaveProperty("file");
+    expect(sent.map((s) => s.method)).toEqual(["tab_clip"]);
+  });
+
+  // A result nothing can be made of must not silently swallow the close it was
+  // asked for: `close: false` went out on the wire, so only this can explain
+  // why the tab is still there.
+  test("tab_clip says so when an unusable result costs the close", async () => {
+    const { call, sent } = caller([zen], () => ({ vault: "test" }), {
+      verifyClip: async () => "landed",
+    });
+    const result = await call("tab_clip", { tabId: 7, close: true });
+    expect(payload(result)).toMatchObject({ closed: false });
+    expect(JSON.stringify(payload(result))).toContain("closeSkipped");
+    expect(sent.map((s) => s.method)).toEqual(["tab_clip"]);
+  });
+
   // The file destination reports a failed write as a failed `tab_clip` — it can,
   // because it knows — and nothing may be closed behind it. Verifying the vault
   // afterwards would be checking Obsidian for a note that went to a download.

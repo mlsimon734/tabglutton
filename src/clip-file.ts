@@ -80,13 +80,40 @@ function downloadUrlFor(markdown: string): string {
 const DOWNLOAD_SETTLE_TIMEOUT_MS = 15000;
 
 /**
- * Writes one clip and resolves only once it is on disk, answering with the path
- * the browser reports having written. Devour closes the tab on success, and
- * unlike the `obsidian://` handoff — which is indistinguishable from a refused
- * one, hence Gullet's whole verification layer — this destination can prove the
- * file exists, so it proves it before the tab goes.
+ * What the browser was able to tell us about one write.
+ *
+ * Two facts, kept apart because they fail apart. `confirmed` is the only thing
+ * that licenses closing a tab; `path` is where to find the note and is a
+ * courtesy, absent whenever the browser no longer has a record to read it from.
  */
-export async function saveClipFile(path: string, markdown: string): Promise<string> {
+export interface SavedClipFile {
+  /**
+   * The download was **seen** to reach `state: "complete"`. False means the
+   * browser could not say — never that the write failed, which throws.
+   */
+  confirmed: boolean;
+  /**
+   * Absolute path the browser reported writing. Never the path we asked for:
+   * `conflictAction: "uniquify"` renames a clip whose name is taken, so the
+   * request is a prediction and only this is an answer. Absent rather than
+   * substituted, because a relative guess an agent cannot tell from a real path
+   * is worse than no path at all.
+   */
+  path?: string;
+}
+
+/**
+ * Writes one clip and resolves only once the browser has finished with it,
+ * answering with what the browser could actually attest to. Unlike the
+ * `obsidian://` handoff — indistinguishable from a refused one, hence Gullet's
+ * whole verification layer — this destination can normally prove the file
+ * exists, and it says so rather than leaving the caller to assume it.
+ *
+ * Throws only on a download the browser reports as interrupted. A download
+ * whose record has been erased is neither proof nor failure: it comes back
+ * `confirmed: false`, and the decision about the tab belongs to the caller.
+ */
+export async function saveClipFile(path: string, markdown: string): Promise<SavedClipFile> {
   const url = downloadUrlFor(markdown);
   try {
     const id = await browser.downloads.download({
@@ -99,8 +126,9 @@ export async function saveClipFile(path: string, markdown: string): Promise<stri
       // unusable; this also overrides Firefox's browser-wide "always ask".
       saveAs: false,
     });
-    await settled(id);
-    return (await landedPath(id)) ?? path;
+    const confirmed = await settled(id);
+    const landed = await landedPath(id);
+    return { confirmed, ...(landed !== undefined ? { path: landed } : {}) };
   } finally {
     // Object URLs must outlive the download that reads them (MDN says exactly
     // this); data URLs carry their own bytes and have nothing to release.
@@ -109,11 +137,11 @@ export async function saveClipFile(path: string, markdown: string): Promise<stri
 }
 
 /**
- * What the browser actually wrote, absolute. Worth the extra round trip because
- * `conflictAction: "uniquify"` renames a clip whose name is taken, so the
- * requested path is a prediction and this is the answer — and the agent reading
- * a `tab_clip` result has no other way to find the note. Unreadable history is
- * not a failure (see `settled`); the caller falls back to what it asked for.
+ * What the browser actually wrote, absolute — worth the extra round trip
+ * because the requested path is a prediction and this is the answer, and an
+ * agent reading a `tab_clip` result has no other way to find the note.
+ * Undefined when the record is gone or unreadable, which the caller reports as
+ * "no path" rather than papering over with the path it asked for.
  */
 async function landedPath(id: number): Promise<string | undefined> {
   try {
@@ -125,12 +153,16 @@ async function landedPath(id: number): Promise<string | undefined> {
 }
 
 /**
+ * Waits for the browser to finish with a download, answering whether it was
+ * **seen** to complete. False is "cannot say", not "did not happen": only an
+ * interruption throws.
+ *
  * The completion listener is attached before the state is read, for the reason
  * `ensureTabReady` documents: the read is an IPC round trip, and a download of
  * bytes already in memory routinely finishes inside it — firing into a listener
  * that does not exist yet and then sitting until the timeout.
  */
-async function settled(id: number): Promise<void> {
+async function settled(id: number): Promise<boolean> {
   let cleanup = (): void => {};
   const done = new Promise<void>((resolve, reject) => {
     const listener = (delta: browser.downloads._OnChangedDownloadDelta): void => {
@@ -168,18 +200,23 @@ async function settled(id: number): Promise<void> {
     // The id we were just handed has no record, so it was erased from history —
     // which only happens once a download is over. Nothing more will be reported
     // about it, and waiting out the timeout would fail a clip whose file is on
-    // disk, which costs a duplicate when the user re-clips. Inability to check
-    // is not a failure here, the same call the vault verifier makes.
+    // disk, which costs a duplicate when the user re-clips. So this stays
+    // fail-open, the same call the vault verifier makes.
+    //
+    // But "over" includes *interrupted* — a history cleaner erases failures
+    // too — so this branch has seen nothing and must not be reported as if it
+    // had. `unknown` is fail-open, and a fail-open answer is not a confirmation.
     cleanup();
-    return;
+    return false;
   }
   if (existing.state !== "in_progress") {
     // Cleared, so `done` simply never settles — nothing awaits it after this.
     cleanup();
-    if (existing.state === "complete") return;
+    if (existing.state === "complete") return true;
     throw new Error(interruptedMessage(existing.error));
   }
   await done;
+  return true;
 }
 
 function interruptedMessage(error: string | undefined): string {

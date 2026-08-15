@@ -790,14 +790,22 @@ export type ClipDestination = "obsidian" | "file";
  * Who established that a clip is on disk. Nothing is closed over a clip nobody
  * could confirm, so this says whose word the close rests on.
  *
- * - `browser` — the file destination. `saveClipFile` resolves only once the
- *   browser reports the download `complete`, so the extension watched the bytes
- *   land. This is the one destination that can prove itself.
+ * - `browser` — the file destination, and the download was **seen** to reach
+ *   `state: "complete"`. The extension watched it land, which is the one thing
+ *   it can never do for Obsidian.
  * - `gullet` — the Obsidian destination, verified against the vault on disk by
  *   the sidecar (see gullet/src/clip-verify.ts). The extension never reports
  *   this: an `obsidian://` handoff is unobservable from inside the browser.
- * - `nobody` — the note was handed to Obsidian and no vault check could run.
- *   The clip may well have landed; nothing here proves it.
+ * - `nobody` — no one could check. For Obsidian that is the ordinary case of an
+ *   unreadable or unknown vault. For a file it means the browser had already
+ *   erased the download's record, which is equally consistent with an
+ *   interrupted write, so nothing was observed.
+ *
+ * `nobody` is fail-open, never a failure — the clip may well have landed. What
+ * it is not is grounds for closing a tab whose destination could have proved
+ * itself and did not: `clipAndVerify` closes an unconfirmed *Obsidian* clip
+ * (the pre-verification behaviour, and the handoff was never observable) and
+ * keeps an unconfirmed *file* clip's tab open.
  */
 export type ClipConfirmedBy = "browser" | "gullet" | "nobody";
 
@@ -807,9 +815,10 @@ interface TabClipFiling {
   url: string;
   /**
    * Where the note went. Vault-relative and extension-less for Obsidian (which
-   * appends `.md`); the path the browser reported writing, for a file.
+   * appends `.md`); the absolute path the browser reported writing, for a file.
+   * Only a file clip can lack it — see `FileClipResult`.
    */
-  file: string;
+  file?: string;
   /**
    * Whose proof the clip rests on. Gullet upgrades `nobody` to `gullet` when it
    * finds the note, so the value an agent sees may be stronger than the one the
@@ -823,6 +832,8 @@ interface TabClipFiling {
 
 export interface ObsidianClipResult extends TabClipFiling {
   destination: "obsidian";
+  /** The note path handed to Obsidian. Always known: we composed it. */
+  file: string;
   /**
    * Vault the note was handed to. Always reported, so a clip that used an
    * override says so rather than leaving the agent to assume it worked.
@@ -846,6 +857,17 @@ export interface ObsidianClipResult extends TabClipFiling {
 
 export interface FileClipResult extends TabClipFiling {
   destination: "file";
+  /**
+   * Absolute path the browser reported writing.
+   *
+   * Absent exactly when `confirmedBy` is `nobody`: the download's record was
+   * already gone, which is both why nothing could be confirmed and why there is
+   * no path to report. Substituting the path we *asked* for would hand an agent
+   * a download-folder-relative string it cannot tell from a real one — and this
+   * is the case where it would most likely be wrong, since
+   * `conflictAction: "uniquify"` may have renamed the file.
+   */
+  file?: string;
 }
 
 export type TabClipResult = ObsidianClipResult | FileClipResult;

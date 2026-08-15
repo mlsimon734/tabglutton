@@ -430,14 +430,31 @@ stands — and it answers with the path the browser says it wrote, since
 `conflictAction: "uniquify"` makes the requested name a prediction. Gullet therefore skips
 verification entirely for that destination. Re-checking the download folder would verify the
 same fact from further away, against a directory that is not a configured location the way a
-vault is and a name it cannot predict. `"nobody"` is the honest third answer and is not a
-failure: the note went to Obsidian and no vault check could run, which is the same fail-open
-contract `unknown` has always had.
+vault is and a name it cannot predict.
+
+`"nobody"` is the honest third answer and is never an error, but it does not mean the same
+thing about the tab in both destinations. For Obsidian it is the familiar fail-open: no
+vault check could run, and the close, if asked for, still happens — the handoff was never
+observable, so the pre-verification behaviour is the baseline. For a file it means the
+browser had already erased the download's record, which is as consistent with an interrupted
+write as a finished one; the result then carries no `file` path either, and Gullet answers
+`closed: false` with a `closeSkipped` reason rather than taking a tab over a write nobody
+saw. A destination that can see its own writes must not close tabs on weaker evidence than
+one that cannot see anything.
 
 Gullet still sends `close: false` for both destinations. The destination is in the answer,
 not in the question, so forwarding the caller's `close: true` to find out would already have
 closed an Obsidian tab unverified. A file clip pays one extra round trip for that, which is
 the cheaper of the two mistakes.
+
+▸ **A Gullet older than the extension swallows a file clip's close.** Its guard is
+`if (!result || !vault || !file) return raw`, and a file-destination result carries no
+`vault` — so it returns early, having already rewritten `close: true` to `false` on the
+wire, and the tab quietly stays open with no `closed` field to explain it. It heals by
+itself in the normal case, because a detached hub retires for a newer peer, but a pinned or
+long-cached `bunx tabglutton-gullet` against an auto-updated extension is a real pairing.
+Not worth a compatibility shim on the extension side — the fix is in the sidecar, and it is
+already there.
 
 ▸ **`tab_clip`'s `vault` overrides a destination, it does not change a setting.** The
 motivating case is a two-vault user: an agent-managed vault that agents file into by

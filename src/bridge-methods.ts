@@ -8,7 +8,7 @@
 // before it happens.
 
 import { clipContentHash } from "./clip-hash.js";
-import { clipDownloadPath, saveClipFile } from "./clip-file.js";
+import { clipDownloadPath, saveClipFile, type SavedClipFile } from "./clip-file.js";
 import { markdownForClip, OBSIDIAN_HANDOFF_GAP_MS, resolveClipRequest } from "./clip-format.js";
 import type { ClipPayload } from "./clip-format.js";
 import {
@@ -449,6 +449,8 @@ export class BridgeMethodRunner {
   private readonly deps: BridgeMethodDeps;
   /** Serializes Obsidian handoffs; the OS clipboard is a global resource. */
   private readonly handoffQueue = createTaskQueue();
+  /** Serializes file writes; `uniquify` picks a name against the filesystem. */
+  private readonly fileQueue = createTaskQueue();
 
   constructor(deps: BridgeMethodDeps) {
     this.deps = deps;
@@ -661,14 +663,29 @@ export class BridgeMethodRunner {
   private async tabClip(raw: unknown): Promise<TabClipResult> {
     const params = parseTabClipParams(raw);
     const settings = this.deps.getSettings();
+    const destination = clipDestinationFor(settings, params.vault);
+    // An override stands alone: it is the destination the caller named, so a
+    // vault the user has not configured is not a reason to refuse. Resolved
+    // *before* `readTab` — a clip with nowhere to go must not spend a Defuddle
+    // injection, and on a page the engine keeps closed to extensions the
+    // injection failure would arrive first and hand the agent
+    // NO_INJECTION_TARGET_HINT's retry advice for a problem a retry cannot fix.
+    const vault = destination === "obsidian" ? (params.vault ?? settings.obsidianVault.trim()) : "";
+    if (destination === "obsidian" && !vault) {
+      fail(
+        "vault-missing",
+        "No Obsidian vault is configured in Tabglutton's settings, and clips are not set to save as files either.",
+      );
+    }
+
     const payload = await this.readTab(params.tabId);
     const rule = pickRule(payload.url);
     const content = markdownForClip(payload);
 
     const filed =
-      clipDestinationFor(settings, params.vault) === "file"
+      destination === "file"
         ? await this.fileClip(params.tabId, payload, rule, content, settings)
-        : await this.obsidianClip(params.tabId, payload, rule, content, settings, params.vault);
+        : await this.obsidianClip(params.tabId, payload, rule, content, settings, vault);
     if (!params.close) return filed;
 
     // Nothing past here fails the call: the note is already filed, so a close
@@ -705,19 +722,8 @@ export class BridgeMethodRunner {
     rule: SiteRule | null,
     content: string,
     settings: Settings,
-    override: string | undefined,
+    vault: string,
   ): Promise<ObsidianClipResult> {
-    // An override stands alone: it is the destination the caller named, so a
-    // vault the user has not configured is not a reason to refuse. `vault-missing`
-    // only means "nowhere to file this", which an override answers.
-    const vault = override ?? settings.obsidianVault.trim();
-    if (!vault) {
-      fail(
-        "vault-missing",
-        "No Obsidian vault is configured in Tabglutton's settings, and clips are not set to save as files either.",
-      );
-    }
-
     // Taken from the request rather than derived again, so the path reported to
     // the agent is by construction the one the `obsidian://` URL was built from.
     const file = await this.handoff(async () => {
@@ -749,13 +755,22 @@ export class BridgeMethodRunner {
   }
 
   /**
-   * The file destination: the same note, written to the download folder. It
-   * proves itself — `saveClipFile` resolves only once the browser reports the
-   * download complete — so this is the one clip that comes back already
-   * confirmed, and Gullet has nothing to add.
+   * The file destination: the same note, written to the download folder.
    *
-   * Outside `handoff`: that queue serializes the OS clipboard the `obsidian://`
-   * route borrows, and a download touches neither it nor an external app.
+   * Usually the one clip that comes back already confirmed — the browser was
+   * seen to complete the download — and Gullet then has nothing to add. When
+   * the browser cannot say (its record of the download was already erased, see
+   * `settled`), that is reported as `nobody` rather than dressed up as proof:
+   * an erased record is equally consistent with an interrupted write, and this
+   * destination must not be allowed to close a tab on weaker evidence than the
+   * one whose whole verification layer exists because it has none.
+   *
+   * Not on `handoff` — that queue paces an external app reading the OS
+   * clipboard, which a download touches neither of — but on a queue all the
+   * same. Bridge requests are served concurrently, and `conflictAction:
+   * "uniquify"` is resolved against the filesystem when a download starts, so
+   * two clips of the same page racing could both be handed the same free name.
+   * Shared browser state gets a queue, not a hope (AGENTS.md §Concurrency).
    */
   private async fileClip(
     tabId: number,
@@ -770,9 +785,9 @@ export class BridgeMethodRunner {
       settings.clippingsBaseFolder,
       await getFilePlatformOnce(),
     );
-    let file: string;
+    let saved: SavedClipFile;
     try {
-      file = await saveClipFile(path, content);
+      saved = await this.fileQueue(() => saveClipFile(path, content));
     } catch (err) {
       // `downloads` is optional and revocable from the browser's own add-on UI,
       // and the bridge has no gesture with which to ask for it back. Checked
@@ -796,8 +811,9 @@ export class BridgeMethodRunner {
       title: payload.title,
       url: payload.url,
       destination: "file",
-      file,
-      confirmedBy: "browser",
+      // Both absent together: no record to read means neither proof nor path.
+      ...(saved.path !== undefined ? { file: saved.path } : {}),
+      confirmedBy: saved.confirmed ? "browser" : "nobody",
       closed: false,
     };
   }

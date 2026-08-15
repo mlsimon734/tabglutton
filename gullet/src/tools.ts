@@ -203,7 +203,7 @@ export const GULLET_TOOLS: readonly McpTool[] = [
     name: "tab_clip",
     title: "File a tab as a markdown note",
     description:
-      'Save a tab as a markdown note with frontmatter — exactly what the Tabglutton popup\'s Devour does, including per-site subfolders. Where it lands is the user\'s setting, not your choice: either their Obsidian vault or a markdown file in their download folder. The result says which under `destination` ("obsidian" or "file"), with `file` giving the note path — vault-relative for Obsidian, the path on disk for a file — and `vault` naming the vault when there is one. Set close: true to close the tab afterwards; that close is undoable via the returned batchId. Filing alone changes nothing in the browser — the tool is annotated destructive because close: true removes the tab.\n\nNothing is closed over a clip nobody could confirm, and `confirmedBy` says whose word it rests on:\n• `"browser"` — file destination. The browser reported the download complete, so the note is on disk; nothing checks it further because nothing is better placed to.\n• `"gullet"` — Obsidian destination, and a fresh note for this page was found in the vault. With a `contentHash` in the result that note is this exact clip\'s text, so it holds even against another agent session clipping the same URL at the same moment; without one it means only "a fresh note for this page landed just now".\n• `"nobody"` — Obsidian destination and the vault could not be checked at all. The clip was still handed over and the close, if asked for, still happened; it is simply unconfirmed.\n\nAn Obsidian clip that provably never reached the vault, or that found a note whose text is not the one handed over, is reported as an error with the tab left open.',
+      'Save a tab as a markdown note with frontmatter — exactly what the Tabglutton popup\'s Devour does, including per-site subfolders. Where it lands is the user\'s setting, not your choice: either their Obsidian vault or a markdown file in their download folder. The result says which under `destination` ("obsidian" or "file"), with `file` giving the note path — vault-relative for Obsidian, the absolute path on disk for a file — and `vault` naming the vault when there is one. Set close: true to close the tab afterwards; that close is undoable via the returned batchId. Filing alone changes nothing in the browser — the tool is annotated destructive because close: true removes the tab.\n\nNo tab is closed over a clip nobody could confirm, and `confirmedBy` says whose word it rests on:\n• `"browser"` — file destination, and the browser was seen to finish writing the file. Nothing checks it further because nothing is better placed to.\n• `"gullet"` — Obsidian destination, and a fresh note for this page was found in the vault. With a `contentHash` in the result that note is this exact clip\'s text, so it holds even against another agent session clipping the same URL at the same moment; without one it means only "a fresh note for this page landed just now".\n• `"nobody"` — nobody could check. For Obsidian that is an unreadable or unknown vault: the clip was still handed over, and the close, if asked for, still happened. For a file it means the browser had already erased the download\'s record, so there is no proof and no `file` path either — that tab is deliberately left open, with `closeSkipped` saying so. Check the download folder before re-clipping; the note may well be there.\n\nAn Obsidian clip that provably never reached the vault, or that found a note whose text is not the one handed over, is reported as an error with the tab left open.',
     inputSchema: {
       type: "object",
       properties: {
@@ -361,16 +361,56 @@ async function clipAndVerify(
   const startedAt = Date.now();
   const raw = await ctx.request(connectionId, "tab_clip", { ...params, close: false });
   const result = asRecord(raw);
-  const file = typeof result?.file === "string" ? result.file : "";
-  if (!result || !file) return raw;
+  if (!result) return raw;
+  const file = typeof result.file === "string" ? result.file : "";
 
   // Only ever an upgrade of what the extension already reported. A file clip
   // arrives `confirmedBy: "browser"` and keeps it; an Obsidian clip arrives
   // `"nobody"` and earns `"gullet"` here or keeps it.
   let upgrade: { confirmedBy?: ClipConfirmedBy } = {};
-  if (result.destination !== "file") {
+  if (result.destination === "file") {
+    // Nothing to verify: the extension is the only party positioned to watch a
+    // download land, and it has already said whether it did. Checking the
+    // download folder from here would re-derive the same fact from further
+    // away, against a name `conflictAction: "uniquify"` may have changed.
+    //
+    // But `browser` is the only value that licenses the close. `nobody` means
+    // the browser had erased the record before it could be read, which is as
+    // consistent with an interrupted write as a finished one — fail-open, so
+    // not an error, and not a reason to take the tab either.
+    if (result.confirmedBy !== "browser") {
+      return {
+        ...result,
+        ...(wantsClose
+          ? {
+              closed: false,
+              closeSkipped:
+                "The browser could not confirm the file was written — it had already erased the " +
+                "download's record — so the tab was left open. Check the download folder before " +
+                "re-clipping; the note may well be there.",
+            }
+          : {}),
+      };
+    }
+  } else {
     const vault = typeof result.vault === "string" ? result.vault : "";
-    if (!vault) return raw;
+    // Neither half of the vault check has anything to work with. Refusing the
+    // close is the only safe reading, and saying so beats a silent no-op: a
+    // caller who asked for one would otherwise get a result with nothing in it
+    // that explains why the tab is still there.
+    if (!vault || !file) {
+      return {
+        ...result,
+        ...(wantsClose
+          ? {
+              closed: false,
+              closeSkipped:
+                "The clip result named neither a vault nor a note path, so nothing could confirm " +
+                "it reached Obsidian and the tab was left open.",
+            }
+          : {}),
+      };
+    }
     upgrade = { confirmedBy: await verifyObsidianClip(verify, result, vault, file, startedAt) };
   }
 
