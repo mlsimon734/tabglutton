@@ -14,35 +14,67 @@
           <p class="subtitle">Setup</p>
         </div>
         <ol class="stepper" id="stepper" aria-label="Setup steps">
-          <li data-step-indicator="1">Welcome</li>
-          <li data-step-indicator="2">Vault</li>
-          <li data-step-indicator="3">Permissions</li>
-          <li data-step-indicator="4">Rules</li>
+          <li data-step-indicator="welcome">Welcome</li>
+          <li data-step-indicator="destination">Destination</li>
+          <li data-step-indicator="obsidian">Obsidian</li>
+          <li data-step-indicator="rules">Rules</li>
         </ol>
       </header>
 
-      <section class="panel" data-step="1" data-active>
-        <h2 class="section-title">Step 1 — Welcome</h2>
+      <section class="panel" data-step="welcome" data-active>
+        <h2 class="section-title"><span class="step-ordinal">Step 1</span> — Welcome</h2>
         <p>Tabglutton helps you tame a bloated tab bar with two tools:</p>
         <ul>
           <li><strong>Dedup</strong> closes exact-duplicate tabs.</li>
           <li>
-            <strong>Devour</strong> reads selected tabs through Defuddle, files each one into your
-            Obsidian vault as a markdown note with frontmatter, then closes the tab.
+            <strong>Devour</strong> reads selected tabs through Defuddle, files each one as a
+            markdown note with frontmatter, then closes the tab. You pick where those notes go next
+            — an Obsidian vault, or plain files on disk.
           </li>
         </ul>
         <p>
-          This setup takes about 30 seconds and configures three things you'll otherwise have to
-          chase down later.
+          This setup takes about 30 seconds and configures the things you'll otherwise have to chase
+          down later.
         </p>
         <p class="muted-note">
           You can revisit this walkthrough anytime from the extension's options page.
         </p>
       </section>
 
-      <section class="panel" data-step="2" hidden>
-        <h2 class="section-title">Step 2 — Obsidian vault</h2>
+      <section class="panel" data-step="destination" hidden>
+        <h2 class="section-title"><span class="step-ordinal">Step 2</span> — Destination</h2>
         <div class="setting block">
+          <div class="setting-text">
+            <strong>Where should devoured pages land?</strong>
+            <small>
+              Tabglutton can't tell a refused <code>obsidian://</code> handoff from a successful
+              one, so it never switches on your behalf — this is the choice. You can change it later
+              in settings.
+            </small>
+          </div>
+          <div class="setting-control radio-stack">
+            <label class="radio-card">
+              <input type="radio" name="clipDestination" value="obsidian" checked />
+              <span class="radio-card-body">
+                <strong>Obsidian vault</strong>
+                <small>Hands each note to Obsidian through its <code>obsidian://</code> URL.</small>
+              </span>
+            </label>
+            <label class="radio-card">
+              <input type="radio" name="clipDestination" value="file" />
+              <span class="radio-card-body">
+                <strong>Markdown files</strong>
+                <small>
+                  Saves the same note into your browser's download folder. No Obsidian install and
+                  no vault needed; open the files in any editor.
+                </small>
+              </span>
+            </label>
+            <p id="downloadsWarning" class="vault-warning" role="status" hidden></p>
+          </div>
+        </div>
+
+        <div class="setting block" id="vaultBlock">
           <div class="setting-text">
             <strong>What's your Obsidian vault called?</strong>
             <small>
@@ -57,8 +89,10 @@
         </div>
       </section>
 
-      <section class="panel" data-step="3" hidden>
-        <h2 class="section-title">Step 3 — Approve obsidian:// in your browser</h2>
+      <section class="panel" data-step="obsidian" hidden>
+        <h2 class="section-title">
+          <span class="step-ordinal">Step 3</span> — Approve obsidian:// in your browser
+        </h2>
         <div id="step3-firefox">
           <p>
             Tabglutton hands clipped notes to Obsidian using the <code>obsidian://</code> URL
@@ -130,13 +164,19 @@
         </details>
       </section>
 
-      <section class="panel" data-step="4" hidden>
-        <h2 class="section-title">Step 4 — How your clips will be filed</h2>
+      <section class="panel" data-step="rules" hidden>
+        <h2 class="section-title">
+          <span class="step-ordinal">Step 4</span> — How your clips will be filed
+        </h2>
         <p>
           Tabglutton routes clipped pages into subfolders by site, so heterogeneous tab batches
           don't pile into one folder:
         </p>
         <ul class="rules-list" id="rulesList"></ul>
+        <p id="rulesScopeObsidian">These folders are relative to your vault's root.</p>
+        <p id="rulesScopeFile" hidden>
+          These folders are relative to your browser's download folder.
+        </p>
         <p class="muted-note">
           Built-in rules only for now — a custom rules editor is on the roadmap.
         </p>
