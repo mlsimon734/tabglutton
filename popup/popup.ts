@@ -8,7 +8,7 @@ import type {
 } from "../src/background.js";
 import { openOptionsUi } from "../src/open-options.js";
 import { CLIP_ORIGINS, requestOrigins } from "../src/permissions.js";
-import { hasClipDestination, hasVault, type Settings } from "../src/storage.js";
+import { clipNeedsPageAccess, hasClipDestination, type Settings } from "../src/storage.js";
 import { IS_CHROME } from "../src/target.js";
 import {
   clipSummary,
@@ -558,9 +558,9 @@ async function clipSelected(): Promise<void> {
   // permissions.request on the click's transient activation, so any earlier
   // await would spend it and the request would reject as gesture-less. Held
   // already (always, on Firefox) this resolves true without showing anything.
-  // `hasVault` guards it because only the Obsidian path injects Defuddle — it
-  // has to stay synchronous for the same reason.
-  if (hasVault(state.settings) && !(await requestOrigins(CLIP_ORIGINS))) {
+  // `clipNeedsPageAccess` guards it because a Zotero-only run never injects
+  // Defuddle — it has to stay synchronous for the same reason.
+  if (clipNeedsPageAccess(state.settings) && !(await requestOrigins(CLIP_ORIGINS))) {
     clipCurrentBtn.title = "Tabglutton needs access to the pages it clips.";
     state.clipping = true;
     clipCurrentBtn.disabled = true;

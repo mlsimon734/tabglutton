@@ -16,6 +16,7 @@
     }
   },
   "permissions": ["tabs", "storage", "scripting", "activeTab", "clipboardWrite", "alarms"],
+  "optional_permissions": ["downloads"],
   "host_permissions": ["*://*/*"],
   "content_security_policy": {
     "extension_pages": "script-src 'self'; object-src 'self'"

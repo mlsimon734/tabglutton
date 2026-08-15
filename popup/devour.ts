@@ -9,7 +9,12 @@ import type {
 import { openOptionsUi } from "../src/open-options.js";
 import { CLIP_ORIGINS, requestOrigins } from "../src/permissions.js";
 import { pickRule, type SiteRule } from "../src/site-rules.js";
-import { hasClipDestination, hasVault, type Settings } from "../src/storage.js";
+import {
+  clipNeedsPageAccess,
+  clipsToFile,
+  hasClipDestination,
+  type Settings,
+} from "../src/storage.js";
 import {
   clipSummary,
   computeDedupCount,
@@ -453,19 +458,25 @@ function focusedTab(): PopupTab | null {
 function renderInspector(): void {
   inspectorEl.replaceChildren();
   const tab = focusedTab();
-  const vault = state.settings?.obsidianVault.trim() ?? "";
+  // What a clip's path is rooted at. File mode writes into the browser's
+  // download folder, which needs no setting up, so the setup prompt below
+  // belongs only to an Obsidian destination that has no vault yet.
+  const root = clipsToFile(state.settings)
+    ? "Downloads"
+    : (state.settings?.obsidianVault.trim() ?? "");
 
-  // The pane only exists when it has something to say. With a vault set and no tab
-  // focused it held nothing but a restatement of the footer's keyboard legend, and
-  // reserved ~40% of the window to do it — the queue takes that width instead.
-  document.body.classList.toggle("inspecting", !vault || tab !== null);
+  // The pane only exists when it has something to say. With a destination set and
+  // no tab focused it held nothing but a restatement of the footer's keyboard
+  // legend, and reserved ~40% of the window to do it — the queue takes that
+  // width instead.
+  document.body.classList.toggle("inspecting", !root || tab !== null);
 
-  if (!vault) {
+  if (!root) {
     inspectorEl.append(renderInspectorSetup());
     return;
   }
   if (!tab) return;
-  inspectorEl.append(renderInspectorPreview(tab, vault));
+  inspectorEl.append(renderInspectorPreview(tab, root));
 }
 
 const SVG_NS = "http://www.w3.org/2000/svg";
@@ -534,7 +545,7 @@ function renderInspectorSetup(): HTMLElement {
   return div;
 }
 
-function renderInspectorPreview(tab: PopupTab, vault: string): HTMLElement {
+function renderInspectorPreview(tab: PopupTab, root: string): HTMLElement {
   const wrap = document.createElement("div");
 
   const head = document.createElement("section");
@@ -570,9 +581,9 @@ function renderInspectorPreview(tab: PopupTab, vault: string): HTMLElement {
   pathLabel.textContent = "Will save to";
   const path = document.createElement("div");
   path.className = "inspector-path";
-  const vaultEl = document.createElement("strong");
-  vaultEl.textContent = vault;
-  path.append(vaultEl, ` / ${folder} / ${fileName}.md`);
+  const rootEl = document.createElement("strong");
+  rootEl.textContent = root;
+  path.append(rootEl, ` / ${folder} / ${fileName}.md`);
   pathSection.append(pathLabel, path);
   wrap.append(pathSection);
 
@@ -773,9 +784,9 @@ async function clipSelected(): Promise<void> {
   // permissions.request on the click's transient activation, so any earlier
   // await would spend it and the request would reject as gesture-less. Held
   // already (always, on Firefox) this resolves true without showing anything.
-  // `hasVault` guards it because only the Obsidian path injects Defuddle — it
-  // has to stay synchronous for the same reason.
-  if (hasVault(state.settings) && !(await requestOrigins(CLIP_ORIGINS))) {
+  // `clipNeedsPageAccess` guards it because a Zotero-only run never injects
+  // Defuddle — it has to stay synchronous for the same reason.
+  if (clipNeedsPageAccess(state.settings) && !(await requestOrigins(CLIP_ORIGINS))) {
     state.clipping = true;
     clipCurrentBtn.disabled = true;
     restore("Needs site access", 2600);

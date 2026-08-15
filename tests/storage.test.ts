@@ -4,7 +4,9 @@ import { describe, test, expect } from "bun:test";
 import { DEFAULT_BRIDGE_PORT } from "../src/bridge-protocol.js";
 import {
   bridgePortModeFromStored,
+  clipNeedsPageAccess,
   defaults,
+  hasClipDestination,
   normalizeOptsFrom,
   type Settings,
 } from "../src/storage.js";
@@ -18,6 +20,7 @@ describe("defaults()", () => {
       // Chrome forces current-window; Firefox/Zen uses the workspace heuristic.
       scope: IS_CHROME ? "current-window" : "hidden-false",
       heuristicWarning: false,
+      clipDestination: "obsidian",
       obsidianVault: "",
       clippingsBaseFolder: "Clippings",
       clipMode: "clipboard",
@@ -62,6 +65,33 @@ describe("defaults()", () => {
   });
 });
 
+describe("hasClipDestination()", () => {
+  test("a fresh install has nowhere to clip", () => {
+    expect(hasClipDestination(defaults())).toBe(false);
+    expect(hasClipDestination(null)).toBe(false);
+  });
+
+  test("file mode always has somewhere — the download folder needs no setup", () => {
+    expect(hasClipDestination({ ...defaults(), clipDestination: "file" })).toBe(true);
+  });
+
+  test("Obsidian mode still needs a vault, and a file destination is never inferred", () => {
+    expect(hasClipDestination({ ...defaults(), obsidianVault: "MyVault" })).toBe(true);
+    expect(hasClipDestination({ ...defaults(), zoteroRoutingEnabled: true })).toBe(true);
+  });
+});
+
+describe("clipNeedsPageAccess()", () => {
+  test("both note destinations inject the extractor", () => {
+    expect(clipNeedsPageAccess({ ...defaults(), obsidianVault: "MyVault" })).toBe(true);
+    expect(clipNeedsPageAccess({ ...defaults(), clipDestination: "file" })).toBe(true);
+  });
+
+  test("a Zotero-only run does not, so it must not spend the click's activation", () => {
+    expect(clipNeedsPageAccess({ ...defaults(), zoteroRoutingEnabled: true })).toBe(false);
+  });
+});
+
 describe("normalizeOptsFrom()", () => {
   test("maps Settings to NormalizeOpts", () => {
     const settings: Settings = {
@@ -69,6 +99,7 @@ describe("normalizeOptsFrom()", () => {
       extraStripParams: ["campaign", "ref_x"],
       scope: "current-window",
       heuristicWarning: true,
+      clipDestination: "obsidian",
       obsidianVault: "v",
       clippingsBaseFolder: "Inbox",
       clipMode: "clipboard",

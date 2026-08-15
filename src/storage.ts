@@ -6,14 +6,24 @@ import { DEFAULT_ZOTERO_CONNECTOR_ID } from "./zotero.js";
 export type ScopeMode = "hidden-false" | "current-window";
 export type ClipMode = "clipboard" | "legacy-uri";
 export type BridgePortMode = "auto" | "fixed";
+/**
+ * Where Devour files a clipped page. Never inferred: the extension cannot tell
+ * a refused `obsidian://` handoff from a successful one, so "we noticed it
+ * failed, saving a file instead" would be a guess. The user picks.
+ */
+export type ClipDestination = "obsidian" | "file";
 
 export interface Settings {
   stripFragment: boolean;
   extraStripParams: string[];
   scope: ScopeMode;
   heuristicWarning: boolean;
+  /** Obsidian, or plain markdown files in the browser's download folder. */
+  clipDestination: ClipDestination;
   obsidianVault: string;
+  /** Base folder inside the vault, or inside the download folder in file mode. */
   clippingsBaseFolder: string;
+  /** Obsidian-only: how the note body reaches it. Unused in file mode. */
   clipMode: ClipMode;
   /** Route scholarly items detected by Zotero Connector there instead of Obsidian. */
   zoteroRoutingEnabled: boolean;
@@ -48,6 +58,7 @@ const DEFAULTS: Readonly<Settings> = Object.freeze({
   // Chrome has no tab.hidden / workspaces — the "hidden-false" mode is meaningless there.
   scope: IS_CHROME ? "current-window" : "hidden-false",
   heuristicWarning: false,
+  clipDestination: "obsidian",
   obsidianVault: "",
   clippingsBaseFolder: "Clippings",
   clipMode: "clipboard",
@@ -66,18 +77,35 @@ export function defaults(): Settings {
   return { ...DEFAULTS, extraStripParams: [...DEFAULTS.extraStripParams] };
 }
 
-/** Whether an Obsidian vault is configured — the Defuddle path needs one. */
+/** Whether an Obsidian vault is configured — the Obsidian path needs one. */
 export function hasVault(settings: Settings | null): boolean {
   return !!settings?.obsidianVault.trim();
+}
+
+/** Whether clips are written as files rather than handed to Obsidian. */
+export function clipsToFile(settings: Settings | null): boolean {
+  return settings?.clipDestination === "file";
 }
 
 /**
  * Whether a clip has anywhere to go. Sole owner of that question: the popups
  * gate their buttons on it and `clipSelectedTabs` refuses the whole request
- * when it is false, and those must agree.
+ * when it is false, and those must agree. File mode always has somewhere —
+ * the download folder needs no configuring.
  */
 export function hasClipDestination(settings: Settings | null): boolean {
-  return hasVault(settings) || !!settings?.zoteroRoutingEnabled;
+  return clipsToFile(settings) || hasVault(settings) || !!settings?.zoteroRoutingEnabled;
+}
+
+/**
+ * Whether the run will inject the Defuddle extractor, and so needs the host
+ * grant Chrome only hands out from a click. Both destinations that produce a
+ * note extract the page; only a Zotero-only run does not. Must stay
+ * synchronous — its callers evaluate it before the first `await` in a click
+ * handler, which is where `requestOrigins` has to be.
+ */
+export function clipNeedsPageAccess(settings: Settings | null): boolean {
+  return clipsToFile(settings) || hasVault(settings);
 }
 
 export async function loadSettings(): Promise<Settings> {

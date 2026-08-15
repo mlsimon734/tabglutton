@@ -7,6 +7,7 @@
 import { BridgeClient, type BridgeStatus } from "./bridge-client.js";
 import { BridgeMethodRunner, isHttpUrl } from "./bridge-methods.js";
 import { getBrowserInfoOnce } from "./browser-info.js";
+import { clipDownloadPath, saveClipFile } from "./clip-file.js";
 import {
   markdownForClip,
   OBSIDIAN_HANDOFF_GAP_MS,
@@ -14,11 +15,13 @@ import {
   type ClipPayload,
   type ObsidianClipRequest,
 } from "./clip-format.js";
+import { hasDownloads } from "./permissions.js";
 import { getFilePlatformOnce } from "./platform.js";
 import { delay } from "./serialize.js";
 import { pickRule } from "./site-rules.js";
 import { groupDuplicates, pickKeeper, type Tab } from "./dedup.js";
 import {
+  clipsToFile,
   defaults,
   hasClipDestination,
   loadSettings,
@@ -70,7 +73,8 @@ export type ClipFailureReason =
   | "extract-failed"
   | "trigger-failed"
   | "vault-missing"
-  | "zotero-failed";
+  | "zotero-failed"
+  | "download-failed";
 
 export interface ClipFailure {
   tabId: number;
@@ -83,6 +87,8 @@ export interface ClipFailure {
 export interface ClipSelectedTabsResponse {
   failed: number;
   obsidianSaved: number;
+  /** Written as markdown files in the download folder (`clipDestination: "file"`). */
+  fileSaved: number;
   zoteroSaved: number;
   /** Nothing was attempted: neither a vault nor Zotero routing is configured. */
   vaultMissing?: boolean;
@@ -600,8 +606,14 @@ async function resolveTabMeta(tabId: number): Promise<{ title: string; url: stri
 
 type TabDestination =
   | { kind: "obsidian" }
+  | { kind: "file" }
   | { kind: "zotero" }
   | { kind: "failed"; reason: ClipFailureReason; detail: string };
+
+/** Both note destinations run Defuddle; Zotero owns its own page reading. */
+function needsExtraction(destination: TabDestination): boolean {
+  return destination.kind === "obsidian" || destination.kind === "file";
+}
 
 const ZOTERO_DETECTION_ATTEMPTS = 8;
 const ZOTERO_DETECTION_RETRY_MS = 250;
@@ -635,6 +647,22 @@ async function destinationForTab(tabId: number, url: string): Promise<TabDestina
       const zotero = await zoteroDestination(tabId);
       if (zotero) return zotero;
     }
+  }
+  // The chosen destination, not a fallback: file mode never asks about a vault
+  // and Obsidian mode never quietly writes a file. See `ClipDestination`.
+  if (clipsToFile(settings)) {
+    // `downloads` is optional and revocable from the browser's own add-on UI,
+    // so the grant the options page collected may be gone by now. Say so;
+    // `downloads.download` would otherwise throw something opaque per tab.
+    if (!(await hasDownloads())) {
+      return {
+        kind: "failed",
+        reason: "download-failed",
+        detail:
+          "Tabglutton no longer has download access. Re-select the file destination in settings.",
+      };
+    }
+    return { kind: "file" };
   }
   if (!settings.obsidianVault.trim()) {
     return {
@@ -671,14 +699,21 @@ type ExtractOutcome = { kind: "ok"; res: ClipCurrentResponse } | { kind: "threw"
 interface PreparedTab {
   meta: { title: string; url: string };
   destination: TabDestination;
-  /** Only for Obsidian-bound tabs; Zotero needs no extraction. */
+  /** Only for note-bound tabs (Obsidian or file); Zotero needs no extraction. */
   extract?: ExtractOutcome;
 }
 
 async function clipSelectedTabs(tabIds: number[]): Promise<ClipSelectedTabsResponse> {
   const vault = settings.obsidianVault.trim();
   if (!hasClipDestination(settings)) {
-    return { failed: 0, obsidianSaved: 0, zoteroSaved: 0, vaultMissing: true, failures: [] };
+    return {
+      failed: 0,
+      obsidianSaved: 0,
+      fileSaved: 0,
+      zoteroSaved: 0,
+      vaultMissing: true,
+      failures: [],
+    };
   }
 
   // Phase 1: read, wake, route and extract each tab as one per-tab chain, all
@@ -695,7 +730,7 @@ async function clipSelectedTabs(tabIds: number[]): Promise<ClipSelectedTabsRespo
       tabIds.map(async (tabId): Promise<[number, PreparedTab]> => {
         const meta = await resolveTabMeta(tabId);
         const destination = await destinationForTab(tabId, meta.url);
-        if (destination.kind !== "obsidian") return [tabId, { meta, destination }];
+        if (!needsExtraction(destination)) return [tabId, { meta, destination }];
         try {
           return [
             tabId,
@@ -723,6 +758,7 @@ async function clipSelectedTabs(tabIds: number[]): Promise<ClipSelectedTabsRespo
   };
   broadcastProgress(0);
   let obsidianSaved = 0;
+  let fileSaved = 0;
   let zoteroSaved = 0;
   const failures: ClipFailure[] = [];
   for (const [i, tabId] of tabIds.entries()) {
@@ -771,6 +807,37 @@ async function clipSelectedTabs(tabIds: number[]): Promise<ClipSelectedTabsRespo
       if (!res.ok || !res.payload) {
         fail("extract-failed", res.error);
         console.warn("[tabglutton] clip failed for tab", tabId, res.error);
+        continue;
+      }
+
+      if (destination.kind === "file") {
+        try {
+          const path = clipDownloadPath(
+            res.payload,
+            pickRule(res.payload.url),
+            settings.clippingsBaseFolder,
+            await getFilePlatformOnce(),
+          );
+          await saveClipFile(path, markdownForClip(res.payload));
+        } catch (err) {
+          fail(
+            "download-failed",
+            errorMessage(err),
+            res.payload.title || meta.title,
+            res.payload.url || meta.url,
+          );
+          console.warn("[tabglutton] file save failed for tab", tabId, err);
+          continue;
+        }
+        // No OBSIDIAN_HANDOFF_GAP_MS here: that gap paces an external app
+        // reading the OS clipboard, and this destination touches neither.
+        // saveClipFile has already seen the file land, so the close is safe.
+        try {
+          await browser.tabs.remove(tabId);
+        } catch (err) {
+          console.warn("[tabglutton] close failed for tab", tabId, err);
+        }
+        fileSaved += 1;
         continue;
       }
 
@@ -831,6 +898,7 @@ async function clipSelectedTabs(tabIds: number[]): Promise<ClipSelectedTabsRespo
   return {
     failed: failures.length,
     obsidianSaved,
+    fileSaved,
     zoteroSaved,
     failures,
   };

@@ -203,20 +203,24 @@ export function reasonLabel(reason: ClipFailureReason): string {
       return "vault missing";
     case "zotero-failed":
       return "Zotero failed";
+    case "download-failed":
+      return "file write failed";
   }
 }
 
 /**
  * "Saved 3 to Zotero, 1 to Obsidian". A destination is named only when it
- * actually took something, so the common single-destination run stays short.
+ * actually took something, and Obsidian alone is left unnamed because it is
+ * the default — so the common single-destination run stays short.
  */
 export function clipSummary(res: ClipSelectedTabsResponse): string {
+  const named: string[] = [];
+  if (res.zoteroSaved) named.push(`${res.zoteroSaved} to Zotero`);
+  if (res.fileSaved) named.push(`${res.fileSaved} to files`);
+  if (res.obsidianSaved) named.push(`${res.obsidianSaved} to Obsidian`);
+  const obsidianOnly = named.length === 1 && res.obsidianSaved > 0;
   const saved =
-    res.zoteroSaved && res.obsidianSaved
-      ? `${res.zoteroSaved} to Zotero, ${res.obsidianSaved} to Obsidian`
-      : res.zoteroSaved
-        ? `${res.zoteroSaved} to Zotero`
-        : String(res.obsidianSaved);
+    named.length === 0 ? "0" : obsidianOnly ? String(res.obsidianSaved) : named.join(", ");
   return res.failed === 0 ? `Saved ${saved}` : `Saved ${saved}, ${res.failed} failed`;
 }
 

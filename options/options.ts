@@ -7,10 +7,11 @@ import {
   generateToken,
   isBridgePort,
 } from "../src/bridge-protocol.js";
-import { BRIDGE_ORIGINS, requestOrigins } from "../src/permissions.js";
+import { BRIDGE_ORIGINS, requestDownloads, requestOrigins } from "../src/permissions.js";
 import {
   loadSettings,
   type BridgePortMode,
+  type ClipDestination,
   type ClipMode,
   type ScopeMode,
 } from "../src/storage.js";
@@ -34,6 +35,11 @@ const zoteroConnectorId = document.getElementById("zoteroConnectorId") as HTMLIn
 const vaultWarning = document.getElementById("vaultWarning") as HTMLParagraphElement;
 const scopeRadios = document.querySelectorAll<HTMLInputElement>('input[name="scope"]');
 const clipModeRadios = document.querySelectorAll<HTMLInputElement>('input[name="clipMode"]');
+const clipDestinationRadios = document.querySelectorAll<HTMLInputElement>(
+  'input[name="clipDestination"]',
+);
+const obsidianVaultBlock = document.getElementById("obsidianVaultBlock") as HTMLDivElement;
+const clipModeBlock = document.getElementById("clipModeBlock") as HTMLDivElement;
 const optionsInTabRadios = document.querySelectorAll<HTMLInputElement>(
   'input[name="optionsInTab"]',
 );
@@ -85,6 +91,10 @@ async function load(): Promise<void> {
   for (const radio of clipModeRadios) {
     radio.checked = radio.value === settings.clipMode;
   }
+  for (const radio of clipDestinationRadios) {
+    radio.checked = radio.value === settings.clipDestination;
+  }
+  updateClipDestination();
   for (const radio of optionsInTabRadios) {
     radio.checked = (radio.value === "tab") === settings.optionsInTab;
   }
@@ -126,10 +136,12 @@ async function save(): Promise<void> {
   const checkedClipMode = [...clipModeRadios].find((r) => r.checked);
   const clipMode: ClipMode = (checkedClipMode?.value as ClipMode) ?? "clipboard";
   const bridgePortMode = selectedBridgePortMode();
+  const clipDestination = selectedClipDestination();
   await browser.storage.local.set({
     stripFragment: stripFragment.checked,
     extraStripParams: parseParams(extraStripParams.value),
     scope,
+    clipDestination,
     obsidianVault: obsidianVault.value.trim(),
     clippingsBaseFolder: clippingsBaseFolder.value.trim(),
     clipMode,
@@ -156,6 +168,22 @@ function parsePort(raw: string): number {
   const value = raw.trim();
   const port = /^\d+$/.test(value) ? Number(value) : Number.NaN;
   return isBridgePort(port) ? port : DEFAULT_BRIDGE_PORT;
+}
+
+function selectedClipDestination(): ClipDestination {
+  const selected = [...clipDestinationRadios].find((radio) => radio.checked)?.value;
+  return selected === "file" ? "file" : "obsidian";
+}
+
+/**
+ * The vault name and the clipboard-versus-URI handoff are questions only
+ * Obsidian asks. Leaving them on screen in file mode reads as "still required",
+ * which is the one thing this destination exists to stop being true.
+ */
+function updateClipDestination(): void {
+  const file = selectedClipDestination() === "file";
+  obsidianVaultBlock.hidden = file;
+  clipModeBlock.hidden = file;
 }
 
 function selectedBridgePortMode(): BridgePortMode {
@@ -185,6 +213,24 @@ for (const el of [
   ...optionsInTabRadios,
 ]) {
   el.addEventListener("change", () => void save());
+}
+
+// `downloads` is optional, and selecting the file destination is the one moment
+// a user gesture exists to ask for it — the background page, where the writing
+// happens, never has one. A refusal leaves the destination on Obsidian rather
+// than persisting a choice whose every clip could only fail.
+for (const radio of clipDestinationRadios) {
+  radio.addEventListener("change", () => {
+    void (async () => {
+      // First await in the handler; see requestDownloads on why nothing precedes it.
+      if (selectedClipDestination() === "file" && !(await requestDownloads())) {
+        const obsidian = [...clipDestinationRadios].find((r) => r.value === "obsidian");
+        if (obsidian) obsidian.checked = true;
+      }
+      updateClipDestination();
+      await save();
+    })();
+  });
 }
 
 // `bridgeEnabled` is not in that list because switching it on is the one moment
