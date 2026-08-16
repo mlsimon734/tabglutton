@@ -333,7 +333,7 @@ describe("tab-scoped tools", () => {
       [zen],
       (s) =>
         s.method === "tab_clip"
-          ? { file: "Clippings/Note", vault: "test" }
+          ? { file: "Clippings/Note", vault: "test", confirmedBy: "nobody" }
           : { closed: 1, batchId: "b7" },
       { verifyClip: async () => "landed" },
     );
@@ -344,7 +344,11 @@ describe("tab-scoped tools", () => {
     expect(sent[0]).toMatchObject({ params: { tabId: 7, close: false } });
     expect(sent[1]).toMatchObject({ params: { tabIds: [7] } });
     // batchId still comes from tabs_close, so undo_close reverses it as before.
-    expect(payload(result)).toMatchObject({ closed: true, batchId: "b7", clipVerified: true });
+    expect(payload(result)).toMatchObject({
+      closed: true,
+      batchId: "b7",
+      confirmedBy: "gullet",
+    });
   });
 
   test("tab_clip never claims a close tabs_close did not confirm", async () => {
@@ -376,7 +380,7 @@ describe("tab-scoped tools", () => {
     const result = await call("tab_clip", { tabId: 7, close: true });
     expect(result.isError).toBeUndefined();
     expect(payload(result)).toMatchObject({
-      clipVerified: true,
+      confirmedBy: "gullet",
       closed: false,
       closeSkipped: "None of the given tab ids exist.",
     });
@@ -436,11 +440,11 @@ describe("tab-scoped tools", () => {
     });
   });
 
-  test("tab_clip without close reports whether the note was verified", async () => {
+  test("tab_clip without close reports who confirmed the note", async () => {
     const { call, sent } = caller([zen], () => ({ file: "Clippings/Note", vault: "test" }), {
       verifyClip: async () => "landed",
     });
-    expect(payload(await call("tab_clip", { tabId: 7 }))).toMatchObject({ clipVerified: true });
+    expect(payload(await call("tab_clip", { tabId: 7 }))).toMatchObject({ confirmedBy: "gullet" });
     expect(sent.map((s) => s.method)).toEqual(["tab_clip"]);
   });
 
@@ -451,14 +455,108 @@ describe("tab-scoped tools", () => {
       [zen],
       (s) =>
         s.method === "tab_clip"
-          ? { file: "Clippings/Note", vault: "test" }
+          ? { file: "Clippings/Note", vault: "test", confirmedBy: "nobody" }
           : { closed: 1, batchId: "b9" },
       { verifyClip: async () => "unknown" },
     );
     const result = await call("tab_clip", { tabId: 7, close: true });
     expect(result.isError).toBeUndefined();
-    expect(payload(result)).toMatchObject({ closed: true, batchId: "b9", clipVerified: false });
+    expect(payload(result)).toMatchObject({
+      closed: true,
+      batchId: "b9",
+      confirmedBy: "nobody",
+    });
     expect(sent.map((s) => s.method)).toEqual(["tab_clip", "tabs_close"]);
+  });
+
+  // Option 1 of issue #38: `saveClipFile` resolves only once the browser reports
+  // the download complete, so the extension has already answered from closer to
+  // the disk than the vault verifier ever could. Re-checking the download folder
+  // would verify the same fact from further away, against a name
+  // `downloads.download` may have uniquified.
+  test("tab_clip trusts the extension's own proof for a file clip", async () => {
+    let verified = false;
+    const { call, sent } = caller(
+      [zen],
+      (s) =>
+        s.method === "tab_clip"
+          ? {
+              destination: "file",
+              file: "/home/u/Downloads/Clippings/Note.md",
+              confirmedBy: "browser",
+            }
+          : { closed: 1, batchId: "b3" },
+      {
+        verifyClip: async () => {
+          verified = true;
+          return "missing";
+        },
+      },
+    );
+    const result = await call("tab_clip", { tabId: 7, close: true });
+    expect(result.isError).toBeUndefined();
+    expect(verified).toBe(false);
+    expect(payload(result)).toMatchObject({
+      destination: "file",
+      file: "/home/u/Downloads/Clippings/Note.md",
+      confirmedBy: "browser",
+      closed: true,
+      batchId: "b3",
+    });
+    // Still closed from here, not by the extension: the destination is in the
+    // answer, so a forwarded `close: true` would already have closed an
+    // Obsidian tab unverified by the time we could tell the two apart.
+    expect(sent.map((s) => s.method)).toEqual(["tab_clip", "tabs_close"]);
+    expect(sent[0]).toMatchObject({ params: { tabId: 7, close: false } });
+  });
+
+  // The hole in "the browser can prove this one": `settled()` is fail-open when
+  // the download's record has already been erased, and an erased record is as
+  // consistent with an interrupted write as a finished one. Fail-open is not a
+  // confirmation, and only a confirmation may cost a tab.
+  test("tab_clip keeps the tab when the browser could not confirm the file", async () => {
+    const { call, sent } = caller([zen], () => ({ destination: "file", confirmedBy: "nobody" }), {
+      verifyClip: async () => "landed",
+    });
+    const result = await call("tab_clip", { tabId: 7, close: true });
+    // Not an error: the file may well be there, and a failed tab_clip would
+    // provoke a re-clip.
+    expect(result.isError).toBeUndefined();
+    expect(payload(result)).toMatchObject({ destination: "file", confirmedBy: "nobody" });
+    expect(payload(result)).toMatchObject({ closed: false });
+    expect(JSON.stringify(payload(result))).toContain("closeSkipped");
+    // No path is reported either — the same missing record is why.
+    expect(payload(result)).not.toHaveProperty("file");
+    expect(sent.map((s) => s.method)).toEqual(["tab_clip"]);
+  });
+
+  // A result nothing can be made of must not silently swallow the close it was
+  // asked for: `close: false` went out on the wire, so only this can explain
+  // why the tab is still there.
+  test("tab_clip says so when an unusable result costs the close", async () => {
+    const { call, sent } = caller([zen], () => ({ vault: "test" }), {
+      verifyClip: async () => "landed",
+    });
+    const result = await call("tab_clip", { tabId: 7, close: true });
+    expect(payload(result)).toMatchObject({ closed: false });
+    expect(JSON.stringify(payload(result))).toContain("closeSkipped");
+    expect(sent.map((s) => s.method)).toEqual(["tab_clip"]);
+  });
+
+  // The file destination reports a failed write as a failed `tab_clip` — it can,
+  // because it knows — and nothing may be closed behind it. Verifying the vault
+  // afterwards would be checking Obsidian for a note that went to a download.
+  test("tab_clip closes nothing when the extension could not file the note", async () => {
+    const { call, sent } = caller(
+      [zen],
+      () => {
+        throw new BridgeRequestError("internal", "The clip could not be written: disk full.");
+      },
+      { verifyClip: async () => "landed" },
+    );
+    const result = await call("tab_clip", { tabId: 7, close: true });
+    expect(result.isError).toBe(true);
+    expect(sent.map((s) => s.method)).toEqual(["tab_clip"]);
   });
 
   test("tab_clip leaves the extension to close when no verifier is configured", async () => {

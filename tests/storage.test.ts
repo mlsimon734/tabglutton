@@ -4,6 +4,7 @@ import { describe, test, expect } from "bun:test";
 import { DEFAULT_BRIDGE_PORT } from "../src/bridge-protocol.js";
 import {
   bridgePortModeFromStored,
+  clipDestinationFor,
   clipNeedsPageAccess,
   defaults,
   hasClipDestination,
@@ -78,6 +79,19 @@ describe("hasClipDestination()", () => {
   test("Obsidian mode still needs a vault, and a file destination is never inferred", () => {
     expect(hasClipDestination({ ...defaults(), obsidianVault: "MyVault" })).toBe(true);
     expect(hasClipDestination({ ...defaults(), zoteroRoutingEnabled: true })).toBe(true);
+  });
+});
+
+describe("clipDestinationFor()", () => {
+  test("the setting decides, so the bridge files where Devour files", () => {
+    expect(clipDestinationFor(defaults(), undefined)).toBe("obsidian");
+    expect(clipDestinationFor({ ...defaults(), clipDestination: "file" }, undefined)).toBe("file");
+  });
+
+  // The override is a destination the caller stated. Filing it as a download
+  // instead would answer a request the user made with one they did not.
+  test("naming a vault names Obsidian, even for a user set to files", () => {
+    expect(clipDestinationFor({ ...defaults(), clipDestination: "file" }, "Main")).toBe("obsidian");
   });
 });
 

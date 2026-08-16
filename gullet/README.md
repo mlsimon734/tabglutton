@@ -154,7 +154,7 @@ hub's diagnostics then come out on that process's stderr with everything else.
 | `tabs_list`  | Metadata for every open tab — id, title, url, `lastAccessed`, `discarded`, `pinned`, `active`, window, and `hidden` on Firefox/Zen. No page content, so it stays cheap across hundreds of tabs. |
 | `tabs_load`  | Reloads discarded tabs so they can be read, ≤20 per call, a few at a time. Off by default — see below.                                                                                          |
 | `tab_read`   | Extracts one loaded tab as clean markdown via Defuddle.                                                                                                                                         |
-| `tab_clip`   | Files a tab into Obsidian exactly as the popup's Devour does. Optionally closes it after.                                                                                                       |
+| `tab_clip`   | Files a tab exactly as the popup's Devour does — into Obsidian or as a markdown file, per your setting. Reports which, and who confirmed it. Optionally closes it after.                        |
 | `tabs_close` | Closes tabs. Records the batch first and returns a `batchId`.                                                                                                                                   |
 | `undo_close` | Reopens a recorded batch.                                                                                                                                                                       |
 

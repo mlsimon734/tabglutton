@@ -7,7 +7,7 @@
 import { BridgeClient, type BridgeStatus } from "./bridge-client.js";
 import { BridgeMethodRunner, isHttpUrl } from "./bridge-methods.js";
 import { getBrowserInfoOnce } from "./browser-info.js";
-import { clipDownloadPath, saveClipFile } from "./clip-file.js";
+import { clipDownloadPath, saveClipFile, type SavedClipFile } from "./clip-file.js";
 import {
   markdownForClip,
   OBSIDIAN_HANDOFF_GAP_MS,
@@ -811,6 +811,7 @@ async function clipSelectedTabs(tabIds: number[]): Promise<ClipSelectedTabsRespo
       }
 
       if (destination.kind === "file") {
+        let saved: SavedClipFile;
         try {
           const path = clipDownloadPath(
             res.payload,
@@ -818,7 +819,7 @@ async function clipSelectedTabs(tabIds: number[]): Promise<ClipSelectedTabsRespo
             settings.clippingsBaseFolder,
             await getFilePlatformOnce(),
           );
-          await saveClipFile(path, markdownForClip(res.payload));
+          saved = await saveClipFile(path, markdownForClip(res.payload));
         } catch (err) {
           fail(
             "download-failed",
@@ -829,9 +830,23 @@ async function clipSelectedTabs(tabIds: number[]): Promise<ClipSelectedTabsRespo
           console.warn("[tabglutton] file save failed for tab", tabId, err);
           continue;
         }
+        if (!saved.confirmed) {
+          // The browser had erased the download's record before we could read
+          // it, which is as consistent with an interrupted write as a finished
+          // one. Keep the tab: the whole reason this destination is allowed to
+          // close one is that it can normally prove the file exists, and here
+          // it cannot. Reported rather than counted, so the run says so.
+          fail(
+            "download-failed",
+            "The browser had already forgotten this download, so the file could not be confirmed. The tab was kept — check the download folder.",
+            res.payload.title || meta.title,
+            res.payload.url || meta.url,
+          );
+          continue;
+        }
         // No OBSIDIAN_HANDOFF_GAP_MS here: that gap paces an external app
         // reading the OS clipboard, and this destination touches neither.
-        // saveClipFile has already seen the file land, so the close is safe.
+        // saveClipFile has now seen the file land, so the close is safe.
         try {
           await browser.tabs.remove(tabId);
         } catch (err) {
