@@ -200,13 +200,23 @@ on `/api/v5/addons/addon/<id>/versions/` returns each version's `channel` and `s
 
 ### Data collection disclosure
 
-`manifest.json` already declares:
+`manifest.json` already declares it — **nested inside `browser_specific_settings.gecko`**,
+not at the top level, which is where you will look for it first and not find it:
 
 ```json
-"data_collection_permissions": { "required": ["none"] }
+"browser_specific_settings": {
+  "gecko": {
+    "id": "tabglutton@addons.local",
+    "strict_min_version": "140.0",
+    "data_collection_permissions": { "required": ["none"] }
+  }
+}
 ```
 
-This is accurate and should be left alone. AMO's definition scopes "collection" to data
+The nesting is correct — it is a Gecko-only key, and `build.ts` deletes the whole
+`browser_specific_settings` object for Chrome, so the Chrome package has no counterpart to
+it and does not need one (§4 covers how Chrome takes the same declaration). This is
+accurate and should be left alone. AMO's definition scopes "collection" to data
 transmitted to the developer or a third party; sending a clipping to the user's own local
 Obsidian vault or their own local MCP server is neither. Answer **"Does not collect"** on
 every category in the form so it matches the manifest.
@@ -293,6 +303,31 @@ USD** registration fee; AMO is free.
 | Privacy policy URL | `https://github.com/mlsimon734/tabglutton/blob/main/PRIVACY.md` |
 | Visibility         | Public                                                          |
 
+### Three things gate the Publish button, and none of them live on the item page
+
+Chrome reports all three only when you press Publish, as a list of blockers rather than as
+field errors, so a listing that looks complete is not submittable:
+
+1. **Certify data usage** on the item's **Privacy practices** tab — the three checkboxes
+   under "Data usage disclosure" below. Filling in the justifications is not the same act
+   as certifying, and the tab shows no error until Publish.
+2. **A publisher contact email** — left rail, **PUBLISHER → Settings**. Not the item, and
+   **not `ACCOUNT → Profile`**, which is the trap: the rail has two groups, _Profile_ sits
+   under the second one, and it holds only the registration fee, the developer account,
+   the notifications checkbox, and publisher creation. No email field, and nothing below
+   the fold. Chrome's blocker text names the right page outright — "Enter the publisher's
+   contact email on the Settings page" — so read it literally.
+
+   It is publisher-wide rather than per-item, and Google displays it under each
+   extension's contact information, so pick one you are content to publish; the Google
+   account already signed in is the obvious choice. Do **not** reach for _Create a new
+   publisher_ on the Profile page to conjure the field — a publisher is a separate,
+   one-per-account object ("0 out of 1 allowed") and an item publishes fine without one.
+
+3. **Verification of that email** — same Settings page. Google sends a **verification
+   link**, not a code; the address reads "unverified" and Publish stays blocked until the
+   link is followed. Adding and verifying are two separate steps in one place.
+
 ### Single purpose statement
 
 ```
@@ -305,7 +340,15 @@ capability the extension does not already have through its own UI.
 
 ### Permission justifications
 
-Paste one per field.
+Paste one per field. **The console asks about what the uploaded package declares, so check
+the zip rather than working from this list or from `main`.** Both host entries are
+`optional_host_permissions` on Chrome (see the host-permission rules in `AGENTS.md`) and
+both still want a justification; `downloads` is in neither list for `0.3.1`.
+
+```sh
+unzip -p web-ext-artifacts/tabglutton-chrome-<version>.zip manifest.json \
+  | python3 -c 'import json,sys; m=json.load(sys.stdin); print({k: m.get(k) for k in ("permissions","optional_permissions","host_permissions","optional_host_permissions")})'
+```
 
 **`tabs`**
 
@@ -326,6 +369,19 @@ This is a capability, not a behaviour: the extension declares no content_scripts
 nothing on page load. Injection happens only through scripting.executeScript, against one
 specific tab, in direct response to the user pressing Devour or explicitly asking their
 own local agent to read that tab. Pages the user has not selected are never read.
+```
+
+**Host permission `http://127.0.0.1/*`**
+
+```
+Reaches the optional local bridge: a small MCP server the user installs and runs on their
+own machine, so a coding agent they are already using can list and triage their tabs. The
+connection is a loopback WebSocket to 127.0.0.1 and nothing else; no external host is ever
+contacted, and no tab data leaves the machine.
+
+It is off by default and optional in every sense: the permission is requested only when the
+user turns the bridge on in the extension's settings, and both ends authenticate with a
+token the user generates. With the bridge disabled the extension opens no sockets at all.
 ```
 
 **`scripting`**
@@ -362,12 +418,17 @@ Drives the reconnect timer for the optional local agent bridge. Inert while the 
 disabled, which is the default.
 ```
 
-**`downloads`**
+**`downloads`** — _not in `0.3.1`; the console will not ask for it yet_
+
+`0.3.1` predates the file destination ([#36](https://github.com/mlsimon734/tabglutton/pull/36)),
+which added `downloads` as an **optional** permission on `main`. Keep this text for the
+release that ships it, and skip the field until then.
 
 ```
 Saves a clipped page as a markdown file in the browser's download folder, for users who
-have chosen the file destination instead of an Obsidian vault. Written only during an
-explicit clip; existing downloads are never read or opened.
+have chosen the file destination instead of an Obsidian vault. Requested only when the user
+picks that destination, and written only during an explicit clip; existing downloads are
+never read or opened.
 ```
 
 **Remote code**
@@ -385,6 +446,45 @@ Tick **nothing** in the collected-data categories, then affirm all three certifi
 - Not being sold to third parties, outside of the approved use cases — ✅
 - Not being used or transferred for purposes unrelated to the item's single purpose — ✅
 - Not being used or transferred to determine creditworthiness or for lending — ✅
+
+Leaving the categories empty is not itself the certification: the three checkboxes are a
+separate act, and skipping them is blocker 1 above.
+
+**Why the all-zeros answer is right, and not just convenient.** Chrome scopes collection to
+_obtaining data from the user's device and transmitting it off the device_, and the
+extension has no off-device destination. Re-check rather than assume, before any future
+submission:
+
+```sh
+grep -rn "fetch(\|new WebSocket\|XMLHttpRequest\|sendBeacon\|EventSource" src/ | grep -v '\.test\.'
+grep -rho "storage\.\(local\|sync\|session\|managed\)" src/ | sort | uniq -c
+```
+
+At `0.3.1` that is two call sites, both hardcoded to `127.0.0.1` (`bridge-client.ts:575`
+and `:990`), and `storage.local` ×11 plus one `storage.session` — no `storage.sync`, which
+would ride Google's servers and _would_ be transmission. No analytics, telemetry, or crash
+reporting exists in any form.
+
+Two categories still want a reasoned no, because they are the ones a reviewer probes:
+
+- **Web history** — tab titles and URLs are genuinely read, and the undo log retains them
+  so Undo works. It is `storage.local`, never synced, removed on uninstall. Read is not
+  collected.
+- **Website content** — Defuddle extracts inside the page; the result goes to the Obsidian
+  vault, the download folder, or the loopback bridge. All three are on the user's machine.
+
+`downloads`, once it ships, changes none of this: the download folder is the device.
+
+**The one edge worth having an answer ready for.** With the bridge enabled, page content
+reaches a local MCP server, and the agent behind it may transmit that text to a model API —
+genuinely off-device. That is the agent's transmission, not the extension's, and
+`PRIVACY.md` already states it (§The agent bridge, last paragraph). Answer from there
+rather than improvising.
+
+This matches what Mozilla was told: `data_collection_permissions: { "required": ["none"] }`
+sits under `browser_specific_settings.gecko`, so `build.ts` drops it for Chrome along with
+the rest of that key — the Chrome package carries no equivalent manifest field by design,
+and the console form is where Chrome takes the same declaration.
 
 ### Known review risks, and the answers
 

@@ -2,6 +2,61 @@
 
 All notable changes to Tabglutton are documented here.
 
+## [0.3.2](https://github.com/mlsimon734/tabglutton/compare/v0.3.1...v0.3.2) (unreleased)
+
+Two threads. Devour no longer requires Obsidian — a clip can land as a plain markdown file
+in the download folder, chosen on the options page or during onboarding. And the browser's
+bridge connection now outlives the agent session that opened it, so starting a session is a
+local attach rather than a fresh hunt for a socket.
+
+### Features
+
+- **Devour can write plain markdown files instead of filing into Obsidian**
+  ([#36](https://github.com/mlsimon734/tabglutton/pull/36)). Same frontmatter, the same
+  `Clippings/<site subfolder>/` layout and the same note names, written to the browser's
+  download folder. `downloads` is an **optional** permission, requested when you pick the
+  destination rather than at install. It is a chosen mode and never an automatic fallback:
+  the extension provably cannot tell a refused `obsidian://` handoff from a successful one,
+  so anything shaped like "we noticed that failed, saving a file instead" would be a guess.
+- **Onboarding asks where clips land, at step 2**
+  ([#42](https://github.com/mlsimon734/tabglutton/pull/42)). Choosing markdown files hides
+  the vault field and drops the `obsidian://` approval step out of the walkthrough entirely
+  — a walkthrough that files to disk never needed it. Step 2 previously refused to advance
+  without a vault name, putting the install gate #36 exists to remove straight back on first
+  run.
+- **The bridge's `tab_clip` obeys the same destination setting as the popup's Devour**
+  ([#41](https://github.com/mlsimon734/tabglutton/pull/41)), with one stated exception: a
+  `vault` override still names Obsidian for that call, because it is a destination the
+  caller asked for outright. Before this the bridge read the vault directly and an agent
+  clip failed with vault-missing for anyone in file mode.
+- **Duplicates are shown, not just counted**
+  ([#39](https://github.com/mlsimon734/tabglutton/pull/39)). The popup and the cockpit both
+  open with a Duplicates section: one group per canonical URL, the copy Dedup keeps marked
+  `keep`, and the cost of closing the rest. **Select extras** puts those copies into the
+  normal selection, so duplicates can be devoured rather than only closed.
+- **The browser connection outlives the agent session**
+  ([#40](https://github.com/mlsimon734/tabglutton/pull/40),
+  [#29](https://github.com/mlsimon734/tabglutton/issues/29)). The first Gullet to find no hub
+  spawns a detached one and attaches to it as a peer, so session start is a local attach and
+  the socket is won once per _browser_ session rather than once per agent session. The hub
+  exits by itself after six idle hours, stands aside for a newer Gullet, and takes a
+  `SIGTERM`; `--no-detach` keeps the old session-scoped shape. The extension arms its
+  keepalive only while the hub reports at least one attached session, so a hub with nobody
+  waiting no longer pins the event page.
+
+### Changed
+
+- **`tab_clip`'s result is a discriminated union, and two of its fields are no longer
+  unconditional.** `destination` is `"obsidian"` or `"file"`; `vault` and `contentHash`
+  exist only on the Obsidian variant, and `file` is absent exactly when nothing could
+  confirm the write. `confirmedBy` — `"browser"`, `"gullet"` or `"nobody"` — names who
+  proved the clip landed, replacing a boolean whose `false` meant "could not check" and
+  read as "did not land". The wire protocol stays at 2: Gullet is the only consumer of this
+  shape and ships alongside the extension.
+- **A bridge clip's destination follows the user's setting** rather than always being the
+  vault. No existing install can notice the difference: file mode ships in this same
+  release, so there is no state in which the old and new behaviour disagree.
+
 ## [0.3.1](https://github.com/mlsimon734/tabglutton/compare/v0.3.0...v0.3.1) (2026-08-12)
 
 Identical to 0.3.0. That version went to AMO's self-distribution channel by mistake, and
