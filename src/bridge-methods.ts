@@ -40,7 +40,7 @@ import { getFilePlatformOnce } from "./platform.js";
 import { createTaskQueue, delay } from "./serialize.js";
 import { pickRule, type SiteRule } from "./site-rules.js";
 import { clipDestinationFor, type Settings } from "./storage.js";
-import { CLIP_ORIGINS, hasDownloads, hasOrigins } from "./permissions.js";
+import { CLIP_ORIGINS, DOWNLOADS_REMEDY, hasDownloads, hasOrigins } from "./permissions.js";
 import { IS_CHROME } from "./target.js";
 import {
   appendBatch,
@@ -797,7 +797,7 @@ export class BridgeMethodRunner {
         fail(
           "not-enabled",
           "Tabglutton no longer has permission to save downloads, so clips cannot be written as files. " +
-            "Ask the user to re-select the file destination in Tabglutton's settings — that is where the browser asks for it.",
+            `Ask the user to restore it: ${DOWNLOADS_REMEDY}`,
         );
       }
       fail(

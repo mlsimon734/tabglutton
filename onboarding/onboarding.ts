@@ -2,7 +2,12 @@
 // webextension-polyfill global first (see writePolyfillGlobal in build.ts). A
 // bare "webextension-polyfill" import here would not set the global anyway.
 import { type ClipDestination, loadSettings, saveSettings } from "../src/storage.js";
-import { hasDownloads, requestDownloads } from "../src/permissions.js";
+import {
+  DOWNLOADS_REFUSED,
+  DOWNLOADS_REVOKED,
+  hasDownloads,
+  requestDownloads,
+} from "../src/permissions.js";
 import { BUILT_IN_RULES } from "../src/site-rules.js";
 import { IS_CHROME } from "../src/target.js";
 import { vaultWarningFor } from "../src/vault-warning.js";
@@ -111,11 +116,6 @@ function applyDestination(): void {
 function selectObsidian(): void {
   for (const radio of destinationRadios) radio.checked = radio.value === "obsidian";
 }
-
-const DOWNLOADS_REFUSED =
-  "Download access was declined, so files would have nowhere to go — the destination is back on Obsidian. Choose Markdown files again to ask once more.";
-const DOWNLOADS_REVOKED =
-  "Tabglutton no longer has permission to save downloads, so the destination is back on Obsidian. Choose Markdown files to grant it again.";
 
 /**
  * The region is never `hidden`. A `role="status"` element that is hidden until

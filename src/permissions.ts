@@ -58,6 +58,30 @@ export async function hasDownloads(): Promise<boolean> {
 }
 
 /**
+ * What a surface that *has* a gesture says when the file destination has no
+ * grant behind it. Shared by onboarding and the options page because both do
+ * the same thing about it: revert the destination to Obsidian. Reverting is
+ * what makes the remedy performable at all — re-selecting an already-checked
+ * radio fires no `change`, so a file radio left checked can never ask again.
+ */
+export const DOWNLOADS_REFUSED =
+  "Download access was declined, so files would have nowhere to go — the destination is back on Obsidian. Choose Markdown files again to ask once more.";
+export const DOWNLOADS_REVOKED =
+  "Tabglutton no longer has permission to save downloads, so the destination is back on Obsidian. Choose Markdown files to grant it again.";
+
+/**
+ * What the surfaces with no gesture say instead. Neither the background page
+ * nor the bridge can ask for anything, so both name the one place that can —
+ * and that name is only truthful because the options page reverts the
+ * destination when it finds the grant gone, leaving the radio clickable.
+ */
+export const DOWNLOADS_REMEDY =
+  "The destination in Tabglutton's settings reverts to Obsidian while the permission is missing, so choosing Markdown files there again is what asks the browser for it.";
+
+/** The fact and the remedy in one sentence, for every surface that just reports. */
+export const DOWNLOADS_GONE = `Tabglutton no longer has permission to save downloads. ${DOWNLOADS_REMEDY}`;
+
+/**
  * Prompt if needed, and report whether the access is now held.
  *
  * **Must be the first `await` inside a click handler**, for the transient

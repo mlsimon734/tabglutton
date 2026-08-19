@@ -7,9 +7,17 @@ import {
   generateToken,
   isBridgePort,
 } from "../src/bridge-protocol.js";
-import { BRIDGE_ORIGINS, requestDownloads, requestOrigins } from "../src/permissions.js";
+import {
+  BRIDGE_ORIGINS,
+  DOWNLOADS_REFUSED,
+  DOWNLOADS_REVOKED,
+  hasDownloads,
+  requestDownloads,
+  requestOrigins,
+} from "../src/permissions.js";
 import {
   loadSettings,
+  saveSettings,
   type BridgePortMode,
   type ClipDestination,
   type ClipMode,
@@ -33,6 +41,7 @@ const clippingsBaseFolder = document.getElementById("clippingsBaseFolder") as HT
 const zoteroRoutingEnabled = document.getElementById("zoteroRoutingEnabled") as HTMLInputElement;
 const zoteroConnectorId = document.getElementById("zoteroConnectorId") as HTMLInputElement;
 const vaultWarning = document.getElementById("vaultWarning") as HTMLParagraphElement;
+const downloadsWarning = document.getElementById("downloadsWarning") as HTMLParagraphElement;
 const scopeRadios = document.querySelectorAll<HTMLInputElement>('input[name="scope"]');
 const clipModeRadios = document.querySelectorAll<HTMLInputElement>('input[name="clipMode"]');
 const clipDestinationRadios = document.querySelectorAll<HTMLInputElement>(
@@ -93,6 +102,20 @@ async function load(): Promise<void> {
   }
   for (const radio of clipDestinationRadios) {
     radio.checked = radio.value === settings.clipDestination;
+  }
+  // A stored file destination is only real while the grant behind it is, and
+  // that grant can be taken back from the browser's own extension settings.
+  // Rendering it as a working choice would leave every clip failing with the
+  // page saying nothing — and re-selecting the already-checked radio fires no
+  // `change`, so this page would have no way to ask for it back either. Revert,
+  // say why, and persist: the radio is then unchecked and clickable, which is
+  // the whole recovery path. Same answer onboarding's `init` gives.
+  if (settings.clipDestination === "file" && !(await hasDownloads())) {
+    selectObsidian();
+    setDownloadsWarning(DOWNLOADS_REVOKED);
+    // Not `save()`: that persists the whole form and refuses to run before
+    // `loaded`, which is still false here.
+    await saveSettings({ clipDestination: "obsidian" });
   }
   updateClipDestination();
   for (const radio of optionsInTabRadios) {
@@ -215,18 +238,45 @@ for (const el of [
   el.addEventListener("change", () => void save());
 }
 
+function selectObsidian(): void {
+  for (const radio of clipDestinationRadios) radio.checked = radio.value === "obsidian";
+}
+
+/**
+ * The region is never `hidden`. A `role="status"` element that is hidden until
+ * it has text is not in the accessibility tree when the text arrives, so a
+ * screen-reader user would have their destination reverted with nothing spoken.
+ * Empty, it collapses to no height — see the `:empty` rule in options.css.
+ */
+function setDownloadsWarning(message: string): void {
+  downloadsWarning.textContent = message;
+}
+
+/**
+ * A pending grant request does not block the page — Gecko's doorhanger is
+ * non-modal — so a second choice can land while the first is still waiting.
+ * Only the newest request gets to speak for the page; an older one resolving
+ * late would otherwise write its verdict over a selection it no longer
+ * describes. The persisted value is written by the newest handler either way.
+ */
+let destinationGeneration = 0;
+
 // `downloads` is optional, and selecting the file destination is the one moment
 // a user gesture exists to ask for it — the background page, where the writing
 // happens, never has one. A refusal leaves the destination on Obsidian rather
-// than persisting a choice whose every clip could only fail.
+// than persisting a choice whose every clip could only fail, and says so rather
+// than moving the radio back under the user with no explanation. Reverting is
+// also what keeps the remedy available: the file radio goes back to unchecked,
+// so clicking it fires `change` and asks again.
 for (const radio of clipDestinationRadios) {
   radio.addEventListener("change", () => {
     void (async () => {
+      const generation = ++destinationGeneration;
       // First await in the handler; see requestDownloads on why nothing precedes it.
-      if (selectedClipDestination() === "file" && !(await requestDownloads())) {
-        const obsidian = [...clipDestinationRadios].find((r) => r.value === "obsidian");
-        if (obsidian) obsidian.checked = true;
-      }
+      const refused = selectedClipDestination() === "file" && !(await requestDownloads());
+      if (generation !== destinationGeneration) return;
+      if (refused) selectObsidian();
+      setDownloadsWarning(refused ? DOWNLOADS_REFUSED : "");
       updateClipDestination();
       await save();
     })();

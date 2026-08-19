@@ -15,7 +15,7 @@ import {
   type ClipPayload,
   type ObsidianClipRequest,
 } from "./clip-format.js";
-import { hasDownloads } from "./permissions.js";
+import { DOWNLOADS_GONE, hasDownloads } from "./permissions.js";
 import { getFilePlatformOnce } from "./platform.js";
 import { delay } from "./serialize.js";
 import { pickRule } from "./site-rules.js";
@@ -84,14 +84,22 @@ export interface ClipFailure {
   detail?: string;
 }
 
+/**
+ * Why a run refused before touching a single tab. One field rather than a flag
+ * per cause, because they are alternatives and the popups render exactly one of
+ * them: `no-destination` is nothing configured to file into, `downloads-revoked`
+ * is the file destination with its optional grant taken back.
+ */
+export type ClipBlockedReason = "no-destination" | "downloads-revoked";
+
 export interface ClipSelectedTabsResponse {
   failed: number;
   obsidianSaved: number;
   /** Written as markdown files in the download folder (`clipDestination: "file"`). */
   fileSaved: number;
   zoteroSaved: number;
-  /** Nothing was attempted: neither a vault nor Zotero routing is configured. */
-  vaultMissing?: boolean;
+  /** Present only when nothing was attempted — and nothing was woken either. */
+  blocked?: ClipBlockedReason;
   failures: ClipFailure[];
 }
 
@@ -650,20 +658,12 @@ async function destinationForTab(tabId: number, url: string): Promise<TabDestina
   }
   // The chosen destination, not a fallback: file mode never asks about a vault
   // and Obsidian mode never quietly writes a file. See `ClipDestination`.
-  if (clipsToFile(settings)) {
-    // `downloads` is optional and revocable from the browser's own add-on UI,
-    // so the grant the options page collected may be gone by now. Say so;
-    // `downloads.download` would otherwise throw something opaque per tab.
-    if (!(await hasDownloads())) {
-      return {
-        kind: "failed",
-        reason: "download-failed",
-        detail:
-          "Tabglutton no longer has download access. Re-select the file destination in settings.",
-      };
-    }
-    return { kind: "file" };
-  }
+  //
+  // No `downloads` check here. The grant is run-global rather than per-tab, and
+  // this function has already woken the tab by the time it would run: a revoked
+  // grant would reload an entire backlog only to fail every page of it. It is
+  // checked once, before any of this, in `clipSelectedTabs`.
+  if (clipsToFile(settings)) return { kind: "file" };
   if (!settings.obsidianVault.trim()) {
     return {
       kind: "failed",
@@ -703,18 +703,33 @@ interface PreparedTab {
   extract?: ExtractOutcome;
 }
 
+/**
+ * Why one download failed, after the run's up-front grant check had already
+ * passed. A grant revoked mid-run is the one cause the engine reports opaquely
+ * — Gecko throws a schema error naming the `data:` URL, Chrome a bare "not
+ * allowed" — so it is named, and named with a remedy. Asked only once a write
+ * has already failed, so a run that works pays no extra IPC for it; the same
+ * shape the bridge's `fileClip` uses.
+ */
+async function downloadFailureDetail(err: unknown): Promise<string> {
+  if (!(await hasDownloads())) return DOWNLOADS_GONE;
+  return errorMessage(err);
+}
+
+function clipBlocked(blocked: ClipBlockedReason): ClipSelectedTabsResponse {
+  return { failed: 0, obsidianSaved: 0, fileSaved: 0, zoteroSaved: 0, blocked, failures: [] };
+}
+
 async function clipSelectedTabs(tabIds: number[]): Promise<ClipSelectedTabsResponse> {
   const vault = settings.obsidianVault.trim();
-  if (!hasClipDestination(settings)) {
-    return {
-      failed: 0,
-      obsidianSaved: 0,
-      fileSaved: 0,
-      zoteroSaved: 0,
-      vaultMissing: true,
-      failures: [],
-    };
-  }
+  if (!hasClipDestination(settings)) return clipBlocked("no-destination");
+  // `downloads` is optional and revocable from the browser's own add-on UI, so
+  // the grant the options page collected may be gone. It is run-global, so it
+  // is answered once here — and *before* phase 1, which reloads every discarded
+  // tab in the run. Checked any later, a revoked grant would cost a backlog of
+  // page loads to reach the same answer, and would report it as tens of
+  // identical per-tab failures rather than as the one fact it is.
+  if (clipsToFile(settings) && !(await hasDownloads())) return clipBlocked("downloads-revoked");
 
   // Phase 1: read, wake, route and extract each tab as one per-tab chain, all
   // of them overlapping. There is deliberately no barrier between the steps —
@@ -823,7 +838,7 @@ async function clipSelectedTabs(tabIds: number[]): Promise<ClipSelectedTabsRespo
         } catch (err) {
           fail(
             "download-failed",
-            errorMessage(err),
+            await downloadFailureDetail(err),
             res.payload.title || meta.title,
             res.payload.url || meta.url,
           );

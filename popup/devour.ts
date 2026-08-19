@@ -7,7 +7,7 @@ import type {
   PopupTab,
 } from "../src/background.js";
 import { openOptionsUi } from "../src/open-options.js";
-import { CLIP_ORIGINS, requestOrigins } from "../src/permissions.js";
+import { CLIP_ORIGINS, DOWNLOADS_GONE, requestOrigins } from "../src/permissions.js";
 import { pickRule, type SiteRule } from "../src/site-rules.js";
 import {
   clipNeedsPageAccess,
@@ -766,6 +766,9 @@ async function clipSelected(): Promise<void> {
     if (label) label.textContent = text;
     setTimeout(() => {
       if (label) label.textContent = "Devour";
+      // Cleared here rather than captured: nothing else on this button carries a
+      // tooltip, and a refusal's explanation must not outlive the label saying it.
+      clipCurrentBtn.title = "";
       clearDevourProgress();
       state.clipping = false;
       render();
@@ -807,7 +810,12 @@ async function clipSelected(): Promise<void> {
     restore("Devour failed", 1800);
     return;
   }
-  if (res.vaultMissing) {
+  if (res.blocked === "downloads-revoked") {
+    clipCurrentBtn.title = DOWNLOADS_GONE;
+    restore("Needs downloads", 2600);
+    return;
+  }
+  if (res.blocked) {
     restore("Set vault first", 2200);
     return;
   }
@@ -825,7 +833,7 @@ async function retryFailures(tabIds: number[]): Promise<void> {
     type: "clip-selected-tabs",
     tabIds,
   });
-  if (res && !res.vaultMissing) {
+  if (res && !res.blocked) {
     mergeClipFailures(tabIds, res.failures);
   }
   clearDevourProgress();
