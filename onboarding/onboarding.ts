@@ -5,7 +5,7 @@ import { type ClipDestination, loadSettings, saveSettings } from "../src/storage
 import {
   DOWNLOADS_REFUSED,
   DOWNLOADS_REVOKED,
-  hasDownloads,
+  downloadsGrant,
   requestDownloads,
 } from "../src/permissions.js";
 import { BUILT_IN_RULES } from "../src/site-rules.js";
@@ -288,7 +288,10 @@ async function init(): Promise<void> {
   // a destination whose every clip fails — and re-selecting the already-checked
   // radio fires no `change`, so they would have no way to ask for it back.
   // Revert, say why, and persist: the radio is then unchecked and clickable.
-  if (settings.clipDestination === "file" && !(await hasDownloads())) {
+  // Seen to be missing, not merely unconfirmed: this branch writes, and a
+  // `permissions.contains` that threw is not grounds for rewriting the
+  // destination the user chose. See `downloadsGrant`.
+  if (settings.clipDestination === "file" && (await downloadsGrant()) === "missing") {
     selectObsidian();
     setDownloadsWarning(DOWNLOADS_REVOKED);
     await saveSettings({ clipDestination: "obsidian" });

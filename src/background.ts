@@ -15,7 +15,7 @@ import {
   type ClipPayload,
   type ObsidianClipRequest,
 } from "./clip-format.js";
-import { DOWNLOADS_GONE, hasDownloads } from "./permissions.js";
+import { DOWNLOADS_GONE, downloadsGrant } from "./permissions.js";
 import { getFilePlatformOnce } from "./platform.js";
 import { delay } from "./serialize.js";
 import { pickRule } from "./site-rules.js";
@@ -636,7 +636,11 @@ const ZOTERO_DETECTION_RETRY_MS = 250;
  * translator: an arXiv tab in the backlog reports "detecting" (or a
  * translator-less "ready") and is failed or silently sent to Obsidian.
  */
-async function destinationForTab(tabId: number, url: string): Promise<TabDestination> {
+async function destinationForTab(
+  tabId: number,
+  url: string,
+  downloadsHeld: boolean,
+): Promise<TabDestination> {
   // clipTab re-checks the scheme against its own fresh read and owns the error
   // message; this gate only keeps a tab that provably cannot be clipped from
   // being woken and probed for nothing. An address we cannot read yet is not
@@ -658,12 +662,20 @@ async function destinationForTab(tabId: number, url: string): Promise<TabDestina
   }
   // The chosen destination, not a fallback: file mode never asks about a vault
   // and Obsidian mode never quietly writes a file. See `ClipDestination`.
-  //
-  // No `downloads` check here. The grant is run-global rather than per-tab, and
-  // this function has already woken the tab by the time it would run: a revoked
-  // grant would reload an entire backlog only to fail every page of it. It is
-  // checked once, before any of this, in `clipSelectedTabs`.
-  if (clipsToFile(settings)) return { kind: "file" };
+  if (clipsToFile(settings)) {
+    // The grant is run-global, so it was answered once in `clipSelectedTabs`
+    // rather than re-asked per tab — and asked there because this function has
+    // already woken the tab by the time it would run, so a revoked grant would
+    // reload an entire backlog only to fail every page of it. A run reaches
+    // here holding a `false` in exactly one configuration: Zotero routing on
+    // *and* the file destination chosen, where the whole run cannot be refused
+    // because the papers in it still file to Zotero. Those tabs were woken for
+    // the Connector's sake regardless of this grant, so nothing is spent on it.
+    if (!downloadsHeld) {
+      return { kind: "failed", reason: "download-failed", detail: DOWNLOADS_GONE };
+    }
+    return { kind: "file" };
+  }
   if (!settings.obsidianVault.trim()) {
     return {
       kind: "failed",
@@ -712,7 +724,9 @@ interface PreparedTab {
  * shape the bridge's `fileClip` uses.
  */
 async function downloadFailureDetail(err: unknown): Promise<string> {
-  if (!(await hasDownloads())) return DOWNLOADS_GONE;
+  // Only a grant we can see is gone earns the claim that it is: a check that
+  // threw knows nothing, and the engine's own message is the honest answer.
+  if ((await downloadsGrant()) === "missing") return DOWNLOADS_GONE;
   return errorMessage(err);
 }
 
@@ -729,7 +743,15 @@ async function clipSelectedTabs(tabIds: number[]): Promise<ClipSelectedTabsRespo
   // tab in the run. Checked any later, a revoked grant would cost a backlog of
   // page loads to reach the same answer, and would report it as tens of
   // identical per-tab failures rather than as the one fact it is.
-  if (clipsToFile(settings) && !(await hasDownloads())) return clipBlocked("downloads-revoked");
+  //
+  // Refusing the whole run needs the stronger claim that nothing in it could
+  // have gone anywhere else. Zotero routing breaks that: an academic tab files
+  // through the Connector, which needs no `downloads` at all, so a run with
+  // routing on is let through and only its file-bound tabs fail. And only a
+  // grant seen to be missing refuses anything — `unknown` carries on, because a
+  // check that threw is not evidence of a revocation.
+  const downloadsHeld = clipsToFile(settings) ? (await downloadsGrant()) !== "missing" : true;
+  if (!downloadsHeld && !settings.zoteroRoutingEnabled) return clipBlocked("downloads-revoked");
 
   // Phase 1: read, wake, route and extract each tab as one per-tab chain, all
   // of them overlapping. There is deliberately no barrier between the steps —
@@ -744,7 +766,7 @@ async function clipSelectedTabs(tabIds: number[]): Promise<ClipSelectedTabsRespo
     await Promise.all(
       tabIds.map(async (tabId): Promise<[number, PreparedTab]> => {
         const meta = await resolveTabMeta(tabId);
-        const destination = await destinationForTab(tabId, meta.url);
+        const destination = await destinationForTab(tabId, meta.url, downloadsHeld);
         if (!needsExtraction(destination)) return [tabId, { meta, destination }];
         try {
           return [

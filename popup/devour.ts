@@ -762,13 +762,15 @@ async function clipSelected(): Promise<void> {
   const queue = selectedForOps();
   if (!queue.length) return;
   const label = clipCurrentBtn.querySelector(".primary-label") as HTMLElement | null;
+  // Captured rather than cleared: the button carries a static tooltip from
+  // devour.html, and blanking it would cost every later hover of the session to
+  // explain one refusal.
+  const originalTitle = clipCurrentBtn.title;
   const restore = (text: string, ms: number) => {
     if (label) label.textContent = text;
     setTimeout(() => {
       if (label) label.textContent = "Devour";
-      // Cleared here rather than captured: nothing else on this button carries a
-      // tooltip, and a refusal's explanation must not outlive the label saying it.
-      clipCurrentBtn.title = "";
+      clipCurrentBtn.title = originalTitle;
       clearDevourProgress();
       state.clipping = false;
       render();
@@ -824,6 +826,22 @@ async function clipSelected(): Promise<void> {
   restore(clipSummary(res), res.failed === 0 ? 1400 : 2400);
 }
 
+/**
+ * Say something on the primary button without owning the clipping state the way
+ * `clipSelected`'s own `restore` does. Nothing else writes that label, so the
+ * flash survives the re-render `refresh()` triggers underneath it.
+ */
+function flashPrimary(text: string, title: string, ms: number): void {
+  const label = clipCurrentBtn.querySelector(".primary-label") as HTMLElement | null;
+  const originalTitle = clipCurrentBtn.title;
+  if (label) label.textContent = text;
+  clipCurrentBtn.title = title;
+  setTimeout(() => {
+    if (label) label.textContent = "Devour";
+    clipCurrentBtn.title = originalTitle;
+  }, ms);
+}
+
 async function retryFailures(tabIds: number[]): Promise<void> {
   if (state.clipping || !tabIds.length) return;
   if (!hasClipDestination(state.settings)) return;
@@ -833,9 +851,12 @@ async function retryFailures(tabIds: number[]): Promise<void> {
     type: "clip-selected-tabs",
     tabIds,
   });
-  if (res && !res.blocked) {
-    mergeClipFailures(tabIds, res.failures);
-  }
+  // A blocked run attempted nothing, so there are no fresh outcomes to merge —
+  // and saying nothing would leave the old failures on screen looking retried.
+  // Reachable only since `downloads-revoked`: with no destination at all there
+  // are no failures to retry in the first place.
+  if (res?.blocked === "downloads-revoked") flashPrimary("Needs downloads", DOWNLOADS_GONE, 2600);
+  else if (res && !res.blocked) mergeClipFailures(tabIds, res.failures);
   clearDevourProgress();
   state.clipping = false;
   await refresh();

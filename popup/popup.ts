@@ -597,6 +597,22 @@ async function clipSelected(): Promise<void> {
   restore(clipSummary(res), res.failed === 0 ? 1400 : 2200);
 }
 
+/**
+ * Say something on the primary button without owning the clipping state the way
+ * `clipSelected`'s own `restore` does. Nothing else writes that label, so the
+ * flash survives the re-render `refresh()` triggers underneath it.
+ */
+function flashPrimary(text: string, title: string, ms: number): void {
+  const originalLabel = clipCurrentBtn.textContent;
+  const originalTitle = clipCurrentBtn.title;
+  clipCurrentBtn.textContent = text;
+  clipCurrentBtn.title = title;
+  setTimeout(() => {
+    clipCurrentBtn.textContent = originalLabel;
+    clipCurrentBtn.title = originalTitle;
+  }, ms);
+}
+
 async function retryFailures(tabIds: number[]): Promise<void> {
   if (state.clipping || !tabIds.length) return;
   if (!hasClipDestination(state.settings)) return;
@@ -606,7 +622,12 @@ async function retryFailures(tabIds: number[]): Promise<void> {
     type: "clip-selected-tabs",
     tabIds,
   });
-  if (res && !res.blocked) {
+  // A blocked run attempted nothing, so there is nothing to merge — and saying
+  // nothing would leave the old failures on screen looking retried. Reachable
+  // only since `downloads-revoked`: with no destination at all there are no
+  // failures to retry in the first place.
+  if (res?.blocked === "downloads-revoked") flashPrimary("Needs downloads", DOWNLOADS_GONE, 2600);
+  else if (res && !res.blocked) {
     mergeClipFailures(tabIds, res.failures);
   }
   clearDevourProgress();

@@ -11,7 +11,7 @@ import {
   BRIDGE_ORIGINS,
   DOWNLOADS_REFUSED,
   DOWNLOADS_REVOKED,
-  hasDownloads,
+  downloadsGrant,
   requestDownloads,
   requestOrigins,
 } from "../src/permissions.js";
@@ -110,7 +110,11 @@ async function load(): Promise<void> {
   // `change`, so this page would have no way to ask for it back either. Revert,
   // say why, and persist: the radio is then unchecked and clickable, which is
   // the whole recovery path. Same answer onboarding's `init` gives.
-  if (settings.clipDestination === "file" && !(await hasDownloads())) {
+  //
+  // Only for a grant seen to be missing. This branch *writes*, so a
+  // `permissions.contains` that merely threw would rewrite the destination the
+  // user chose on the strength of a question we failed to ask.
+  if (settings.clipDestination === "file" && (await downloadsGrant()) === "missing") {
     selectObsidian();
     setDownloadsWarning(DOWNLOADS_REVOKED);
     // Not `save()`: that persists the whole form and refuses to run before
