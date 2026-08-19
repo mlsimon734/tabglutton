@@ -813,8 +813,9 @@ _proved_. Anything still unproven has moved to Open questions, where it gets rea
     (`scratch-chrome/repro-first-list-timeout.ts`, Firefox 134.0.2 on a dedicated profile;
     `time-list-at-scale.ts`, Chrome 151). _Startup contention_: `queryAllTabs()` **10ms**,
     `probeHeuristic()`'s two queries **14ms**, `refreshBadge()`'s query **6ms**, mapping every
-    tab to a `BridgeTab` **1ms** — the entire pass `init()` runs ahead of serving is ~30ms on
-    Gecko and ~115ms on Chrome. _Response size_: the reported ~253 KB listing is **248.7 KB**
+    tab to a `BridgeTab` **1ms** — the whole of what `init()` runs ahead of serving is **20ms**
+    on Gecko, and 41ms on Chrome, where `probeHeuristic` short-circuits and only the badge
+    query remains. _Response size_: the reported ~253 KB listing is **248.7 KB**
     here, and `JSON.stringify` of it costs **0.2ms** on both engines. Nothing in either
     hypothesis is within 1000× of 45,000ms.
   - **The discriminating test the issue asked for came back negative.** Two `tabs_list` calls
