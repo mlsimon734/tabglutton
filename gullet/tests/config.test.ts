@@ -241,21 +241,12 @@ describe("loadConfig()", () => {
     expect(await config.resolveToken?.()).toBe("abc");
   });
 
-  test("uses CLI, environment, and .env tokens in precedence order", async () => {
+  test("uses CLI and environment tokens in precedence order", async () => {
     const files = {
       "/workspace/.env": "GULLET_TOKEN=dot-env\nTABGLUTTON_TOKEN='dot-primary'\n",
       "/home/michael/.config/tabglutton/config.json":
         '{"tokenCommand":"secret command","port":5004}',
     };
-    const fromDotEnv = await loadConfig([], { HOME: "/home/michael" }, runtime(files));
-    expect(fromDotEnv).toEqual({
-      portMode: "fixed",
-      port: 5004,
-      token: "dot-primary",
-      detach: true,
-      detachedHub: false,
-    });
-
     const fromEnv = await loadConfig(
       [],
       { HOME: "/home/michael", TABGLUTTON_TOKEN: "env" },
@@ -269,6 +260,74 @@ describe("loadConfig()", () => {
       runtime(files),
     );
     expect(fromFlag.token).toBe("flag");
+  });
+
+  // `./.env` is read out of a directory the user did not choose — an MCP host
+  // sets cwd to whatever project the session started in — so a cloned repo must
+  // never be able to replace the token the options page's setup command wrote.
+  // See SECURITY-REVIEW.md #5. It stays a *supplier* of last resort.
+  describe("./.env is the last token source, never an override", () => {
+    const dotEnv = "TABGLUTTON_TOKEN=from-cloned-repo\n";
+
+    test("a global token file wins over a .env in the working directory", async () => {
+      const config = await loadConfig(
+        [],
+        { HOME: "/home/michael" },
+        runtime({
+          "/workspace/.env": dotEnv,
+          "/home/michael/.config/tabglutton/token": "from-global-file\n",
+        }),
+      );
+      expect(await config.resolveToken?.()).toBe("from-global-file");
+    });
+
+    test("a configured tokenCommand wins over a .env, and is not backstopped by it", async () => {
+      const config = await loadConfig(
+        [],
+        { HOME: "/home/michael" },
+        {
+          ...runtime({
+            "/workspace/.env": dotEnv,
+            "/home/michael/.config/tabglutton/config.json": '{"tokenCommand":"op read item"}',
+          }),
+          runTokenCommand: async () => ({
+            exitCode: 1,
+            stdout: "",
+            stderr: "vault locked",
+            timedOut: false,
+          }),
+        },
+      );
+      // Fails loudly so the Supervisor can retry it once the vault unlocks —
+      // silently falling through to the repo's .env would defeat that path.
+      expect(config.resolveToken?.()).rejects.toThrow(/tokenCommand exited 1/);
+    });
+
+    test("it still supplies a token when no global file exists", async () => {
+      const config = await loadConfig(
+        [],
+        { HOME: "/home/michael" },
+        runtime({ "/workspace/.env": dotEnv }),
+      );
+      expect(await config.resolveToken?.()).toBe("from-cloned-repo");
+    });
+
+    test("an unreadable global file is a fault, not a fall-through to .env", async () => {
+      const config = await loadConfig(
+        [],
+        { HOME: "/home/michael" },
+        {
+          ...runtime({ "/workspace/.env": dotEnv }),
+          readFile: async (path: string) => {
+            if (path.endsWith("/token"))
+              throw Object.assign(new Error("EACCES"), { code: "EACCES" });
+            if (path === "/workspace/.env") return dotEnv;
+            throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+          },
+        },
+      );
+      expect(config.resolveToken?.()).rejects.toThrow(/Could not read Tabglutton's token file/);
+    });
   });
 
   test("executes tokenCommand lazily with a bounded wait and config-directory cwd", async () => {

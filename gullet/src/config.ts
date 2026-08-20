@@ -58,10 +58,13 @@ hub exits by itself after six idle hours, and stands aside for a newer Gullet.
 GULLET_PORT / GULLET_TOKEN are accepted as aliases — users know this as
 Tabglutton, "gullet" is only the sidecar's internal name.
 
-With no token flag or environment variable, Gullet checks ./.env and then
+With no token flag or environment variable, Gullet reads
 ~/.config/tabglutton/config.json. The global config may name tokenFile or
 tokenCommand, but may never contain the token itself. Its default token file is
-~/.config/tabglutton/token. XDG_CONFIG_HOME replaces ~/.config when set.
+~/.config/tabglutton/token. XDG_CONFIG_HOME replaces ~/.config when set. A
+./.env in the working directory is consulted last, only when no global token
+file exists — it is the one source read from a directory you did not choose, so
+it can supply a token but never replace one.
 
 The token is required before any browser may connect. Prefer the token file or
 environment: process arguments are visible to other local users.`;
@@ -131,12 +134,6 @@ export async function loadConfig(
   const directToken = flags.token ?? firstDefined(env, "TABGLUTTON_TOKEN", "GULLET_TOKEN");
   if (directToken !== undefined) return assembleConfig(selection, mode, directToken.trim());
 
-  const dotEnv = await readOptionalFile(join(runtime.cwd, ".env"), runtime);
-  if (dotEnv !== null) {
-    const token = firstDefined(parseDotEnv(dotEnv), "TABGLUTTON_TOKEN", "GULLET_TOKEN");
-    if (token !== undefined) return assembleConfig(selection, mode, token.trim());
-  }
-
   if (fileConfig.tokenCommand !== undefined) {
     const command = fileConfig.tokenCommand;
     return assembleConfig(
@@ -152,7 +149,7 @@ export async function loadConfig(
     dirname(paths.configFile),
     paths.home,
   );
-  return assembleConfig(selection, mode, "", tokenFileResolver(tokenFile, runtime));
+  return assembleConfig(selection, mode, "", tokenFileResolver(tokenFile, runtime.cwd, runtime));
 }
 
 type HubMode = Pick<TokenConfig, "detach" | "detachedHub">;
@@ -308,24 +305,56 @@ async function readFileConfig(path: string, runtime: ConfigRuntime): Promise<Fil
   return config;
 }
 
-function tokenFileResolver(path: string, runtime: ConfigRuntime): TokenResolver {
+/**
+ * `TABGLUTTON_TOKEN` / `GULLET_TOKEN` out of a `.env` in the working directory.
+ *
+ * Deliberately the **last** source consulted, below every global one. It is the
+ * only token source read out of a directory the user did not choose: an MCP host
+ * sets the sidecar's cwd to whatever project the agent was started in, so a
+ * cloned repository can ship a `.env` naming a token its author knows. While it
+ * outranked the global file, that repo silently replaced the token the options
+ * page's setup command writes — at best breaking the bridge for that session
+ * with the confusing "connected on <port>" / "no browser is connected" split,
+ * and at worst putting the session in a realm a stranger can also join. Below
+ * the global sources it can only ever *supply* a token nothing else had, which
+ * is the convenience it was added for.
+ */
+async function dotEnvToken(cwd: string, runtime: ConfigRuntime): Promise<string | undefined> {
+  const dotEnv = await readOptionalFile(join(cwd, ".env"), runtime);
+  if (dotEnv === null) return undefined;
+  const token = firstDefined(parseDotEnv(dotEnv), "TABGLUTTON_TOKEN", "GULLET_TOKEN")?.trim();
+  return token || undefined;
+}
+
+function tokenFileResolver(path: string, cwd: string, runtime: ConfigRuntime): TokenResolver {
   return async () => {
-    let token: string;
+    let token = "";
+    let absent = false;
     try {
       token = (await runtime.readFile(path)).trim();
     } catch (err) {
-      throw new ConfigError(
-        `Could not read Tabglutton's token file at ${path}: ${errorMessage(err)}. ` +
-          `Open Tabglutton's settings and copy the setup command again.`,
-      );
+      // A file that is not there yet is the ordinary state of a fresh install,
+      // and the one case `.env` is allowed to answer. Anything else — a
+      // permission error, a broken mount — is a real fault about a real file,
+      // and reporting it as "no token configured" would send the user looking
+      // in the wrong place.
+      if (!isNotFound(err)) {
+        throw new ConfigError(
+          `Could not read Tabglutton's token file at ${path}: ${errorMessage(err)}. ` +
+            `Open Tabglutton's settings and copy the setup command again.`,
+        );
+      }
+      absent = true;
     }
-    if (!token) {
-      throw new ConfigError(
-        `Tabglutton's token file at ${path} is empty. ` +
-          `Open Tabglutton's settings and copy the setup command again.`,
-      );
-    }
-    return token;
+    if (token) return token;
+
+    const fromDotEnv = await dotEnvToken(cwd, runtime);
+    if (fromDotEnv !== undefined) return fromDotEnv;
+
+    throw new ConfigError(
+      `Tabglutton's token file at ${path} is ${absent ? "missing" : "empty"}. ` +
+        `Open Tabglutton's settings and copy the setup command again.`,
+    );
   };
 }
 
