@@ -53,7 +53,7 @@ async function attachPeer(port: number, version?: string): Promise<WebSocket> {
             role: "peer",
             ...(version === undefined ? {} : { gullet: version }),
             nonce: randomNonce(),
-            proof: await deriveProof(TOKEN, msg.nonce),
+            proof: await deriveProof(TOKEN, msg.nonce, "peer", port),
           }),
         );
       } else if (msg.type === "hello-ack") {

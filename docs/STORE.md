@@ -8,10 +8,23 @@ between readings. AMO is live at `0.3.1`; Chrome has not been submitted.
 ▸ **Gullet's npm publish is gated on the extension being live, not the other way round.**
 `bunx tabglutton-gullet` is what the options page, `gullet/README.md`, and the r/mcp launch
 post all tell people to run — and the package has never been published, so every one of
-those instructions 404s today. The protocol half of that gate is now clear: AMO serves
-`0.3.1`, which is wire protocol 2, so a published sidecar would no longer refuse the
-handshake for Firefox users. Chrome is still unsubmitted, so anyone who finds the extension
-there later would meet the same mismatch in reverse.
+those instructions 404s today.
+
+▸ **That gate closed again, and this is now the binding constraint on the first publish.**
+The pre-publish security audit found the protocol-2 token proof to be relayable and fixed it
+by bumping the wire protocol to **3** (`SECURITY-REVIEW.md`, `docs/BRIDGE.md` §Wire
+protocol). Both stores currently serve `0.3.1`, which is protocol 2. A sidecar published
+from `main` today would therefore refuse the handshake for **every** installed user — on
+purpose: there is deliberately no downgrade path, because an attacker who can imitate the
+marker can also claim to be old. So the order is fixed, and it is the reverse of the note
+above:
+
+1. Ship the extension carrying protocol 3 to **both** stores and let it roll out.
+2. Only then publish `tabglutton-gullet` at the matching version.
+
+Publishing the sidecar first would ship a package whose only documented use is broken for
+everyone who follows the instructions. Under the versioning rule in `AGENTS.md` a
+`BRIDGE_PROTO` bump is a minor, so that release is **0.4.0** on both halves.
 
 The two versions are deliberately kept equal — extension `0.3.1` ships with Gullet `0.3.1`
 — so "keep them on the same version" is a rule a user can actually follow. Encoding the

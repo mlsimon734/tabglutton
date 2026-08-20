@@ -640,6 +640,15 @@ export class BridgeClient {
           this.teardown();
           return;
         }
+        // Pinned beside the token when this socket was dialled, and the guard at
+        // the top of onMessage means it belongs to *this* socket. Both are
+        // hashed material now, so neither may be guessed at.
+        const port = this.socketPort;
+        if (typeof msg.nonce !== "string" || port === null) {
+          console.warn("[tabglutton] bridge sidecar sent a malformed challenge");
+          this.teardown();
+          return;
+        }
         const token = this.socketToken;
         this.clientNonce = randomNonce();
         const hello: HelloMessage = {
@@ -649,14 +658,24 @@ export class BridgeClient {
           extVersion: browser.runtime.getManifest().version,
           label: this.label,
           nonce: this.clientNonce,
-          proof: await deriveProof(token, msg.nonce),
+          // Bound to "browser" and to the port we dialled — see deriveProof. A
+          // process squatting a candidate cannot forward this to the real hub,
+          // because it names the squatter's port and the hub checks its own.
+          proof: await deriveProof(token, msg.nonce, "browser", port),
         };
         this.send(socket, hello);
         return;
       }
       case "hello-ack": {
-        const expected = await deriveProof(this.socketToken, this.clientNonce);
-        if (!proofsMatch(msg.proof, expected)) {
+        const expected =
+          this.socketPort === null
+            ? null
+            : await deriveProof(this.socketToken, this.clientNonce, "server", this.socketPort);
+        if (
+          expected === null ||
+          typeof msg.proof !== "string" ||
+          !proofsMatch(msg.proof, expected)
+        ) {
           // Something is on our port that does not know the token. Do not talk to it.
           console.warn("[tabglutton] bridge server failed the token challenge");
           this.teardown();

@@ -141,6 +141,15 @@ export class PeerClient {
     if (!msg) return;
     switch (msg.type) {
       case "challenge": {
+        // Off the wire, and about to be hashed: a non-string nonce would hash
+        // material the hub never produced, so the failure belongs here where it
+        // can be named rather than three frames later as "token mismatch".
+        if (typeof msg.nonce !== "string") {
+          finish(new Error("hub sent a malformed challenge"));
+          this.socket?.close();
+          return;
+        }
+        const role = this.options.role ?? "peer";
         this.clientNonce = randomNonce();
         this.send({
           type: "hello",
@@ -149,18 +158,26 @@ export class PeerClient {
           browser: "firefox",
           extVersion: "peer",
           label: "peer",
-          role: this.options.role ?? "peer",
+          role,
           gullet: this.options.version,
           nonce: this.clientNonce,
-          proof: await deriveProof(this.options.token, msg.nonce),
+          // Bound to the role above and to the port we dialled. A squatter that
+          // forwards this to the real hub is presenting a proof that names *its*
+          // port, which is not the port the hub checks against.
+          proof: await deriveProof(this.options.token, msg.nonce, role, this.options.port),
         });
         return;
       }
       case "hello-ack": {
-        const expected = await deriveProof(this.options.token, this.clientNonce);
+        const expected = await deriveProof(
+          this.options.token,
+          this.clientNonce,
+          "server",
+          this.options.port,
+        );
         // The hub proves the token back, same as it does to a browser: a process
         // squatting the port must not be able to collect our tool traffic.
-        if (!proofsMatch(msg.proof, expected)) {
+        if (typeof msg.proof !== "string" || !proofsMatch(msg.proof, expected)) {
           finish(new Error("hub failed the token challenge"));
           this.socket?.close();
           return;

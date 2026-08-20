@@ -13,6 +13,7 @@ import {
   randomNonce,
   RETIRING_FOR_NEWER_PEER,
   type BridgeMessage,
+  type ProofRole,
 } from "../../src/bridge-protocol.js";
 import { Hub, isExtensionOrigin } from "../src/hub.js";
 import { EXT_VERSION } from "./fixtures.js";
@@ -44,10 +45,13 @@ function startHub(token = TOKEN, handshakeTimeoutMs?: number): Hub {
 /** A minimal stand-in for the extension's bridge client. */
 class FakeExtension {
   readonly socket: WebSocket;
+  /** Kept because protocol 3 binds every proof to the port it is presented at. */
+  readonly port: number;
   private readonly queue: BridgeMessage[] = [];
   private waiter: ((msg: BridgeMessage) => void) | null = null;
 
   constructor(port: number, origin: string = EXTENSION_ORIGIN) {
+    this.port = port;
     this.socket = new WebSocket(`ws://127.0.0.1:${port}`, { headers: { Origin: origin } });
     sockets.push(this.socket);
     this.socket.addEventListener("message", (event) => {
@@ -75,6 +79,11 @@ class FakeExtension {
     this.socket.send(JSON.stringify(msg));
   }
 
+  /** A proof bound to this client's channel — see deriveProof's `role`/`port`. */
+  proofFor(nonce: string, role: ProofRole, token = TOKEN): Promise<string> {
+    return deriveProof(token, nonce, role, this.port);
+  }
+
   /** Answer the challenge and verify the server's counter-proof. */
   async handshake(token = TOKEN, proto = BRIDGE_PROTO): Promise<string> {
     const challenge = await this.next();
@@ -88,11 +97,11 @@ class FakeExtension {
       extVersion: EXT_VERSION,
       label: "Zen",
       nonce,
-      proof: await deriveProof(token, challenge.nonce),
+      proof: await this.proofFor(challenge.nonce, "browser", token),
     });
     const ack = await this.next();
     if (ack.type !== "hello-ack") throw new Error(`expected hello-ack, got ${ack.type}`);
-    if (!proofsMatch(ack.proof, await deriveProof(TOKEN, nonce))) {
+    if (!proofsMatch(ack.proof, await this.proofFor(nonce, "server"))) {
       throw new Error("server failed the counter-challenge");
     }
     return ack.connectionId;
@@ -197,7 +206,7 @@ describe("handshake", () => {
       extVersion: EXT_VERSION,
       label: "Zen",
       nonce,
-      proof: await deriveProof(TOKEN, (challenge as { nonce: string }).nonce),
+      proof: await ext.proofFor((challenge as { nonce: string }).nonce, "browser"),
     });
     expect(JSON.stringify(await ext.next())).not.toContain(TOKEN);
   });
@@ -213,7 +222,7 @@ describe("handshake", () => {
       extVersion: EXT_VERSION,
       label: "Zen",
       nonce: randomNonce(),
-      proof: await deriveProof("wrong-token", (challenge as { nonce: string }).nonce),
+      proof: await ext.proofFor((challenge as { nonce: string }).nonce, "browser", "wrong-token"),
     });
     const reply = await ext.next();
     expect(reply).toMatchObject({ type: "hello-error", error: { code: "unauthorized" } });
@@ -231,7 +240,7 @@ describe("handshake", () => {
       extVersion: EXT_VERSION,
       label: "Zen",
       nonce: randomNonce(),
-      proof: await deriveProof("", (challenge as { nonce: string }).nonce),
+      proof: await ext.proofFor((challenge as { nonce: string }).nonce, "browser", ""),
     });
     expect(await ext.next()).toMatchObject({
       type: "hello-error",
@@ -250,7 +259,7 @@ describe("handshake", () => {
       extVersion: "9.9.9",
       label: "Zen",
       nonce: randomNonce(),
-      proof: await deriveProof(TOKEN, (challenge as { nonce: string }).nonce),
+      proof: await ext.proofFor((challenge as { nonce: string }).nonce, "browser"),
     });
     expect(await ext.next()).toMatchObject({ type: "hello-error", error: { code: "unsupported" } });
   });
@@ -473,7 +482,7 @@ describe("session accounting", () => {
       role: "peer",
       ...(version === undefined ? {} : { gullet: version }),
       nonce: randomNonce(),
-      proof: await deriveProof(TOKEN, challenge.nonce),
+      proof: await peer.proofFor(challenge.nonce, "peer"),
     });
     return peer;
   }
@@ -511,7 +520,7 @@ describe("session accounting", () => {
       extVersion: EXT_VERSION,
       label: "Zen",
       nonce,
-      proof: await deriveProof(TOKEN, challenge.nonce),
+      proof: await ext.proofFor(challenge.nonce, "browser"),
     });
     const ack = await ext.next();
     expect(ack.type).toBe("hello-ack");
@@ -588,14 +597,14 @@ describe("session accounting", () => {
       role: "probe",
       gullet: "1.0.0",
       nonce,
-      proof: await deriveProof(TOKEN, challenge.nonce),
+      proof: await probe.proofFor(challenge.nonce, "probe"),
     });
 
     // The proof still comes back both ways — this is a realm check, not a peek.
     const ack = await probe.next();
     expect(ack.type).toBe("hello-ack");
     if (ack.type !== "hello-ack") throw new Error("unreachable");
-    expect(proofsMatch(ack.proof, await deriveProof(TOKEN, nonce))).toBe(true);
+    expect(proofsMatch(ack.proof, await probe.proofFor(nonce, "server"))).toBe(true);
     expect(h.sessions).toBe(0);
 
     // The asker closes; the hub's own close is a backstop that must not race the
@@ -620,7 +629,7 @@ describe("session accounting", () => {
       label: "peer",
       role: "probe",
       nonce: randomNonce(),
-      proof: await deriveProof(TOKEN, challenge.nonce),
+      proof: await probe.proofFor(challenge.nonce, "probe"),
     });
     expect((await probe.next()).type).toBe("hello-ack");
     const closed = new Promise<void>((resolve) => {
@@ -647,7 +656,7 @@ describe("session accounting", () => {
       role: "probe",
       gullet: "2.0.0",
       nonce: randomNonce(),
-      proof: await deriveProof(TOKEN, challenge.nonce),
+      proof: await probe.proofFor(challenge.nonce, "probe"),
     });
     const answer = await probe.next();
     expect(answer.type).toBe("hello-error");

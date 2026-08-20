@@ -17,6 +17,7 @@ import {
   BridgeRequestError,
   compareGulletVersions,
   deriveProof,
+  errorMessage,
   parseMessage,
   proofsMatch,
   randomNonce,
@@ -24,6 +25,7 @@ import {
   toBridgeError,
   type BridgeMethod,
   type HelloMessage,
+  type ProofRole,
   type ServerMessage,
 } from "../../src/bridge-protocol.js";
 import {
@@ -43,9 +45,36 @@ const EXTENSION_ORIGIN_PREFIXES = ["moz-extension://", "chrome-extension://"];
  */
 const IDLE_CONNECTION_GRACE_MS = 2_000;
 
+/**
+ * How long the refused-origin line stays quiet after one is written, and how
+ * much of the offending header it carries.
+ *
+ * That line is the only thing this hub logs for a caller that has proved
+ * nothing, and its content is that caller's own header — so it is also the only
+ * one an unauthenticated local process can drive. A detached hub's stderr is a
+ * file (`hub.log`), and the README calls it "small by construction"; measured on
+ * Bun 1.3.14, a 15 KB `Origin` reaches the line verbatim and one loopback client
+ * sustained ~480 MB/s of it, which makes that claim false and the file a disk
+ * filler. One line a minute plus the suppressed count keeps the case actually
+ * worth seeing — a real foreign origin — at a bounded cost.
+ */
+const REFUSED_ORIGIN_LOG_INTERVAL_MS = 60_000;
+const REFUSED_ORIGIN_MAX_CHARS = 120;
+
 export function isExtensionOrigin(origin: string | null): boolean {
   if (!origin) return false;
   return EXTENSION_ORIGIN_PREFIXES.some((prefix) => origin.startsWith(prefix));
+}
+
+/**
+ * The proof role a hello is claiming. An absent `role` is the extension, which
+ * has never sent one; anything unrecognised is normalised to `"browser"` rather
+ * than rejected, and then simply fails the proof check — an unknown role is not
+ * a caller we can serve either way, and one refusal path is easier to reason
+ * about than two.
+ */
+function helloProofRole(role: HelloMessage["role"]): ProofRole {
+  return role === "peer" || role === "probe" ? role : "browser";
 }
 
 /**
@@ -121,6 +150,9 @@ export class Hub {
   private readonly connectWaiters = new Set<() => void>();
   private nextId = 1;
   private retiring = false;
+  /** Rate state for the one log line an unauthenticated caller can drive. */
+  private refusedOriginLoggedAt = 0;
+  private refusedOriginsSuppressed = 0;
 
   constructor(options: HubOptions) {
     this.options = options;
@@ -139,9 +171,7 @@ export class Hub {
           // curl), not an attempt at anything — logging it at error every
           // IDLE_PROBE_MS would bury the case worth seeing, which is a real
           // foreign origin. Both still get refused; only the volume differs.
-          if (origin !== null) {
-            console.error(`[gullet] refused upgrade from origin ${origin}`);
-          }
+          if (origin !== null) this.logRefusedOrigin(origin);
           return identifyingResponse("Forbidden", 403);
         }
         const data: SocketData = {
@@ -153,7 +183,17 @@ export class Hub {
       },
       websocket: {
         open: (ws) => this.onOpen(ws),
-        message: (ws, message) => void this.onMessage(ws, message),
+        // A throw out of the handler used to be an unhandled rejection *and* a
+        // leaked socket: `completeHandshake` disarms the reaper before it is
+        // finished, so a frame that failed after that point left a connection
+        // nothing would ever close. The frame is untrusted JSON and the parser
+        // narrows only `type`, so the guarantee has to be structural — every
+        // path out of a socket ends with the socket closed.
+        message: (ws, message) =>
+          void this.onMessage(ws, message).catch((err) => {
+            console.error(`[gullet] dropping ${ws.data.connectionId}: ${errorMessage(err)}`);
+            ws.close();
+          }),
         close: (ws) => this.onClose(ws),
       },
     });
@@ -348,6 +388,26 @@ export class Hub {
     });
   }
 
+  /** See REFUSED_ORIGIN_LOG_INTERVAL_MS: bounded, because nobody proved anything. */
+  private logRefusedOrigin(origin: string): void {
+    const now = Date.now();
+    if (now - this.refusedOriginLoggedAt < REFUSED_ORIGIN_LOG_INTERVAL_MS) {
+      this.refusedOriginsSuppressed += 1;
+      return;
+    }
+    const suppressed = this.refusedOriginsSuppressed;
+    this.refusedOriginLoggedAt = now;
+    this.refusedOriginsSuppressed = 0;
+    const shown =
+      origin.length > REFUSED_ORIGIN_MAX_CHARS
+        ? `${origin.slice(0, REFUSED_ORIGIN_MAX_CHARS)}…`
+        : origin;
+    console.error(
+      `[gullet] refused upgrade from origin ${shown}` +
+        (suppressed > 0 ? ` (and ${suppressed} more since the last such line)` : ""),
+    );
+  }
+
   /** Disarm the reaper — the socket has either proved the token or gone away. */
   private clearHandshakeTimer(ws: Bun.ServerWebSocket<SocketData>): void {
     if (ws.data.handshakeTimer === undefined) return;
@@ -423,8 +483,22 @@ export class Hub {
       );
       return;
     }
-    const expected = await deriveProof(this.options.token, ws.data.serverNonce);
-    if (typeof msg.proof !== "string" || !proofsMatch(msg.proof, expected)) {
+    // Both are read off an untrusted frame — `parseMessage` narrows `type` and
+    // nothing else — and both are about to become hashed material, where a
+    // non-string would either throw or stringify into something that is not
+    // what the other side hashed. Refuse rather than either.
+    if (typeof msg.nonce !== "string" || typeof msg.proof !== "string") {
+      this.rejectHandshake(ws, "unauthorized", "Malformed hello: nonce and proof must be strings.");
+      return;
+    }
+
+    // The role the caller *claims*, which is the role its proof has to have been
+    // minted for. Deriving against anything else would let a proof made as one
+    // kind of caller be spent as another — the second half of what protocol 3
+    // closes, after the port.
+    const role = helloProofRole(msg.role);
+    const expected = await deriveProof(this.options.token, ws.data.serverNonce, role, this.port);
+    if (!proofsMatch(msg.proof, expected)) {
       this.rejectHandshake(ws, "unauthorized", "Token mismatch.");
       return;
     }
@@ -510,7 +584,10 @@ export class Hub {
       type: "hello-ack",
       proto: BRIDGE_PROTO,
       connectionId: ws.data.connectionId,
-      proof: await deriveProof(this.options.token, nonce),
+      // `"server"` and our own port: the counter-proof is bound to this end of
+      // this channel, so a client's proof can never be reflected back at it as
+      // an ack, and an ack minted here is worthless anywhere else.
+      proof: await deriveProof(this.options.token, nonce, "server", this.port),
       sessions: this.sessions,
     });
   }
