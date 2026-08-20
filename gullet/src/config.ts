@@ -320,7 +320,17 @@ async function readFileConfig(path: string, runtime: ConfigRuntime): Promise<Fil
  * is the convenience it was added for.
  */
 async function dotEnvToken(cwd: string, runtime: ConfigRuntime): Promise<string | undefined> {
-  const dotEnv = await readOptionalFile(join(cwd, ".env"), runtime);
+  let dotEnv: string | null;
+  try {
+    dotEnv = await readOptionalFile(join(cwd, ".env"), runtime);
+  } catch {
+    // A `.env` that is a directory, or unreadable, is not the user's problem
+    // here — the problem is the missing token file that sent us looking. Letting
+    // this throw would replace "your token file is missing, copy the setup
+    // command again" with a complaint about a file they never meant as a token
+    // source at all.
+    return undefined;
+  }
   if (dotEnv === null) return undefined;
   const token = firstDefined(parseDotEnv(dotEnv), "TABGLUTTON_TOKEN", "GULLET_TOKEN")?.trim();
   return token || undefined;
@@ -348,8 +358,15 @@ function tokenFileResolver(path: string, cwd: string, runtime: ConfigRuntime): T
     }
     if (token) return token;
 
-    const fromDotEnv = await dotEnvToken(cwd, runtime);
-    if (fromDotEnv !== undefined) return fromDotEnv;
+    // Only an *absent* global file lets `.env` answer. A file that exists and is
+    // empty is a half-finished setup — the setup command interrupted, a
+    // truncated write — and treating that as "no global token" would hand the
+    // realm to a cloned repo's `.env` in exactly the case this ordering exists
+    // to prevent. Present-but-empty is a fault about a real file, and says so.
+    if (absent) {
+      const fromDotEnv = await dotEnvToken(cwd, runtime);
+      if (fromDotEnv !== undefined) return fromDotEnv;
+    }
 
     throw new ConfigError(
       `Tabglutton's token file at ${path} is ${absent ? "missing" : "empty"}. ` +

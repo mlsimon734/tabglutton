@@ -7,7 +7,7 @@ Reviewed against the documented boundary in `docs/BRIDGE.md` §Trust boundary, �
 
 Reviewed at `930798e`. Every real finding below is now **fixed on this branch**.
 `bun run check` is green (typecheck, oxfmt, oxlint 0/0, `web-ext lint` 0 errors,
-**565 tests pass / 0 fail**).
+**567 tests pass / 0 fail**).
 
 **Headline:** one real design flaw — the mutual token proof was **relayable**, so a local
 process that knew no token could obtain full bridge access. Proven with a working exploit
@@ -551,7 +551,7 @@ be consistent and free, but nothing is exposed by it today.
 
 ## What I changed
 
-`bun run check` exits 0: typecheck, oxfmt, oxlint 0/0, `web-ext lint` 0 errors, 565 tests.
+`bun run check` exits 0: typecheck, oxfmt, oxlint 0/0, `web-ext lint` 0 errors, 567 tests.
 
 | File                            | Change                                                                                                                                                                                                                                         |
 | ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -581,6 +581,67 @@ be consistent and free, but nothing is exposed by it today.
 - **The `tab_read` untrusted-content marker** (see #6) — changes the shape of every tool
   result an agent reads.
 - **#16 / #17** — accepted-by-design; noted so they stay decisions.
+
+## Follow-up review (`/code-review medium`, after the fixes)
+
+An independent pass over the three commits. It confirmed the channel binding itself —
+traced every `deriveProof` call site, checked the hub derives against `helloProofRole(msg.role)`
+and its real bound port, and that the reverse relay (forwarding an ack) dies on
+`"server"`+port too. Seven findings, all about the rollout and residual edges. Verdicts:
+
+| Finding                                                                                    | Verdict                          | Action                    |
+| ------------------------------------------------------------------------------------------ | -------------------------------- | ------------------------- |
+| `rejectHandshake` bypasses the new log rate limit via untrusted `msg.proto`                | **valid — a hole in my own fix** | fixed                     |
+| `.env` fallback also fires on an _empty_ global token file, contradicting the docs         | **valid**                        | fixed                     |
+| A protocol bump cannot retire a running detached hub                                       | **valid; proposed fix unsafe**   | fixed differently         |
+| "Mixed versions fail with a message naming which end to update" is false for the extension | **valid**                        | fixed, incl. a new status |
+| `dotEnvToken` can throw a `.env` error when the real problem is the token file             | **valid**                        | fixed                     |
+| No Hub-level test that a wrong-port or wrong-role proof is rejected                        | **valid**                        | fixed                     |
+| CHANGELOG heading says 0.3.2 while the release must be 0.4.0                               | **valid, out of scope**          | not actioned — see below  |
+
+**The log-limit bypass was the important one, and it was mine.** I bounded the refused-origin
+line and missed that `rejectHandshake` logs unconditionally one frame later, with
+`Extension speaks protocol ${msg.proto}` interpolating a field `parseMessage` never narrows.
+A local process needed only an extension `Origin` header — no token — to write unbounded
+attacker-sized lines. Measured after the fix: **40 hellos carrying a 100 KB `proto` produce
+125 bytes** of log, against roughly 4 MB before. Every pre-authentication line now goes
+through `logUnauthenticated`, in separate buckets, and `proto` is rendered by type rather
+than by value. Post-proof rejections (retirement) stay unthrottled — reaching one means
+holding the token.
+
+**On the detached hub, the reviewer's proposed fix does not work and the finding still
+stands.** Moving `shouldRetireFor` above the proto check would let a caller retire the hub
+_before proving the token_ — any local process could then kill it at will, which is a worse
+bug than the one being fixed. And it would not help even so: the proof is protocol-shaped,
+so a newer peer's proof can never verify at an older hub, and neither end dials an
+incompatible marker anyway. **Retirement across a protocol boundary is impossible by
+construction, and nothing in a new release can fix it for the release before it.** Handled
+diagnostically instead: Gullet's exhaustion fault now names the port and
+`pkill -f "gullet.*--detached-hub"`, the extension reports a distinct `incompatible-sidecar`
+status in both port modes (it previously showed "Waiting for a sidecar" forever, beside a
+sidecar that was running fine), the CHANGELOG carries the one-time upgrade step, and
+`AGENTS.md` records the constraint so the next bump does not rediscover it.
+
+**The empty-token-file fall-through** was the sharpest of the small ones: a truncated or
+half-written `~/.config/tabglutton/token` still let a cloned repo's `.env` pick the realm —
+exactly the substitution #5 exists to prevent. The fallback is now gated on `ENOENT`, and
+present-but-empty reports itself as the half-finished setup it is.
+
+**The missing Hub-level tests** were the best finding for durability, and I mutation-checked
+the two I added: reverting `deriveProof` to the proto-2 material fails exactly four tests —
+the two new Hub rejections and the two new derivation separations — and nothing else. Without
+them a refactor that quietly drops `role`/`port` would have passed the whole suite.
+
+**Not actioned: the CHANGELOG heading.** The reviewer is right that `scripts/release-notes.ts`
+matches by exact heading version, so tagging `v0.4.0` against a `0.3.2` section makes
+`release.yml` exit non-zero and no release cuts. That is a real release-blocking consequence
+and it is recorded here and in the PR body — but renumbering was explicitly excluded from
+this branch: 0.3.1 is live on both stores and PR #44 is open against that section, so the
+version decision belongs to the release pass. The independent confirmation is worth having;
+acting on it here is not mine to do.
+
+**Not re-raised:** `clip-verify.ts`'s unvalidated `file` join (#7) — the reviewer read the
+documented non-fix and agreed with the reasoning.
 
 ## Method
 

@@ -211,6 +211,55 @@ describe("handshake", () => {
     expect(JSON.stringify(await ext.next())).not.toContain(TOKEN);
   });
 
+  // The two halves of protocol 3, asserted where they actually decide something.
+  // tests/bridge-protocol.test.ts proves deriveProof *differs* by port and role;
+  // these prove the Hub *refuses* on that difference, which is the property the
+  // relay exploit in SECURITY-REVIEW.md turns on. Without them a refactor that
+  // quietly drops `role`/`port` from the derivation passes the whole suite.
+  test("a proof minted for another port is refused — this is the relay defence", async () => {
+    const started = startHub();
+    const ext = new FakeExtension(started.port);
+    const challenge = await ext.next();
+    if (challenge.type !== "challenge") throw new Error("expected challenge");
+    ext.send({
+      type: "hello",
+      proto: BRIDGE_PROTO,
+      browser: "firefox",
+      extVersion: EXT_VERSION,
+      label: "Zen",
+      nonce: randomNonce(),
+      // Exactly what a squatter forwards: a real proof of the real token, made
+      // by an honest client that dialled the squatter's port, not this one.
+      proof: await deriveProof(TOKEN, challenge.nonce, "browser", started.port + 1),
+    });
+    expect(await ext.next()).toMatchObject({
+      type: "hello-error",
+      error: { code: "unauthorized" },
+    });
+    expect(started.summaries()).toEqual([]);
+  });
+
+  test("a browser's proof cannot be spent as a peer", async () => {
+    const started = startHub();
+    const ext = new FakeExtension(started.port, "moz-extension://gullet-peer");
+    const challenge = await ext.next();
+    if (challenge.type !== "challenge") throw new Error("expected challenge");
+    ext.send({
+      type: "hello",
+      proto: BRIDGE_PROTO,
+      browser: "firefox",
+      extVersion: "peer",
+      label: "peer",
+      role: "peer",
+      nonce: randomNonce(),
+      proof: await ext.proofFor(challenge.nonce, "browser"),
+    });
+    expect(await ext.next()).toMatchObject({
+      type: "hello-error",
+      error: { code: "unauthorized" },
+    });
+  });
+
   test("a wrong token is refused and never registers", async () => {
     const started = startHub();
     const ext = new FakeExtension(started.port);

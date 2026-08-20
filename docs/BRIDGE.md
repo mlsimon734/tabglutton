@@ -427,8 +427,35 @@ from the other side ahead of two more.
 
 This is a hard cut. There is no proto-2 fallback and no negotiated downgrade, because an
 attacker who can imitate the marker can also claim to be old, and a downgrade path would
-keep the hole reachable from the very position the fix exists to defend against. Mixed
-versions fail the handshake with a message naming which end to update.
+keep the hole reachable from the very position the fix exists to defend against.
+
+▸ **A protocol bump cannot retire a running detached hub, and the upgrade has to account
+for that.** The two mechanisms are ordered against each other and cannot be reordered out
+of it: `shouldRetireFor` runs only after a peer has _proved the token_, and the proof is
+itself protocol-shaped, so a newer sidecar's proof can never verify at an older hub. The
+extension and the sidecar do not even get that far — `probeCandidate` classifies a marker
+at another protocol as `incompatible` and neither one dials it, which is deliberate (a
+markerless or foreign endpoint must never be handed a proof, and a failed WebSocket connect
+is what feeds Gecko's `FailDelayManager`). So an older detached hub keeps its port until it
+idles out after `DETACHED_HUB_IDLE_EXIT_MS`, or longer if old sessions keep re-attaching
+and resetting that clock.
+
+Nothing in a _new_ release can fix this for the release before it, so the handling is
+diagnostic rather than automatic, in both directions:
+
+- Gullet's candidate-exhaustion fault names the incompatible port and the remedy
+  (`pkill -f "gullet.*--detached-hub"`), because the process holding it is one the user
+  never started by hand and has no reason to know about.
+- The extension reports `incompatible-sidecar` — "Sidecar version mismatch" — in **both**
+  port modes, rather than the `idle` it used to show. Rotating to another candidate cannot
+  help when the thing on the port is a Gullet whose protocol we refuse, and after a bump
+  this is the expected state of every half-upgraded install; leaving it as "waiting for a
+  sidecar", next to a sidecar that is running perfectly well, is precisely the failure the
+  `port-conflict` label was added to stop.
+
+The hub's own `hello-error` — "Extension speaks protocol X; this Gullet speaks Y. Update
+whichever is older." — is real but only reaches a caller that got as far as dialling, which
+after a bump is nobody. It is the peer path's message, not the browser's.
 
 Shared request/response types live in `src/bridge-protocol.ts`, imported by both the
 extension and Gullet so the contract is typechecked from one definition.

@@ -27,6 +27,14 @@ it moves the wire protocol.
   squatter is worthless at the real hub. No fallback and no negotiated downgrade: an
   attacker who can imitate the marker can also claim to be old.
 
+  **Upgrading needs one manual step, once.** A background hub started by the previous
+  version outlives the session that spawned it and keeps its port, and a protocol bump
+  cannot ask it to stand aside — retiring requires proving the token, and the proof is
+  itself protocol-shaped. If the bridge does not come back after updating, stop the old
+  hub: `pkill -f "gullet.*--detached-hub"`. Tabglutton's settings now say **"Sidecar
+  version mismatch — update both halves"** instead of sitting on "Waiting for a sidecar",
+  and Gullet names the port and this command in its own error.
+
 ### Features
 
 - **Devour can write plain markdown files instead of filing into Obsidian**

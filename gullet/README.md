@@ -122,7 +122,9 @@ is the one source read out of a directory you did not choose — an MCP host set
 process's working directory to whatever project your agent session started in, so a cloned
 repository can ship a `.env` naming a token its author knows. Last means it can supply a
 token nothing else had, and can never silently replace the one the setup command wrote.
-(It moved there in 0.4.0; before that it outranked the global file.)
+It answers only when the global file is absent — a file that exists and is empty is a
+half-finished setup, and reports itself as one rather than handing the realm to a `.env`.
+(It previously outranked the global file; the move landed with the wire-protocol-3 release.)
 
 Port selection uses `--port`, then `TABGLUTTON_PORT` / `GULLET_PORT`, then the global
 config, then automatic discovery. A fixed number must match the browser's fixed-port

@@ -183,6 +183,7 @@ export type BridgeStatus =
   | "connecting"
   | "connected"
   | "port-conflict"
+  | "incompatible-sidecar"
   | "needs-access";
 
 export interface BridgeClientDeps {
@@ -237,7 +238,14 @@ export class BridgeClient {
   /** A counting tick landed while a probe was in flight; the probe consumes it. */
   private countedTickPending = false;
   /** Latched by the probe when a stranger holds the port; see setPortConflict. */
-  private portConflict = false;
+  /**
+   * What the probe last found holding a candidate, latched because the evidence
+   * is gone by the time `status` is asked. `"foreign"` is some other program;
+   * `"incompatible"` is Gullet at a wire protocol we cannot speak, which is a
+   * different problem with a different fix and used to be collapsed into the
+   * same answer.
+   */
+  private portObstruction: "foreign" | "incompatible" | null = null;
   /** Latched when the loopback origin is not granted; see hasHostAccess. */
   private hostAccessDenied = false;
   /**
@@ -370,7 +378,16 @@ export class BridgeClient {
     // it no probe ran, so any latched conflict is evidence from before.
     if (this.phase === "closed") {
       if (this.hostAccessDenied) return "needs-access";
-      const fixedConflict = this.deps.getSettings().bridgePortMode === "fixed" && this.portConflict;
+      // A version mismatch is reported in *both* port modes, unlike a foreign
+      // listener: rotating to another candidate cannot help when the thing on
+      // the port is a Gullet whose protocol we refuse, and after a wire-protocol
+      // bump this is the expected state of every half-upgraded install. Left as
+      // "idle" it renders "waiting for a sidecar" forever, next to a sidecar
+      // that is running perfectly well — which is exactly what the port-conflict
+      // label exists to stop happening.
+      if (this.portObstruction === "incompatible") return "incompatible-sidecar";
+      const fixedConflict =
+        this.deps.getSettings().bridgePortMode === "fixed" && this.portObstruction === "foreign";
       return fixedConflict ? "port-conflict" : "idle";
     }
     return "connecting";
@@ -413,17 +430,25 @@ export class BridgeClient {
    * Latched from the probe rather than derived, because the evidence is gone by
    * the time anyone asks: `status` is a getter with no port to inspect.
    */
-  private setPortConflict(conflict: boolean): void {
+  private setPortObstruction(found: "foreign" | "incompatible" | null): void {
     // A foreign automatic candidate is merely skipped; only fixed mode leaves
-    // the user with a port they must change themselves.
-    if (this.deps.getSettings().bridgePortMode === "auto") conflict = false;
-    if (this.portConflict === conflict) return;
-    this.portConflict = conflict;
-    if (conflict) {
+    // the user with a port they must change themselves. An incompatible one is
+    // latched in either mode — see `status`.
+    if (found === "foreign" && this.deps.getSettings().bridgePortMode === "auto") found = null;
+    if (this.portObstruction === found) return;
+    this.portObstruction = found;
+    if (found === "foreign") {
       console.warn(
         `[tabglutton] port ${this.deps.getSettings().bridgePort} answers, but not as Gullet — ` +
           `another program is using it. Not dialling. Change the port in Tabglutton's ` +
           `settings and pass the same --port to Gullet.`,
+      );
+    }
+    if (found === "incompatible") {
+      console.warn(
+        `[tabglutton] a Gullet is running, but it speaks a different bridge protocol than ` +
+          `this extension. Not dialling — mixed versions are refused rather than allowed to ` +
+          `half-work. Update whichever is older so both are on the same release.`,
       );
     }
     this.deps.onStatusChange(this.status, this.connectedPort);
@@ -520,11 +545,11 @@ export class BridgeClient {
       // positive evidence that dialling is pointless. Counting it would rebuild
       // the same pathology, just four ticks later.
       this.countedTickPending = false;
-      this.setPortConflict(true);
+      this.setPortObstruction(result);
       this.scheduleIdleProbe();
       return;
     }
-    this.setPortConflict(false);
+    this.setPortObstruction(null);
     if (result === "silent") {
       // Nothing there, which costs nothing to keep asking about: every miss
       // re-arms the loop, so the loop lives exactly as long as the port is
@@ -974,7 +999,7 @@ export class BridgeClient {
   private setPhase(phase: Phase): void {
     this.phase = phase;
     // A socket that opened disproves the fixed-port latch outright.
-    if (phase === "open") this.portConflict = false;
+    if (phase === "open") this.portObstruction = null;
     this.deps.onStatusChange(this.status, this.connectedPort);
   }
 }

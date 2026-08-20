@@ -46,19 +46,24 @@ const EXTENSION_ORIGIN_PREFIXES = ["moz-extension://", "chrome-extension://"];
 const IDLE_CONNECTION_GRACE_MS = 2_000;
 
 /**
- * How long the refused-origin line stays quiet after one is written, and how
- * much of the offending header it carries.
+ * How long a line that an *unproved* caller can cause stays quiet after one is
+ * written, and how much of an offending header such a line may carry.
  *
- * That line is the only thing this hub logs for a caller that has proved
- * nothing, and its content is that caller's own header — so it is also the only
- * one an unauthenticated local process can drive. A detached hub's stderr is a
- * file (`hub.log`), and the README calls it "small by construction"; measured on
- * Bun 1.3.14, a 15 KB `Origin` reaches the line verbatim and one loopback client
- * sustained ~480 MB/s of it, which makes that claim false and the file a disk
- * filler. One line a minute plus the suppressed count keeps the case actually
- * worth seeing — a real foreign origin — at a bounded cost.
+ * A detached hub's stderr is a file (`hub.log`) that the README calls "small by
+ * construction". That is only true if every line reachable before the token is
+ * proved is bounded in both size and rate. Measured on Bun 1.3.14: a 15 KB
+ * `Origin` reached the refused-upgrade line verbatim and one loopback client
+ * sustained ~480 MB/s of it.
+ *
+ * There are two such lines, not one, and missing the second is how this nearly
+ * shipped half-fixed: the refused-upgrade line, and every `hello-error` before
+ * authentication — which a local process reaches simply by presenting any
+ * extension Origin, and whose protocol-mismatch text interpolates a field off
+ * the wire. Both go through `logUnauthenticated`, in separate buckets so a flood
+ * of one cannot hide the other. Post-proof rejections (retirement) are not
+ * throttled: reaching one means holding the token.
  */
-const REFUSED_ORIGIN_LOG_INTERVAL_MS = 60_000;
+const UNAUTHENTICATED_LOG_INTERVAL_MS = 60_000;
 const REFUSED_ORIGIN_MAX_CHARS = 120;
 
 export function isExtensionOrigin(origin: string | null): boolean {
@@ -75,6 +80,20 @@ export function isExtensionOrigin(origin: string | null): boolean {
  */
 function helloProofRole(role: HelloMessage["role"]): ProofRole {
   return role === "peer" || role === "probe" ? role : "browser";
+}
+
+/**
+ * A hello's claimed protocol, safe to put in a message that reaches `hub.log`.
+ *
+ * `parseMessage` narrows `type` and nothing else, so this is whatever JSON
+ * arrived. A number is the only shape worth repeating back; anything else is
+ * named by its type rather than its value, because the value is unbounded
+ * attacker input and this line is logged before anyone has proved anything.
+ */
+function describeProto(proto: unknown): string {
+  return typeof proto === "number" && Number.isFinite(proto)
+    ? String(proto)
+    : `a non-numeric value`;
 }
 
 /**
@@ -150,9 +169,8 @@ export class Hub {
   private readonly connectWaiters = new Set<() => void>();
   private nextId = 1;
   private retiring = false;
-  /** Rate state for the one log line an unauthenticated caller can drive. */
-  private refusedOriginLoggedAt = 0;
-  private refusedOriginsSuppressed = 0;
+  /** Rate state per bucket for the lines an unproved caller can drive. */
+  private readonly unauthLog = new Map<string, { at: number; suppressed: number }>();
 
   constructor(options: HubOptions) {
     this.options = options;
@@ -388,24 +406,31 @@ export class Hub {
     });
   }
 
-  /** See REFUSED_ORIGIN_LOG_INTERVAL_MS: bounded, because nobody proved anything. */
-  private logRefusedOrigin(origin: string): void {
+  /**
+   * One line per bucket per UNAUTHENTICATED_LOG_INTERVAL_MS, carrying the count
+   * it stood in for. Everything an unproved caller can make this hub write goes
+   * through here; see the constant for why that set is larger than it looks.
+   */
+  private logUnauthenticated(bucket: string, message: string): void {
     const now = Date.now();
-    if (now - this.refusedOriginLoggedAt < REFUSED_ORIGIN_LOG_INTERVAL_MS) {
-      this.refusedOriginsSuppressed += 1;
+    const state = this.unauthLog.get(bucket);
+    if (state && now - state.at < UNAUTHENTICATED_LOG_INTERVAL_MS) {
+      state.suppressed += 1;
       return;
     }
-    const suppressed = this.refusedOriginsSuppressed;
-    this.refusedOriginLoggedAt = now;
-    this.refusedOriginsSuppressed = 0;
+    const suppressed = state?.suppressed ?? 0;
+    this.unauthLog.set(bucket, { at: now, suppressed: 0 });
+    console.error(
+      message + (suppressed > 0 ? ` (and ${suppressed} more since the last such line)` : ""),
+    );
+  }
+
+  private logRefusedOrigin(origin: string): void {
     const shown =
       origin.length > REFUSED_ORIGIN_MAX_CHARS
         ? `${origin.slice(0, REFUSED_ORIGIN_MAX_CHARS)}…`
         : origin;
-    console.error(
-      `[gullet] refused upgrade from origin ${shown}` +
-        (suppressed > 0 ? ` (and ${suppressed} more since the last such line)` : ""),
-    );
+    this.logUnauthenticated("origin", `[gullet] refused upgrade from origin ${shown}`);
   }
 
   /** Disarm the reaper — the socket has either proved the token or gone away. */
@@ -471,7 +496,11 @@ export class Hub {
       this.rejectHandshake(
         ws,
         "unsupported",
-        `Extension speaks protocol ${msg.proto}; this Gullet speaks ${BRIDGE_PROTO}. Update whichever is older.`,
+        // `proto` is untrusted JSON, and this message reaches a log file. It is
+        // rendered rather than interpolated for the same reason the refused-
+        // origin line is truncated — see REFUSED_ORIGIN_LOG_INTERVAL_MS; a raw
+        // 100 KB `proto` here would walk straight around that limit.
+        `Extension speaks protocol ${describeProto(msg.proto)}; this Gullet speaks ${BRIDGE_PROTO}. Update whichever is older.`,
       );
       return;
     }
@@ -510,7 +539,7 @@ export class Hub {
     // to serve a session or merely to look. A browser never can — it has no
     // Gullet version to offer, and `shouldRetireFor` would refuse it anyway.
     if ((msg.role === "peer" || msg.role === "probe") && this.shouldRetireFor(msg.gullet)) {
-      this.rejectHandshake(ws, "unsupported", this.retirementMessage(msg.gullet));
+      this.rejectHandshake(ws, "unsupported", this.retirementMessage(msg.gullet), true);
       this.retire();
       return;
     }
@@ -592,12 +621,21 @@ export class Hub {
     });
   }
 
+  /**
+   * `proven` says whether the caller had already proved the token when this was
+   * decided. Only a retirement has; every other rejection here is reachable by
+   * anything that can open a socket with an extension Origin, so its log line is
+   * rate-limited while the message it sends back is not.
+   */
   private rejectHandshake(
     ws: Bun.ServerWebSocket<SocketData>,
     code: "unauthorized" | "unsupported",
     message: string,
+    proven = false,
   ): void {
-    console.error(`[gullet] handshake rejected: ${message}`);
+    const line = `[gullet] handshake rejected: ${message}`;
+    if (proven) console.error(line);
+    else this.logUnauthenticated("handshake", line);
     this.send(ws, { type: "hello-error", error: { code, message } });
     ws.close();
   }
