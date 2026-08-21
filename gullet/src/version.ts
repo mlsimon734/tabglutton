@@ -9,4 +9,4 @@
  * Its own module so `backend.ts` can read it without importing `main.ts`, which
  * imports `backend.ts`.
  */
-export const GULLET_VERSION = "0.3.1";
+export const GULLET_VERSION = "0.4.0";

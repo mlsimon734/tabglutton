@@ -2,7 +2,7 @@
 
 All notable changes to Tabglutton are documented here.
 
-## [0.3.2](https://github.com/mlsimon734/tabglutton/compare/v0.3.1...v0.3.2) (unreleased)
+## [0.4.0](https://github.com/mlsimon734/tabglutton/compare/v0.3.1...v0.4.0) (2026-08-21)
 
 Two threads. Devour no longer requires Obsidian — a clip can land as a plain markdown file
 in the download folder, chosen on the options page or during onboarding. And the browser's

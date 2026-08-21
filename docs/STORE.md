@@ -3,7 +3,8 @@
 Listing copy, store-platform findings, and the image pipeline for Tabglutton on
 addons.mozilla.org (AMO) and the Chrome Web Store. Reference material, not a tracker: what
 is left to do on any given day belongs in an issue, not in checkboxes here that go stale
-between readings. AMO is live at `0.3.1`; Chrome has not been submitted.
+between readings. Both stores are live at `0.3.1`: AMO, and the Chrome Web Store as
+item `dlploljcggbdcjcaiigmoagonmehglhi`, published 2026-08-17.
 
 ▸ **Gullet's npm publish is gated on the extension being live, not the other way round.**
 `bunx tabglutton-gullet` is what the options page, `gullet/README.md`, and the r/mcp launch
@@ -301,8 +302,8 @@ rewrites ws://127.0.0.1 to wss:// and breaks the loopback connection.
 
 ## 4. Chrome Web Store
 
-Not yet submitted. Publishing requires a developer account, which carries a one-time **$5
-USD** registration fee; AMO is free.
+Live since 2026-08-17 at item `dlploljcggbdcjcaiigmoagonmehglhi`. Publishing required a
+developer account carrying a one-time **$5 USD** registration fee; AMO is free.
 
 | Field              | Value                                                           |
 | ------------------ | --------------------------------------------------------------- |
