@@ -160,6 +160,10 @@
                 </small>
               </span>
             </label>
+            <!-- Never `hidden`: a role="status" that is hidden until it has
+                 text is not a live region when the text arrives. Empty, it
+                 collapses to nothing (see the :empty rule in options.css). -->
+            <p id="downloadsWarning" class="vault-warning" role="status"></p>
           </div>
         </div>
 

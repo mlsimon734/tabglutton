@@ -227,6 +227,20 @@ input::placeholder {
   line-height: 1.5;
 }
 
+/* The stack already supplies the gap. */
+.radio-stack > .vault-warning {
+  margin-top: 0;
+}
+
+/* The destination notice stays in the DOM even with nothing to say, so it is a
+   live region by the time it has something — `hidden` would take it out of the
+   accessibility tree and the announcement with it. With no content it has no
+   height, and the negative margin cancels the flex gap it would still be
+   allotted, so an empty region costs exactly nothing. */
+.radio-stack > .vault-warning:empty {
+  margin-top: calc(-1 * var(--space-2));
+}
+
 code {
   font-family: var(--font-mono);
   font-size: var(--fs-tiny);

@@ -6,7 +6,12 @@
 // `obsidian://` launch from a successful one, so it could never know when to
 // switch, and the destination is a setting the user picks.
 
-import { clipNotePath, type ClipPayload, type FilePlatform } from "./clip-format.js";
+import {
+  clipNotePath,
+  sanitizePathSegment,
+  type ClipPayload,
+  type FilePlatform,
+} from "./clip-format.js";
 import type { SiteRule } from "./site-rules.js";
 import { IS_CHROME } from "./target.js";
 
@@ -42,7 +47,16 @@ export function clipDownloadPath(
   // Popped before the folders are filtered: a note name that trims away to
   // nothing would otherwise promote its folder into the file name.
   const name = downloadSegment(parts.pop() ?? "") || "Untitled";
-  const folders = parts.map(downloadSegment).filter(Boolean);
+  // The folders get the note name's own per-platform sanitizer too. Only the
+  // note name is sanitized on the way here — the base folder is free text the
+  // user typed and the subfolder comes from a rule — so a folder called
+  // `Q1: Notes`, or one carrying a control character, otherwise reached
+  // `downloads.download` unfiltered, where Chrome silently rewrites it and
+  // Windows Firefox can refuse the call. Filed under a name the note itself
+  // could have carried, rather than under whichever one the engine invents.
+  const folders = parts
+    .map((segment) => downloadSegment(sanitizePathSegment(segment, platform)))
+    .filter(Boolean);
   return [...folders, `${name}.md`].join("/");
 }
 

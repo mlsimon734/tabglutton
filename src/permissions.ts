@@ -40,22 +40,64 @@ export async function hasOrigins(origins: string[]): Promise<boolean> {
 }
 
 /**
- * Whether the `downloads` permission is held. Never prompts; safe from the
- * background page, for the same reason as `hasOrigins`.
+ * The `downloads` grant, with "could not ask" kept apart from "not granted".
  *
  * The file destination writes through `downloads`, which is optional on both
  * engines rather than required — Firefox renders it as "Download files and read
  * and modify the browser's download history", and a *newly* required permission
  * disables an existing Chrome install until the user re-approves it. Neither
  * cost is worth charging every user for a destination most will never pick.
+ *
+ * Three answers rather than two, because every caller here *acts* on a missing
+ * grant — reverting the destination the user chose, persisting that revert,
+ * refusing a whole run, telling an agent the permission is gone — and doing any
+ * of that over a `permissions.contains` that merely threw would turn a failed
+ * read into destroyed state and a false claim. `unknown` therefore means "carry
+ * on as before" everywhere: the same rule the clip verifier states, that
+ * inability to check is never a verdict. Never prompts; safe from the
+ * background page, for the same reason as `hasOrigins`.
  */
-export async function hasDownloads(): Promise<boolean> {
+export type DownloadsGrant = "held" | "missing" | "unknown";
+
+export async function downloadsGrant(): Promise<DownloadsGrant> {
   try {
-    return await browser.permissions.contains({ permissions: ["downloads"] });
-  } catch {
-    return false;
+    return (await browser.permissions.contains({ permissions: ["downloads"] }))
+      ? "held"
+      : "missing";
+  } catch (err) {
+    console.warn("[tabglutton] downloads permission check failed", err);
+    return "unknown";
   }
 }
+
+/** The fail-safe collapse, for the one caller that wants a refusal either way. */
+async function hasDownloads(): Promise<boolean> {
+  return (await downloadsGrant()) === "held";
+}
+
+/**
+ * What a surface that *has* a gesture says when the file destination has no
+ * grant behind it. Shared by onboarding and the options page because both do
+ * the same thing about it: revert the destination to Obsidian. Reverting is
+ * what makes the remedy performable at all — re-selecting an already-checked
+ * radio fires no `change`, so a file radio left checked can never ask again.
+ */
+export const DOWNLOADS_REFUSED =
+  "Download access was declined, so files would have nowhere to go — the destination is back on Obsidian. Choose Markdown files again to ask once more.";
+export const DOWNLOADS_REVOKED =
+  "Tabglutton no longer has permission to save downloads, so the destination is back on Obsidian. Choose Markdown files to grant it again.";
+
+/**
+ * What the surfaces with no gesture say instead. Neither the background page
+ * nor the bridge can ask for anything, so both name the one place that can —
+ * and that name is only truthful because the options page reverts the
+ * destination when it finds the grant gone, leaving the radio clickable.
+ */
+export const DOWNLOADS_REMEDY =
+  "The destination in Tabglutton's settings reverts to Obsidian while the permission is missing, so choosing Markdown files there again is what asks the browser for it.";
+
+/** The fact and the remedy in one sentence, for every surface that just reports. */
+export const DOWNLOADS_GONE = `Tabglutton no longer has permission to save downloads. ${DOWNLOADS_REMEDY}`;
 
 /**
  * Prompt if needed, and report whether the access is now held.

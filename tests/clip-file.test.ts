@@ -98,6 +98,32 @@ describe("clipDownloadPath - the downloads API's own rules", () => {
     );
   });
 
+  // The base folder is free text and a rule's subfolder is not sanitized either,
+  // so both go through the note name's own per-platform sanitizer on the way to
+  // an API that would otherwise rewrite or refuse them.
+  test("folder segments get the note name's per-platform sanitizer", () => {
+    expect(clipDownloadPath(makePayload(), null, "Q1: Notes", "mac")).toBe(
+      "Q1 Notes/Example Title.md",
+    );
+    expect(clipDownloadPath(makePayload(), null, 'Reports <2026>/"Q1"', "win")).toBe(
+      "Reports 2026/Q1/Example Title.md",
+    );
+  });
+
+  test("a control character in a folder never reaches the downloads API", () => {
+    expect(clipDownloadPath(makePayload(), null, "In\u0007box", "mac")).toBe(
+      "Inbox/Example Title.md",
+    );
+  });
+
+  // Sanitizing must not invent a folder where the user named none: only a note
+  // is entitled to the "Untitled" fallback.
+  test("a folder that sanitizes away is dropped, not renamed Untitled", () => {
+    expect(clipDownloadPath(makePayload(), null, "Notes/???", "win")).toBe(
+      "Notes/Example Title.md",
+    );
+  });
+
   // A title that sanitizes away must not promote its folder into the file name.
   test("a note name that trims to nothing falls back to Untitled", () => {
     expect(clipDownloadPath(makePayload({ title: "..." }), null, "Clippings", "mac")).toBe(
