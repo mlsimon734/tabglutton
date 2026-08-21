@@ -83,6 +83,19 @@ it moves the wire protocol.
 - **A bridge clip's destination follows the user's setting** rather than always being the
   vault. No existing install can notice the difference: file mode ships in this same
   release, so there is no state in which the old and new behaviour disagree.
+- **Revoking the `downloads` permission is now handled instead of merely failing**
+  ([#43](https://github.com/mlsimon734/tabglutton/issues/43)). The grant is optional and can
+  be taken back from the browser's own add-on settings, and it is checked once per Devour
+  run _before_ any tab is woken — with it gone, a run over 50 discarded tabs used to reload
+  all 50 and then fail every one of them. The options page now re-checks it on load and, if
+  it is gone, moves the destination back to Obsidian and says so. That revert is the fix,
+  not the wording: re-selecting an already-checked radio fires no event, so the file
+  destination previously had no way left to ask for the permission again. Onboarding
+  already did this; the popup, the background page and the bridge now name a remedy the
+  user can actually perform.
+- **A clippings folder is sanitized the same way a note name is** in file mode. A base
+  folder containing `: " < > ?` or a control character reached the downloads API unfiltered,
+  where Chrome silently rewrote it and Firefox on Windows could refuse the call outright.
 - **Gullet reads `./.env` last, below the global token file, instead of above it.** It is
   the only token source read out of a directory the user did not choose — an MCP host sets
   the sidecar's working directory to whatever project the agent session started in — so a

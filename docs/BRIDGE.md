@@ -888,33 +888,52 @@ _proved_. Anything still unproven has moved to Open questions, where it gets rea
 
 ## Open questions
 
-- **Why the first `tabs_list` of a session times out on a large backlog.** Recurring, not a
-  one-off: the first call after an extension reload fails with `timeout` at the full 45s
-  `BRIDGE_REQUEST_TIMEOUT_MS`, and an immediate retry of the same call succeeds. Observed on
-  Zen 1.21.9b at 730 tabs in one window (~1000 total) with extension 0.1.3.7.
-  - **Ruled out.** Not the connection: a `tab_read` on the same `connectionId` answered
-    correctly and instantly inside the same window of time. Not a stale hub entry: `selectOne`
-    would have reported `ambiguous-target` and did not, so exactly one browser was registered.
-    Not `tabsList` itself: unchanged across the whole fix series, and it succeeds seconds later
-    against the same tab set.
-  - **Two hypotheses, and the observation does not separate them.**
-    1. _Startup contention._ The background page is single-threaded. `init()` runs
-       `bridge.start()` first — deliberately, so the handshake lands before the slow work — and
-       then `probeHeuristic()` and `refreshBadge()` over the entire tab set. But a completed
-       handshake does not mean the page is free to _serve_: a request arriving during the badge
-       pass queues behind it, and at this scale that pass is not cheap.
-    2. _Response size._ `tabs_list` for that window is ~253 KB of JSON in one WebSocket frame.
-       `tab_read` — the call that worked at the same moment — is a small fraction of that, so
-       size and timing were confounded in the observation and neither is excluded.
-  - **Discriminating test.** Immediately after an extension reload, call `tabs_list` twice back
-    to back. First fails and second succeeds ⇒ startup contention. Large responses failing
-    intermittently well after startup ⇒ size, and the thing to measure is `JSON.stringify` cost
-    plus whether the 45s budget is covering the frame write rather than the query. Worth timing
-    `queryAllTabs()`, `probeHeuristic()` and `refreshBadge()` in isolation at this scale first —
-    the answer may be visible without reproducing the failure at all.
-  - **Why it matters more than its frequency suggests.** It lands on the first call of a
-    session and reads to an agent as a dead bridge — the exact failure mode the reconnect work
-    was meant to eliminate — so it spends the credibility that work bought back.
+- **Why the first `tabs_list` of a session timed out on a large backlog.** Recurring, not a
+  one-off, at the time it was raised ([#27](https://github.com/mlsimon734/tabglutton/issues/27)):
+  the first call after an extension reload failed with `timeout` at the full 45s
+  `BRIDGE_REQUEST_TIMEOUT_MS`, and an immediate retry of the same call succeeded. Observed on
+  Zen 1.21.9b at 730 tabs in one window (~1000 total) with extension 0.1.3.7. **Both stated
+  hypotheses are now measured out, the failure did not reproduce, and no code changed** — the
+  numbers and the reason for leaving it alone are below.
+  - **Ruled out at the time.** Not the connection: a `tab_read` on the same `connectionId`
+    answered correctly and instantly inside the same window of time. Not a stale hub entry:
+    `selectOne` would have reported `ambiguous-target` and did not, so exactly one browser was
+    registered. Not `tabsList` itself: unchanged across the whole fix series, and it succeeds
+    seconds later against the same tab set.
+  - **Both hypotheses were claims about milliseconds, and both are wrong by three orders of
+    magnitude.** Measured in the extension's own context at **1000 tabs in one window**
+    (`scratch-chrome/repro-first-list-timeout.ts`, Firefox 134.0.2 on a dedicated profile;
+    `time-list-at-scale.ts`, Chrome 151). _Startup contention_: `queryAllTabs()` **10ms**,
+    `probeHeuristic()`'s two queries **14ms**, `refreshBadge()`'s query **6ms**, mapping every
+    tab to a `BridgeTab` **1ms** — the whole of what `init()` runs ahead of serving is **20ms**
+    on Gecko, and 41ms on Chrome, where `probeHeuristic` short-circuits and only the badge
+    query remains. _Response size_: the reported ~253 KB listing is **248.7 KB**
+    here, and `JSON.stringify` of it costs **0.2ms** on both engines. Nothing in either
+    hypothesis is within 1000× of 45,000ms.
+  - **The discriminating test the issue asked for came back negative.** Two `tabs_list` calls
+    back to back immediately after `browser.runtime.reload()` at 1000 tabs: **16ms** and
+    **44ms**, both correct, and a third sequential call **13ms**. A full-detail listing of all
+    1000 was **16ms**. The only slow call in the whole run was the _cold_ first one — **2989ms**,
+    which is the extension's probe loop finding the freshly-bound sidecar, not the query.
+  - **What does produce exactly this shape is a browser that stops reading its socket**, and
+    that is indistinguishable from the outside: the connection is genuinely healthy, the retry
+    is instant, and a call landing either side of the stall answers normally.
+    `scratch-chrome/probe-unresponsive-browser.ts` induces it with `SIGSTOP` on the browser's
+    parent process, and the result is also the reason not to chase this further: **on current
+    code the symptom no longer occurs.** The hub's 20s heartbeat noticed the missed pong and
+    dropped the connection at **38s** with `no-connection` — "Firefox disconnected
+    mid-request" — rather than letting the call ride to a 45s `timeout`; `SIGCONT` reattached
+    (`conn-2`) and the next call answered in **412ms**. That heartbeat, the stale sweep on
+    session attach (see `syncHeartbeat`), and the detached hub all landed after 0.1.3.7.
+  - **Not reproduced, so this is a mechanism rather than a verdict**, and three caveats keep it
+    honest: Firefox 134.0.2 is not Zen 1.21.9b (Firefox ~153, plus workspace machinery of its
+    own), 1000 `about:blank` tabs are not 1000 real pages with content processes behind them,
+    and no run here ever failed. What can be said is that the two hypotheses on record are
+    excluded by measurement, and that the browser-side stall which is left would today be
+    reported as a dropped connection within 40s instead of a 45s timeout. **Reopen with a fresh
+    observation on current code rather than pre-emptively hardening against a symptom that
+    already has a different answer** — a retry wrapped around `tabs_list` would hide precisely
+    the signal a new report would need.
 - ~~**Session-start connect latency.**~~ **Resolved: mitigated by faster discovery, then
   ended by the detached hub** (the ▸ note at the end of this entry is the resolution; the
   history below is kept because every constant it names is still load-bearing).

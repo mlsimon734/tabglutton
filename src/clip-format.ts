@@ -84,8 +84,18 @@ export type FilePlatform = "win" | "mac" | "other";
  * — handed Obsidian a name Windows cannot write.
  */
 function sanitizeFileName(fileName: string, platform: FilePlatform): string {
+  return sanitizePathSegment(fileName, platform) || "Untitled";
+}
+
+/**
+ * The character rules alone, without the substitution `sanitizeFileName` makes
+ * when nothing survives them. A *folder* that sanitizes away is dropped by its
+ * caller rather than invented as "Untitled", so the two need different answers
+ * to the same empty string — and only a note is entitled to a fallback name.
+ */
+export function sanitizePathSegment(segment: string, platform: FilePlatform): string {
   // Obsidian's own reserved characters go on every platform; the rest is the host's.
-  let sanitized = stripAsciiControlChars(fileName).replace(/[#[\]|^]/g, "");
+  let sanitized = stripAsciiControlChars(segment).replace(/[#[\]|^]/g, "");
   if (platform === "mac") {
     sanitized = sanitized.replace(/[/:]/g, "");
   } else {
@@ -102,7 +112,6 @@ function sanitizeFileName(fileName: string, platform: FilePlatform): string {
   // Truncation can expose a trailing dot or space even when the original title
   // did not end with one. Windows silently drops both on write.
   if (platform === "win") sanitized = sanitized.replace(/[\s.]+$/, "");
-  if (sanitized.length === 0) sanitized = "Untitled";
   return sanitized;
 }
 
