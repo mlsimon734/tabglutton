@@ -7,7 +7,33 @@ All notable changes to Tabglutton are documented here.
 Two threads. Devour no longer requires Obsidian — a clip can land as a plain markdown file
 in the download folder, chosen on the options page or during onboarding. And the browser's
 bridge connection now outlives the agent session that opened it, so starting a session is a
-local attach rather than a fresh hunt for a socket.
+local attach rather than a fresh hunt for a socket. A third arrived late, from the audit
+before Gullet's first npm publish: the bridge handshake had a relayable proof, and closing
+it moves the wire protocol.
+
+### Breaking
+
+- **The bridge wire protocol is now 3, and the token proof is bound to the channel it is
+  presented on.** Update the extension and Gullet together; there is deliberately no
+  downgrade path. Protocol 2 hashed only the token and a nonce, in one function used in
+  both directions, so the proof was a credential anyone could borrow: every honest client
+  proves _first_ to whatever answers the marker probe, so a local process knowing no token
+  could bind a free candidate port, wait to be dialled, forward the real hub's challenge as
+  its own, and replay the answer to that hub as a peer. That yielded the full tool surface —
+  list, read, clip, close every tab — plus enough to retire a detached hub and hold its
+  port permanently. Proven against the live hub and re-run against the fix;
+  `SECURITY-REVIEW.md` carries the exploit and the before/after. The proof now includes the
+  role it is claimed under and the loopback port it is presented at, so a proof handed to a
+  squatter is worthless at the real hub. No fallback and no negotiated downgrade: an
+  attacker who can imitate the marker can also claim to be old.
+
+  **Upgrading needs one manual step, once.** A background hub started by the previous
+  version outlives the session that spawned it and keeps its port, and a protocol bump
+  cannot ask it to stand aside — retiring requires proving the token, and the proof is
+  itself protocol-shaped. If the bridge does not come back after updating, stop the old
+  hub: `pkill -f "gullet.*--detached-hub"`. Tabglutton's settings now say **"Sidecar
+  version mismatch — update both halves"** instead of sitting on "Waiting for a sidecar",
+  and Gullet names the port and this command in its own error.
 
 ### Features
 
@@ -51,8 +77,9 @@ local attach rather than a fresh hunt for a socket.
   exist only on the Obsidian variant, and `file` is absent exactly when nothing could
   confirm the write. `confirmedBy` — `"browser"`, `"gullet"` or `"nobody"` — names who
   proved the clip landed, replacing a boolean whose `false` meant "could not check" and
-  read as "did not land". The wire protocol stays at 2: Gullet is the only consumer of this
-  shape and ships alongside the extension.
+  read as "did not land". This shape needed no protocol bump of its own — Gullet is its
+  only consumer and ships alongside the extension — though the handshake fix above moves
+  the protocol anyway.
 - **A bridge clip's destination follows the user's setting** rather than always being the
   vault. No existing install can notice the difference: file mode ships in this same
   release, so there is no state in which the old and new behaviour disagree.
@@ -69,6 +96,18 @@ local attach rather than a fresh hunt for a socket.
 - **A clippings folder is sanitized the same way a note name is** in file mode. A base
   folder containing `: " < > ?` or a control character reached the downloads API unfiltered,
   where Chrome silently rewrote it and Firefox on Windows could refuse the call outright.
+- **Gullet reads `./.env` last, below the global token file, instead of above it.** It is
+  the only token source read out of a directory the user did not choose — an MCP host sets
+  the sidecar's working directory to whatever project the agent session started in — so a
+  cloned repository shipping a `.env` could silently replace the token the options page
+  wrote, putting the session in a realm its author also knows. It can still supply a token
+  when no global one exists, and it never answers for a global file that merely failed to
+  read, so a locked secret manager still surfaces its own error and still heals on retry.
+- **A hub's log can no longer be flooded by anything that can open a socket.** The refused-
+  upgrade line carried the caller's raw `Origin`, which is unauthenticated input: one
+  loopback client sustained ~480 MB/s into `hub.log`, a file the README calls small by
+  construction. It is now one line a minute with a count of what it suppressed, and the
+  origin is truncated.
 
 ## [0.3.1](https://github.com/mlsimon734/tabglutton/compare/v0.3.0...v0.3.1) (2026-08-12)
 

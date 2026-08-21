@@ -112,9 +112,19 @@ unlocking the secret manager heals the same MCP session.
 Resolution is additive, so existing setups keep working. The first configured token wins:
 
 ```text
---token -> TABGLUTTON_TOKEN / GULLET_TOKEN -> ./.env
+--token -> TABGLUTTON_TOKEN / GULLET_TOKEN
         -> tokenCommand -> tokenFile -> the default global token file
+        -> ./.env
 ```
+
+`./.env` is consulted **last**, and only when the global token file is not there at all. It
+is the one source read out of a directory you did not choose — an MCP host sets this
+process's working directory to whatever project your agent session started in, so a cloned
+repository can ship a `.env` naming a token its author knows. Last means it can supply a
+token nothing else had, and can never silently replace the one the setup command wrote.
+It answers only when the global file is absent — a file that exists and is empty is a
+half-finished setup, and reports itself as one rather than handing the realm to a `.env`.
+(It previously outranked the global file; the move landed with the wire-protocol-3 release.)
 
 Port selection uses `--port`, then `TABGLUTTON_PORT` / `GULLET_PORT`, then the global
 config, then automatic discovery. A fixed number must match the browser's fixed-port

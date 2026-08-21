@@ -11,9 +11,13 @@
 // about, rather than by a second, drifting copy of the same rules.
 import { vaultWarningFor } from "./vault-warning.js";
 
-// Protocol 2 makes tabs_list's default limit and tab_clip's vault override
-// mandatory on both ends. Protocol 1 peers cannot safely ignore either field.
-export const BRIDGE_PROTO = 2;
+// Protocol 3 binds the token proof to the endpoint and the role it is presented
+// as (see deriveProof). It is a hard cut with no negotiated downgrade, because
+// the whole point of the change is that a protocol-2 proof is relayable and a
+// fallback would keep that reachable — an attacker who can imitate the marker
+// can also claim to be old. Protocol 2 made tabs_list's default limit and
+// tab_clip's vault override mandatory on both ends.
+export const BRIDGE_PROTO = 3;
 
 /**
  * Chosen by elimination rather than by liking the number (2026-07-29). Three
@@ -316,9 +320,18 @@ export const RETIRING_FOR_NEWER_PEER = "retiring-for-newer-peer";
  * should shut itself down for an arriving peer. Coercing the unreadable part to
  * zero looks harmless and is not — it makes `1.0.0-beta.2` parse as a *fourth*
  * component and outrank `1.0.0`, so a prerelease would retire the release.
+ *
+ * The arguments are typed `string` and one of them is not: `gullet` on the hello
+ * is JSON off a socket, and `parseMessage` narrows the frame's `type` and
+ * nothing else. A number there reached `value.split` and threw out of
+ * `completeHandshake` — after the handshake reaper had been disarmed, so the
+ * socket then sat open forever with nothing left to close it. Not a string is
+ * the most unreadable a version gets, and gets the answer that already exists
+ * for unreadable.
  */
 export function compareGulletVersions(a: string, b: string): number {
   const parts = (value: string): number[] | null => {
+    if (typeof value !== "string") return null;
     const components = value.split(".");
     // Whole-component digits, because `parseInt` stops at the first non-digit
     // and would read "0-beta" as a perfectly good 0 — which is the coercion this
@@ -417,12 +430,51 @@ export type ClientMessage = HelloMessage | ResponseMessage | PingMessage | PongM
 export type BridgeMessage = ServerMessage | ClientMessage;
 
 /**
- * Hex SHA-256 over the token and nonce. Both sides derive it identically.
- * The token is length-prefixed so the two fields cannot be shifted across the
- * separator: without it, ("a:b", "c") and ("a", "b:c") hash the same bytes.
+ * Which end of the handshake, and as what, a proof is being presented. Part of
+ * the hashed material, so a proof minted for one of these can never be spent as
+ * another — see deriveProof.
  */
-export async function deriveProof(token: string, nonce: string): Promise<string> {
-  const bytes = new TextEncoder().encode(`${token.length}:${token}:${nonce}`);
+export type ProofRole = "browser" | "peer" | "probe" | "server";
+
+/**
+ * Hex SHA-256 over the token, the other side's nonce, **and the channel**: the
+ * role the prover is claiming and the loopback port the proof is being
+ * presented at. Both sides derive it identically.
+ *
+ * The channel binding is the whole of protocol 3, and it exists because without
+ * it the mutual proof was **relayable**. Proto 2 hashed only the token and the
+ * nonce, in one direction-agnostic function, and every honest client proves
+ * first, on demand, to anything that answers the marker probe. So a local
+ * process that knew no token could bind a free candidate port, wait for the
+ * extension's rotation or a sidecar's election sweep to dial it, forward the
+ * *real* hub's challenge nonce as its own, and replay the answer to that hub as
+ * a peer hello. Measured against the real Hub: full tool access — list, read,
+ * clip, close — plus a `gullet` version high enough to retire a detached hub and
+ * take its port for good. SECURITY-REVIEW.md carries the exploit and the
+ * before/after.
+ *
+ * Binding the port is what breaks it: the honest client's proof names the port
+ * it dialled, which is the attacker's, and the hub only accepts one naming its
+ * own. Binding the role is cheaper still and independently worth it — a relayed
+ * browser proof can never be spent as a peer, so any future gap in the port
+ * binding degrades to impersonating a browser rather than owning the tool
+ * surface. Direction alone would not have been enough: the extension and the
+ * attacker are both *clients*, so a client/server split leaves the relay intact.
+ *
+ * Token and nonce are both length-prefixed. The token always was — without it
+ * ("a:b", "c") and ("a", "b:c") hash the same bytes — and the nonce joins it now
+ * that two more fields follow it, because the nonce is the one piece of this
+ * that arrives off the wire from the other side. `role` comes from a closed set
+ * and `port` is digits, so neither can carry a separator.
+ */
+export async function deriveProof(
+  token: string,
+  nonce: string,
+  role: ProofRole,
+  port: number,
+): Promise<string> {
+  const material = `${token.length}:${token}:${nonce.length}:${nonce}:${role}:${port}`;
+  const bytes = new TextEncoder().encode(material);
   const digest = await crypto.subtle.digest("SHA-256", bytes);
   return toHex(new Uint8Array(digest));
 }

@@ -111,7 +111,7 @@ function fakeBrowser(port: number, answer: unknown, token: string = TOKEN): Prom
             extVersion: "test",
             label: "Zen",
             nonce,
-            proof: await deriveProof(token, msg.nonce),
+            proof: await deriveProof(token, msg.nonce, "browser", port),
           }),
         );
       } else if (msg.type === "hello-ack") {

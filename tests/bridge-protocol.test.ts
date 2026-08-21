@@ -7,6 +7,7 @@ import {
   DEFAULT_BRIDGE_PORT,
   classifyBridgeProbe,
   deriveProof,
+  type ProofRole,
   generateToken,
   filterTabs,
   groupTabsByDomain,
@@ -42,7 +43,7 @@ describe("constants", () => {
     expect(DEFAULT_BRIDGE_PORT).toBe(4589);
     expect(BRIDGE_PORT_CANDIDATES).toEqual([4589, 20317, 17483, 27613, 24193]);
     expect(BRIDGE_PORT_CANDIDATES[0]).toBe(DEFAULT_BRIDGE_PORT);
-    expect(BRIDGE_PROTO).toBe(2);
+    expect(BRIDGE_PROTO).toBe(3);
   });
 });
 
@@ -79,24 +80,56 @@ describe("automatic bridge discovery", () => {
 });
 
 describe("deriveProof()", () => {
-  test("is deterministic for the same token and nonce", async () => {
-    expect(await deriveProof("tok", "nonce")).toBe(await deriveProof("tok", "nonce"));
+  test("is deterministic for the same channel", async () => {
+    expect(await deriveProof("tok", "nonce", "browser", 4589)).toBe(
+      await deriveProof("tok", "nonce", "browser", 4589),
+    );
   });
 
   test("is a 64-char hex sha-256 digest", async () => {
-    expect(await deriveProof("tok", "nonce")).toMatch(/^[0-9a-f]{64}$/);
+    expect(await deriveProof("tok", "nonce", "browser", 4589)).toMatch(/^[0-9a-f]{64}$/);
   });
 
   test("differs when the token differs", async () => {
-    expect(await deriveProof("a", "n")).not.toBe(await deriveProof("b", "n"));
+    expect(await deriveProof("a", "n", "browser", 4589)).not.toBe(
+      await deriveProof("b", "n", "browser", 4589),
+    );
   });
 
   test("differs when the nonce differs — a replayed proof is useless", async () => {
-    expect(await deriveProof("tok", "n1")).not.toBe(await deriveProof("tok", "n2"));
+    expect(await deriveProof("tok", "n1", "browser", 4589)).not.toBe(
+      await deriveProof("tok", "n2", "browser", 4589),
+    );
+  });
+
+  // The whole of protocol 3. A proof handed to a squatter on one port must be
+  // worthless at the hub on another, or the relay in SECURITY-REVIEW.md works.
+  test("differs when the port differs — this is what makes a relayed proof useless", async () => {
+    expect(await deriveProof("tok", "n", "browser", 4589)).not.toBe(
+      await deriveProof("tok", "n", "browser", 20317),
+    );
+  });
+
+  // The cheaper half: a proof minted as one kind of caller cannot be spent as
+  // another, so a relayed browser proof can never become peer access.
+  test("differs across every role, including the server's own direction", async () => {
+    const roles: ProofRole[] = ["browser", "peer", "probe", "server"];
+    const proofs = await Promise.all(roles.map((role) => deriveProof("tok", "n", role, 4589)));
+    expect(new Set(proofs).size).toBe(roles.length);
   });
 
   test("token and nonce are not confusable across the separator", async () => {
-    expect(await deriveProof("a:b", "c")).not.toBe(await deriveProof("a", "b:c"));
+    expect(await deriveProof("a:b", "c", "browser", 4589)).not.toBe(
+      await deriveProof("a", "b:c", "browser", 4589),
+    );
+  });
+
+  // Length-prefixing the nonce too, now that role and port follow it: without
+  // it a nonce chosen by the other side could impersonate the fields after it.
+  test("a nonce cannot absorb the role and port that follow it", async () => {
+    expect(await deriveProof("tok", "n:peer:4589", "browser", 20317)).not.toBe(
+      await deriveProof("tok", "n", "peer", 4589),
+    );
   });
 });
 

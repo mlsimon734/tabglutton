@@ -17,6 +17,7 @@ import {
   BridgeRequestError,
   compareGulletVersions,
   deriveProof,
+  errorMessage,
   parseMessage,
   proofsMatch,
   randomNonce,
@@ -24,6 +25,7 @@ import {
   toBridgeError,
   type BridgeMethod,
   type HelloMessage,
+  type ProofRole,
   type ServerMessage,
 } from "../../src/bridge-protocol.js";
 import {
@@ -43,9 +45,55 @@ const EXTENSION_ORIGIN_PREFIXES = ["moz-extension://", "chrome-extension://"];
  */
 const IDLE_CONNECTION_GRACE_MS = 2_000;
 
+/**
+ * How long a line that an *unproved* caller can cause stays quiet after one is
+ * written, and how much of an offending header such a line may carry.
+ *
+ * A detached hub's stderr is a file (`hub.log`) that the README calls "small by
+ * construction". That is only true if every line reachable before the token is
+ * proved is bounded in both size and rate. Measured on Bun 1.3.14: a 15 KB
+ * `Origin` reached the refused-upgrade line verbatim and one loopback client
+ * sustained ~480 MB/s of it.
+ *
+ * There are two such lines, not one, and missing the second is how this nearly
+ * shipped half-fixed: the refused-upgrade line, and every `hello-error` before
+ * authentication — which a local process reaches simply by presenting any
+ * extension Origin, and whose protocol-mismatch text interpolates a field off
+ * the wire. Both go through `logUnauthenticated`, in separate buckets so a flood
+ * of one cannot hide the other. Post-proof rejections (retirement) are not
+ * throttled: reaching one means holding the token.
+ */
+const UNAUTHENTICATED_LOG_INTERVAL_MS = 60_000;
+const REFUSED_ORIGIN_MAX_CHARS = 120;
+
 export function isExtensionOrigin(origin: string | null): boolean {
   if (!origin) return false;
   return EXTENSION_ORIGIN_PREFIXES.some((prefix) => origin.startsWith(prefix));
+}
+
+/**
+ * The proof role a hello is claiming. An absent `role` is the extension, which
+ * has never sent one; anything unrecognised is normalised to `"browser"` rather
+ * than rejected, and then simply fails the proof check — an unknown role is not
+ * a caller we can serve either way, and one refusal path is easier to reason
+ * about than two.
+ */
+function helloProofRole(role: HelloMessage["role"]): ProofRole {
+  return role === "peer" || role === "probe" ? role : "browser";
+}
+
+/**
+ * A hello's claimed protocol, safe to put in a message that reaches `hub.log`.
+ *
+ * `parseMessage` narrows `type` and nothing else, so this is whatever JSON
+ * arrived. A number is the only shape worth repeating back; anything else is
+ * named by its type rather than its value, because the value is unbounded
+ * attacker input and this line is logged before anyone has proved anything.
+ */
+function describeProto(proto: unknown): string {
+  return typeof proto === "number" && Number.isFinite(proto)
+    ? String(proto)
+    : `a non-numeric value`;
 }
 
 /**
@@ -121,6 +169,8 @@ export class Hub {
   private readonly connectWaiters = new Set<() => void>();
   private nextId = 1;
   private retiring = false;
+  /** Rate state per bucket for the lines an unproved caller can drive. */
+  private readonly unauthLog = new Map<string, { at: number; suppressed: number }>();
 
   constructor(options: HubOptions) {
     this.options = options;
@@ -139,9 +189,7 @@ export class Hub {
           // curl), not an attempt at anything — logging it at error every
           // IDLE_PROBE_MS would bury the case worth seeing, which is a real
           // foreign origin. Both still get refused; only the volume differs.
-          if (origin !== null) {
-            console.error(`[gullet] refused upgrade from origin ${origin}`);
-          }
+          if (origin !== null) this.logRefusedOrigin(origin);
           return identifyingResponse("Forbidden", 403);
         }
         const data: SocketData = {
@@ -153,7 +201,17 @@ export class Hub {
       },
       websocket: {
         open: (ws) => this.onOpen(ws),
-        message: (ws, message) => void this.onMessage(ws, message),
+        // A throw out of the handler used to be an unhandled rejection *and* a
+        // leaked socket: `completeHandshake` disarms the reaper before it is
+        // finished, so a frame that failed after that point left a connection
+        // nothing would ever close. The frame is untrusted JSON and the parser
+        // narrows only `type`, so the guarantee has to be structural — every
+        // path out of a socket ends with the socket closed.
+        message: (ws, message) =>
+          void this.onMessage(ws, message).catch((err) => {
+            console.error(`[gullet] dropping ${ws.data.connectionId}: ${errorMessage(err)}`);
+            ws.close();
+          }),
         close: (ws) => this.onClose(ws),
       },
     });
@@ -348,6 +406,33 @@ export class Hub {
     });
   }
 
+  /**
+   * One line per bucket per UNAUTHENTICATED_LOG_INTERVAL_MS, carrying the count
+   * it stood in for. Everything an unproved caller can make this hub write goes
+   * through here; see the constant for why that set is larger than it looks.
+   */
+  private logUnauthenticated(bucket: string, message: string): void {
+    const now = Date.now();
+    const state = this.unauthLog.get(bucket);
+    if (state && now - state.at < UNAUTHENTICATED_LOG_INTERVAL_MS) {
+      state.suppressed += 1;
+      return;
+    }
+    const suppressed = state?.suppressed ?? 0;
+    this.unauthLog.set(bucket, { at: now, suppressed: 0 });
+    console.error(
+      message + (suppressed > 0 ? ` (and ${suppressed} more since the last such line)` : ""),
+    );
+  }
+
+  private logRefusedOrigin(origin: string): void {
+    const shown =
+      origin.length > REFUSED_ORIGIN_MAX_CHARS
+        ? `${origin.slice(0, REFUSED_ORIGIN_MAX_CHARS)}…`
+        : origin;
+    this.logUnauthenticated("origin", `[gullet] refused upgrade from origin ${shown}`);
+  }
+
   /** Disarm the reaper — the socket has either proved the token or gone away. */
   private clearHandshakeTimer(ws: Bun.ServerWebSocket<SocketData>): void {
     if (ws.data.handshakeTimer === undefined) return;
@@ -411,7 +496,11 @@ export class Hub {
       this.rejectHandshake(
         ws,
         "unsupported",
-        `Extension speaks protocol ${msg.proto}; this Gullet speaks ${BRIDGE_PROTO}. Update whichever is older.`,
+        // `proto` is untrusted JSON, and this message reaches a log file. It is
+        // rendered rather than interpolated for the same reason the refused-
+        // origin line is truncated — see REFUSED_ORIGIN_LOG_INTERVAL_MS; a raw
+        // 100 KB `proto` here would walk straight around that limit.
+        `Extension speaks protocol ${describeProto(msg.proto)}; this Gullet speaks ${BRIDGE_PROTO}. Update whichever is older.`,
       );
       return;
     }
@@ -423,8 +512,22 @@ export class Hub {
       );
       return;
     }
-    const expected = await deriveProof(this.options.token, ws.data.serverNonce);
-    if (typeof msg.proof !== "string" || !proofsMatch(msg.proof, expected)) {
+    // Both are read off an untrusted frame — `parseMessage` narrows `type` and
+    // nothing else — and both are about to become hashed material, where a
+    // non-string would either throw or stringify into something that is not
+    // what the other side hashed. Refuse rather than either.
+    if (typeof msg.nonce !== "string" || typeof msg.proof !== "string") {
+      this.rejectHandshake(ws, "unauthorized", "Malformed hello: nonce and proof must be strings.");
+      return;
+    }
+
+    // The role the caller *claims*, which is the role its proof has to have been
+    // minted for. Deriving against anything else would let a proof made as one
+    // kind of caller be spent as another — the second half of what protocol 3
+    // closes, after the port.
+    const role = helloProofRole(msg.role);
+    const expected = await deriveProof(this.options.token, ws.data.serverNonce, role, this.port);
+    if (!proofsMatch(msg.proof, expected)) {
       this.rejectHandshake(ws, "unauthorized", "Token mismatch.");
       return;
     }
@@ -436,7 +539,7 @@ export class Hub {
     // to serve a session or merely to look. A browser never can — it has no
     // Gullet version to offer, and `shouldRetireFor` would refuse it anyway.
     if ((msg.role === "peer" || msg.role === "probe") && this.shouldRetireFor(msg.gullet)) {
-      this.rejectHandshake(ws, "unsupported", this.retirementMessage(msg.gullet));
+      this.rejectHandshake(ws, "unsupported", this.retirementMessage(msg.gullet), true);
       this.retire();
       return;
     }
@@ -510,17 +613,29 @@ export class Hub {
       type: "hello-ack",
       proto: BRIDGE_PROTO,
       connectionId: ws.data.connectionId,
-      proof: await deriveProof(this.options.token, nonce),
+      // `"server"` and our own port: the counter-proof is bound to this end of
+      // this channel, so a client's proof can never be reflected back at it as
+      // an ack, and an ack minted here is worthless anywhere else.
+      proof: await deriveProof(this.options.token, nonce, "server", this.port),
       sessions: this.sessions,
     });
   }
 
+  /**
+   * `proven` says whether the caller had already proved the token when this was
+   * decided. Only a retirement has; every other rejection here is reachable by
+   * anything that can open a socket with an extension Origin, so its log line is
+   * rate-limited while the message it sends back is not.
+   */
   private rejectHandshake(
     ws: Bun.ServerWebSocket<SocketData>,
     code: "unauthorized" | "unsupported",
     message: string,
+    proven = false,
   ): void {
-    console.error(`[gullet] handshake rejected: ${message}`);
+    const line = `[gullet] handshake rejected: ${message}`;
+    if (proven) console.error(line);
+    else this.logUnauthenticated("handshake", line);
     this.send(ws, { type: "hello-error", error: { code, message } });
     ws.close();
   }

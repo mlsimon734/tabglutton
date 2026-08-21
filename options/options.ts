@@ -449,6 +449,11 @@ const BRIDGE_STATUS_LABELS: Record<BridgeStatus, string> = {
   // otherwise presents as "Waiting for a sidecar" forever with a sidecar that
   // is running perfectly well a few lines above.
   "port-conflict": "Port in use by another program",
+  // Distinct from the two above because the fix is different: nothing is wrong
+  // with the port or the token, the two halves are just on different releases.
+  // Mixed wire protocols are refused rather than allowed to half-work, so this
+  // is what a half-finished upgrade looks like from here.
+  "incompatible-sidecar": "Sidecar version mismatch — update both halves",
   // Chrome only: the loopback grant was refused or later revoked. Switching the
   // toggle off and on again is what re-asks for it, so the label says so — the
   // browser's own permissions UI is the other route and much harder to describe.

@@ -285,13 +285,31 @@ export class Supervisor implements BridgeBackend {
         .join(", ");
       if (attempt === 0)
         console.error(`[gullet] no compatible candidate yet (${summary}); retrying`);
+      // An incompatible candidate is named separately because it is the one
+      // observation with a remedy this message can state, and because it is the
+      // expected state right after a wire-protocol bump: an older *detached*
+      // hub outlives the session that spawned it and holds the port for up to
+      // DETACHED_HUB_IDLE_EXIT_MS. It cannot be asked to stand aside — retiring
+      // requires proving the token, and the proof itself is protocol-shaped, so
+      // no version of this ever retires across a protocol boundary. Saying
+      // "check for incompatible versions" and leaving the user to find a
+      // detached process they did not know existed is not good enough.
+      const incompatible = [...observations]
+        .filter(([, seen]) => seen === "incompatible")
+        .map(([port]) => port);
       this.electionFault = {
         code: "unsupported",
         message:
           `Could not establish the Tabglutton bridge on any candidate (${summary}). ` +
           `${this.options.port === undefined ? "Automatic" : "Fixed-port"} mode will keep ` +
           `retrying; check for other services, incompatible Gullet versions, or sidecars ` +
-          `using a different TABGLUTTON_TOKEN.`,
+          `using a different TABGLUTTON_TOKEN.` +
+          (incompatible.length === 0
+            ? ""
+            : ` A Gullet speaking a different bridge protocol holds 127.0.0.1:${incompatible.join(", ")}. ` +
+              `It will not stand aside — a protocol mismatch is refused before anything else is ` +
+              `considered — so if you have just upgraded, stop the old one: it is most likely a ` +
+              `background hub that outlived its session (\`pkill -f "gullet.*--detached-hub"\`).`),
       };
       await delay(gap);
       gap = Math.min(gap * 2, ELECTION_RETRY_MAX_MS);
