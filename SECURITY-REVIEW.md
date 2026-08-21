@@ -202,6 +202,61 @@ RESULT: proto-3 handshake completed over a real socket
 ```
 
 So the extension half of the channel binding is verified live on Gecko, not only in tests.
+
+**Live verification, Chrome — [ran].** Gecko runs an event page and Chrome an MV3 service
+worker, and the one field the fix depends on — `this.socketPort`, which must still hold the
+dialled port when the challenge arrives — is exactly the kind of state a worker suspension
+could plausibly lose. So the Chromium half was run too, not inferred from shared source.
+`scratch-chrome/verify-proto3-chrome.ts` builds `dist-chrome`, launches Google Chrome on a
+throwaway profile under CDP, `Extensions.loadUnpacked`s the build, grants the optional host
+permissions through a real `permissions.request` with a user gesture, pins the extension to
+a **fixed** test port (24701 — deliberately outside `BRIDGE_PORT_CANDIDATES`, so the run can
+never rotate onto the developer's live hubs on 4589 or 20317), and then exercises all three
+things a hard protocol cut has to be shown to do:
+
+```
+[setup] gullet up on 24701 (proto 3), --no-detach
+[setup] extension hociakjiemmblgcfkfkkjbbcbnmkdlpe, bundle fresh (58422 bytes)
+[setup] host permissions granted
+[setup] extension pinned to fixed port 24701
+      [gullet] Chrome connected (conn-1, v0.3.1)
+
+PASS  1a. Chrome completes the channel-bound handshake
+      browsers: [{"connectionId":"conn-1","browser":"chrome","label":"Chrome","extVersion":"0.3.1"}]
+PASS  1b. tabs_list is served over that connection
+      4 tabs, matched=4; e.g. "Channel Binding Explained"
+PASS  1c. tab_read extracts real page content
+      title="Channel Binding Explained" words=456 markdown[0..60]="A proof that names the endpoint it is presented at cannot be"
+PASS  3. a protocol-2 peer is refused, not downgraded
+      hello-error={"code":"unsupported","message":"Extension speaks protocol 2; this Gullet speaks 3. Update whichever is older."} | hello-ack=false | peer-response=false | socket closed=true
+PASS  2. the relay exploit fails against this live pair
+      Chrome handed the squatter a real proof=true | hub accepted the relay=false | attacker read tabs=no | hub told the relay: {"code":"unauthorized","message":"Token mismatch."}
+PASS  4. a browser meeting an older sidecar says so (review follow-up)
+      extension bridge status = "incompatible-sidecar"
+```
+
+Three of those are worth reading closely, because each is a claim that unit tests cannot make:
+
+- **Check 2 is the exploit itself, against the running pair**, not a reconstruction of it.
+  The attacker squats a second port, the real Chrome extension probes it, is satisfied by the
+  marker, and hands over a genuine proof (`Chrome handed the squatter a real proof=true` — the
+  relay is live, and on protocol 2 this is the point where it won). The attacker forwards that
+  proof to the real hub and is told `Token mismatch`, because the proof names 24702 and the hub
+  checks 24701. The rejection is read off the attacker's own relay socket rather than scraped
+  from the hub's log, which matters: the hub's pre-auth log is throttled to one line a minute
+  by the fix for #4, and an earlier version of this harness quoted check 3's rejection here
+  because check 2's had been suppressed.
+- **Check 3 is the hard cut.** A peer announcing `proto: 2` — presenting a _valid_ protocol-2
+  proof, so only the version is wrong — gets `unsupported`, no `hello-ack`, no answered
+  request, and a closed socket. There is no downgrade to fall back to.
+- **Check 1c** proves the connection is not merely handshaken but useful: a real content
+  extraction off a real page through the MV3 service worker.
+
+The run was repeated from a clean profile and reproduced identically. What this does **not**
+cover: the service-worker _suspension_ path. The run completes inside Chrome's 30s idle
+window, so a handshake that begins after a worker restart is still reasoned about, not
+measured.
+
 See "Method" for what remains unverified.
 
 ---
@@ -651,8 +706,10 @@ header-size and throughput measurements for #4 before and after; the origin/CORS
 markerless-probe checks for #10/#9/#11; the hostile-title fuzz for #12; `bun run
 package:gullet` and a grep sweep of the built bundle for #13; `ls -l` on the real token file,
 config directory and `hub.log`, and a read of the real `hub.log`, for #8/#17; a live proto-3
-handshake in Firefox 134.0.2 against a real Gullet, round-tripping `tabs_list`; and
-`bun run check`.
+handshake in Firefox 134.0.2 against a real Gullet, round-tripping `tabs_list`; the full
+four-check Chrome run above — channel-bound handshake, `tabs_list`, `tab_read`, the relay
+exploit against the live pair, and a protocol-2 peer being refused rather than downgraded —
+twice from a clean profile; and `bun run check`.
 
 **Read:** the whole of `gullet/src/` and `src/bridge-protocol.ts`; `src/clip-file.ts`,
 `src/clip-format.ts`, the handshake half of `src/bridge-client.ts`, and the snippet generator
@@ -662,12 +719,12 @@ discovery / §Security and failure semantics / §Wire protocol / §Security mode
 
 **Unverified — say it plainly rather than implying coverage:**
 
-- **Chrome/Chromium has not been exercised at all against protocol 3.** The changed extension
-  code (`src/bridge-client.ts`) is shared source and `dist-chrome` is built from it, but no
-  Chrome build was loaded and no MV3 service worker completed a proto-3 handshake in this
-  work. The specific risk is `this.socketPort`: it must hold the dialled port when the
-  challenge arrives, and MV3 worker suspension is the one lifecycle that could plausibly
-  differ from Gecko's event page. Worth one `bun run start:chrome` before release.
+- **Chrome MV3 worker suspension.** Chrome itself is now covered (above), but the whole run
+  fits inside the 30s idle window, so a challenge arriving _after_ the service worker has
+  been suspended and restarted was not observed. `this.socketPort` is instance state on a
+  `BridgeClient` that does not outlive its worker, and a restarted worker redials from
+  scratch rather than resuming a half-open handshake — but that is read from the source, not
+  measured.
 - **Zen was not used**, deliberately — the user's real Zen was running, and `open -na Zen.app`
   can cash a staged update and kill their session. Zen is a Firefox fork and the verified
   Gecko path is the same code, but that is an inference, not a measurement.
