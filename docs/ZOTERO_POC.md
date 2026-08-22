@@ -32,15 +32,24 @@ The proof of concept adds two versioned requests:
 the toolbar action, but it cannot by itself tell Tabglutton which tabs are papers. Exposing the
 Connector's already-computed top translator type avoids duplicating Zotero's site coverage.
 
+Both requests are gated on a new Connector preference, `externalAPI.allowedExtensions`, which is an
+empty array by default: the API answers nothing until the user lists a calling extension's ID in it,
+and web pages (which have no `sender.id`) are refused outright. The pref follows the existing
+`allowedInterceptHosts` / `allowedCSLExtensionHosts` shape and is editable in the Connector's own
+Config Editor, so the patch adds no preferences UI.
+
 ## Build the patched Connector
 
-The checked-in patch was verified against `zotero/zotero-connectors` commit
-`48ad1fe09defb770f83a3268cf8ebe72ab9aba52`.
+The checked-in patch applies to `zotero/zotero-connectors` master at commit `c279ccc`
+(2026-08-21). It was first written against `48ad1fe0` and no longer applies there; upstream moved
+`_browserAction` onto `Zotero.HostPermissions.checkChromiumActionPermissions` and added an
+`_ensureScriptsInjected` guard, and that guard has to return `false` too or an injection failure
+answers `saveTab` with `saved`.
 
 ```sh
 git clone https://github.com/zotero/zotero-connectors.git
 cd zotero-connectors
-git submodule update --init
+git submodule update --init   # not --recursive: that pulls the whole Zotero client tree
 npm install
 git apply /absolute/path/to/tabglutton/poc/zotero-connector.patch
 ./build.sh -d
@@ -61,6 +70,9 @@ The development builds are written to:
   `https://arxiv.org/abs/1706.03762` as `{ itemType: "preprint", label: "arXiv.org" }`.
 - The same setup exercised Tabglutton's full selected-tab route for that paper. The Connector saved
   it to Zotero, Tabglutton reported one Zotero save with no failures, and the source tab closed.
+- The port to master `c279ccc` builds both targets and both generated backgrounds carry the external
+  API, but it has not been exercised in a live browser; the end-to-end Chrome run above was the
+  `48ad1fe0` build.
 - Firefox source and output are validated, but its end-to-end browser smoke test remains manual. The
   Firefox 134 automation runtime available during this POC predates WebDriver BiDi's
   `webExtension.install` command and could not install both temporary add-ons programmatically.
@@ -74,6 +86,9 @@ The development builds are written to:
 4. Copy the ID Chrome assigns that unpacked Connector.
 5. Load Tabglutton's `dist-chrome/` directory as another unpacked extension.
 6. In Tabglutton settings, enable **Route papers to Zotero** and paste the unpacked Connector ID.
+7. Copy Tabglutton's own ID from `chrome://extensions`, open the Connector's **Preferences →
+   Advanced → Config Editor**, and set `externalAPI.allowedExtensions` to `["<that ID>"]`. Until
+   this is set, every call comes back `unauthorized`.
 
 The published Chrome Connector ID remains the default so the override can disappear if the API is
 accepted upstream.
@@ -88,6 +103,41 @@ accepted upstream.
 4. Load `dist-firefox/manifest.json` the same way.
 5. In Tabglutton settings, enable **Route papers to Zotero**. The default Connector ID is already
    correct.
+6. In the Connector's **Preferences → Advanced → Config Editor**, set
+   `externalAPI.allowedExtensions` to `["tabglutton@addons.local"]`. Until this is set, every call
+   comes back `unauthorized`.
+
+## Keep it installed on Zen
+
+A temporary add-on is gone at the next restart, which makes the POC unusable as a daily route. Zen
+can hold the build permanently, and Firefox release cannot: Zen ships `MOZ_REQUIRE_SIGNING: false`
+(`omni.ja` → `modules/AppConstants.sys.mjs`, measured on 1.21.15b), so
+`modules/addons/AddonSettings.sys.mjs` falls through to the `xpinstall.signatures.required` pref
+instead of hard-coding the requirement. Set that pref to `false` in `about:config` and an unsigned
+XPI installs and stays installed. On release Firefox the same pref is inert.
+
+**The build needs its own add-on identity first.** The generated Firefox manifest carries Zotero's
+ID _and_ `update_url: https://zotero.org/...`, so a same-ID install is a build Zotero's own updater
+is entitled to replace. Re-ID and package after every `./build.sh -d`:
+
+```sh
+cd build/firefox
+jq '.applications.gecko.id = "zotero-connector-poc@tabglutton.local"
+  | del(.applications.gecko.update_url)
+  | .name = "Zotero Connector (Tabglutton POC)"' manifest.json > m.tmp && mv m.tmp manifest.json
+zip -qr ../zotero-connector-poc.xpi . -x '.*'
+```
+
+Then `about:addons` → gear → **Install Add-on From File…**, disable the published Connector (two
+Connectors both inject and both talk to Zotero on 23119), and paste
+`zotero-connector-poc@tabglutton.local` into the Connector ID field in Tabglutton's settings — it is
+free text on both engines, not a Chrome-only override. Authorize Tabglutton in the Config Editor as
+above; the allowlist is a Connector preference, so it has to be set again for this build.
+
+The Connector→Zotero channel is loopback HTTP, not extension-ID-keyed, so the renamed build talks to
+Zotero desktop exactly as the published one does. Zotero's local server has no per-extension
+authorization at all: `server.js` blocks browser-shaped requests only until they carry an
+`X-Zotero-Connector-API-Version` header.
 
 ## Suggested smoke test
 
@@ -106,8 +156,9 @@ open.
 
 ## Deliberate limitations
 
-- The POC rejects web pages but accepts calls from any browser extension with a `sender.id`. A real
-  upstream implementation still needs an allowlist, approval UI, or another authorization model.
+- Authorization is a static allowlist the user edits by hand. It is deliberately the smallest
+  defensible model rather than the best one: a first-use approval prompt would not make the user
+  find an extension ID and type it into a config editor.
 - `saved` means the Connector's page-saving operation resolved without a surfaced failure. It is
   not independent verification of the resulting Zotero library item.
 - The Connector ID override is development UI. A production build should use the published ID and
