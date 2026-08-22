@@ -85,9 +85,11 @@ The development builds are written to:
 - `saveTab` was re-exercised on that same Firefox against a live Zotero client
   (`scratch-chrome/verify-zotero-save.ts`): it answered `{ ok: true, status: "saved" }` in 1.7s, and
   the library held the item a second later — a `preprint` titled "Attention Is All You Need" with a
-  note and a `Preprint PDF` attachment, `dateAdded` 2026-08-22 20:16:44 UTC. `firstUse` has to be
-  cleared first, because the API refuses to save while the Connector's own onboarding is pending;
-  that refusal is deliberate and is not a bug to route around.
+  note and a PDF attachment. The run was repeated on a profile where the Connector had never been
+  clicked, and saved just the same: **an external save skips the Connector's first-run notice**,
+  because that notice is informational rather than a permission and is injected into a tab the user
+  is not looking at — a backlog would raise one per tab. Refusing the save until someone dismissed
+  it was the first shape of this and it was wrong: the allowlist is the consent, not the dialog.
 - **Confirming a save from outside the client needs the WAL.** Zotero keeps its SQLite in WAL mode,
   so a read opened with `immutable=1` — which ignores the log by design — reported a library frozen
   days earlier and made a save that had just landed look like it had failed. Copy `zotero.sqlite`
