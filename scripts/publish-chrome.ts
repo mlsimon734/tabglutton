@@ -70,20 +70,18 @@ Packages the Chrome build and uploads it as a draft. Nothing is submitted for re
 and nothing reaches users until --publish.
 
   --publish       submit the uploaded draft for review; it publishes when it passes
-  --staged=N      with --publish: staged rollout, holding the release at N% of users
   --skip-build    upload the existing zip instead of repackaging
   --publish-only  publish the draft already in the store; no build, no upload
   --zip=PATH      package to upload (default: web-ext-artifacts/tabglutton-chrome-<version>.zip)
   --status        print the item's current status and exit
   --cancel        cancel the active submission and exit
-  --deploy=N      raise the published revision's rollout to N% and exit
   --help          print this
 
 Credentials come from .env: CWS_PUBLISHER_ID, CWS_CLIENT_ID, CWS_CLIENT_SECRET,
 CWS_REFRESH_TOKEN. Run scripts/cws-auth.ts once to mint the refresh token.`;
 
 const FLAGS = ["publish", "skip-build", "publish-only", "status", "cancel", "help"];
-const VALUES = ["staged", "zip", "deploy"];
+const VALUES = ["zip"];
 
 const args = process.argv.slice(2);
 for (const arg of args) {
@@ -106,34 +104,11 @@ if (flag("help")) {
   process.exit(0);
 }
 
-function percentage(raw: string, label: string): number {
-  const parsed = Number(raw);
-  // `Number("")` is 0, so a bare `--deploy=` would otherwise mean "roll back to 0%".
-  if (raw.trim() === "" || !Number.isInteger(parsed) || parsed < 0 || parsed > 100) {
-    console.error(`${label} takes a whole number between 0 and 100; got "${raw}".`);
-    process.exit(1);
-  }
-  return parsed;
-}
-
 const publishOnly = flag("publish-only");
 const wantsPublish = flag("publish") || publishOnly;
 const zipOverride = value("zip");
 // Naming a package and then rebuilding over it is not what --zip can plausibly have meant.
 const skipBuild = flag("skip-build") || zipOverride !== undefined;
-
-// Both percentages are parsed here rather than where they are used, so a typo costs
-// nothing. Validating --staged at the publish call would mean rejecting it after the
-// package was already in the store.
-const staged = value("staged");
-const stagedPercentage = staged === undefined ? undefined : percentage(staged, "--staged");
-const deploy = value("deploy");
-const deployPercentage = deploy === undefined ? undefined : percentage(deploy, "--deploy");
-
-if (stagedPercentage !== undefined && !wantsPublish) {
-  console.error("--staged only does anything alongside --publish or --publish-only.");
-  process.exit(1);
-}
 
 loadEnv();
 const [publisherId, clientId, clientSecret, refreshToken] = requireEnv(
@@ -186,7 +161,7 @@ async function call<T>(method: string, action: string, body?: unknown): Promise<
     console.error(`\n${action} failed (HTTP ${response.status}): ${message ?? text}`);
     process.exit(1);
   }
-  // cancelSubmission and setPublishedDeployPercentage answer with an empty body.
+  // cancelSubmission answers with an empty body.
   return (text ? JSON.parse(text) : {}) as T;
 }
 
@@ -242,13 +217,6 @@ if (flag("status")) {
 if (flag("cancel")) {
   await call("POST", "cancelSubmission");
   console.log("✓ Submission cancelled.");
-  report(await fetchStatus());
-  process.exit(0);
-}
-
-if (deployPercentage !== undefined) {
-  await call("POST", "setPublishedDeployPercentage", { deployPercentage });
-  console.log(`✓ Rollout raised to ${deployPercentage}%.`);
   report(await fetchStatus());
   process.exit(0);
 }
@@ -345,22 +313,19 @@ if (!wantsPublish) {
   process.exit(0);
 }
 
-const body =
-  stagedPercentage === undefined
-    ? { publishType: "DEFAULT_PUBLISH" }
-    : {
-        publishType: "STAGED_PUBLISH",
-        deployInfos: [{ deployPercentage: stagedPercentage }],
-      };
-
 // Sampled before the call for the same reason as the upload snapshot: `PUBLISHED (0.4.0)`
 // is only evidence when 0.4.0 was not already published a moment ago.
 const beforePublish = await fetchStatus();
 const alreadySubmitted = versionsIn(beforePublish.submittedItemRevisionStatus).includes(version);
 const alreadyPublished = versionsIn(beforePublish.publishedItemRevisionStatus).includes(version);
 
-console.log(`\nPublishing (${body.publishType})…`);
-const published = await call<PublishItemResponse>("POST", "publish", body);
+console.log("\nPublishing…");
+// The V2 publish body also carries STAGED_PUBLISH and a rollout percentage. Not used, and
+// deliberately not wrapped: there is no Chrome population here to stagger a release across,
+// and it is the one path that could never be exercised before shipping it.
+const published = await call<PublishItemResponse>("POST", "publish", {
+  publishType: "DEFAULT_PUBLISH",
+});
 for (const warning of published.warningInfo?.warnings ?? []) {
   console.log(`  warning — ${warning.reason}: ${warning.description}`);
 }

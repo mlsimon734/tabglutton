@@ -744,7 +744,7 @@ store whether it actually arrived** rather than believing the call that said so.
 | `bun run sign:dev`                 | AMO unlisted with the four-part build counter (`AGENTS.md` § Versioning)     |
 
 `bun scripts/publish-chrome.ts --help` has the full flag list, including `--publish-only`,
-`--staged=N`, `--deploy=N`, `--cancel`, and `--zip=PATH`.
+`--cancel`, and `--zip=PATH`.
 
 ### Use the V2 API. V1 dies on 15 October 2026
 
@@ -769,11 +769,15 @@ The endpoints used:
 | read the item's state         | `GET /v2/{item}:fetchStatus`                         |
 | submit for review / publish   | `POST /v2/{item}:publish`                            |
 | withdraw a pending submission | `POST /v2/{item}:cancelSubmission`                   |
-| widen a staged rollout        | `POST /v2/{item}:setPublishedDeployPercentage`       |
 
 Note the two `:upload` paths. The package goes to the one **under `/upload`** — the media
 endpoint. The identically named path without that prefix is the metadata-only variant and
 takes no package at all.
+
+V2 also offers staged rollouts — `STAGED_PUBLISH` with a percentage, widened afterwards
+through `:setPublishedDeployPercentage`. Deliberately not wrapped. There is no Chrome
+population here to stagger a release across, and it is the one path that could not be
+exercised before shipping it, so it would be untested code around an untested API.
 
 ### One-time setup, and it is all human work
 
