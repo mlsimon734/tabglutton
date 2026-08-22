@@ -106,18 +106,33 @@ if (flag("help")) {
   process.exit(0);
 }
 
-const publishOnly = flag("publish-only");
-const wantsPublish = flag("publish") || publishOnly;
-const staged = value("staged");
-const deploy = value("deploy");
-
 function percentage(raw: string, label: string): number {
   const parsed = Number(raw);
-  if (!Number.isInteger(parsed) || parsed < 0 || parsed > 100) {
+  // `Number("")` is 0, so a bare `--deploy=` would otherwise mean "roll back to 0%".
+  if (raw.trim() === "" || !Number.isInteger(parsed) || parsed < 0 || parsed > 100) {
     console.error(`${label} takes a whole number between 0 and 100; got "${raw}".`);
     process.exit(1);
   }
   return parsed;
+}
+
+const publishOnly = flag("publish-only");
+const wantsPublish = flag("publish") || publishOnly;
+const zipOverride = value("zip");
+// Naming a package and then rebuilding over it is not what --zip can plausibly have meant.
+const skipBuild = flag("skip-build") || zipOverride !== undefined;
+
+// Both percentages are parsed here rather than where they are used, so a typo costs
+// nothing. Validating --staged at the publish call would mean rejecting it after the
+// package was already in the store.
+const staged = value("staged");
+const stagedPercentage = staged === undefined ? undefined : percentage(staged, "--staged");
+const deploy = value("deploy");
+const deployPercentage = deploy === undefined ? undefined : percentage(deploy, "--deploy");
+
+if (stagedPercentage !== undefined && !wantsPublish) {
+  console.error("--staged only does anything alongside --publish or --publish-only.");
+  process.exit(1);
 }
 
 loadEnv();
@@ -200,10 +215,11 @@ function report(status: FetchItemStatusResponse) {
   if (status.warned) console.log("  WARNED");
 }
 
-/** Every crx version the store will admit to holding, in either revision slot. */
-function versionsIn(status: FetchItemStatusResponse): string[] {
-  return [status.publishedItemRevisionStatus, status.submittedItemRevisionStatus]
-    .flatMap((revision) => revision?.distributionChannels ?? [])
+/** The crx versions one revision slot holds. Kept per-slot: "published" and "submitted"
+ *  are different claims, and a check that unions them cannot tell a fresh submission from
+ *  a version that was already live. */
+function versionsIn(revision: RevisionStatus | undefined): string[] {
+  return (revision?.distributionChannels ?? [])
     .map((channel) => channel.crxVersion)
     .filter((version): version is string => version !== undefined);
 }
@@ -230,10 +246,9 @@ if (flag("cancel")) {
   process.exit(0);
 }
 
-if (deploy !== undefined) {
-  const target = percentage(deploy, "--deploy");
-  await call("POST", "setPublishedDeployPercentage", { deployPercentage: target });
-  console.log(`✓ Rollout raised to ${target}%.`);
+if (deployPercentage !== undefined) {
+  await call("POST", "setPublishedDeployPercentage", { deployPercentage });
+  console.log(`✓ Rollout raised to ${deployPercentage}%.`);
   report(await fetchStatus());
   process.exit(0);
 }
@@ -241,7 +256,7 @@ if (deploy !== undefined) {
 const { version } = (await Bun.file("package.json").json()) as { version: string };
 
 if (!publishOnly) {
-  if (!flag("skip-build")) {
+  if (!skipBuild) {
     const built = spawnSync("bun", ["run", "package:chrome"], {
       stdio: "inherit",
       env: process.env,
@@ -252,11 +267,15 @@ if (!publishOnly) {
     }
   }
 
-  const zipPath = value("zip") ?? `web-ext-artifacts/tabglutton-chrome-${version}.zip`;
+  const zipPath = zipOverride ?? `web-ext-artifacts/tabglutton-chrome-${version}.zip`;
   if (!existsSync(zipPath)) {
     console.error(`No package at ${zipPath}. Run \`bun run package:chrome\` first.`);
     process.exit(1);
   }
+
+  // Sampled before the upload, so the async poll below can tell this upload's verdict from
+  // the one still sitting in lastAsyncUploadState from last time.
+  const beforeUpload = await fetchStatus();
 
   console.log(`\nUploading ${zipPath} to ${item}`);
   // The package goes to the media endpoint under /upload, as the raw zip body — not the
@@ -279,9 +298,17 @@ if (!publishOnly) {
   let state = uploaded.uploadState;
   if (state === "IN_PROGRESS") {
     console.log("Upload is processing…");
+    let sawInProgress = false;
     const settled = await poll(async () => {
       const seen = (await fetchStatus()).lastAsyncUploadState;
-      return seen === undefined || seen === "IN_PROGRESS" ? null : seen;
+      if (seen === undefined || seen === "IN_PROGRESS") {
+        sawInProgress ||= seen === "IN_PROGRESS";
+        return null;
+      }
+      // A terminal state that has not moved since before the upload is the *previous*
+      // upload's answer. Taking it would let a package still in flight be published.
+      if (!sawInProgress && seen === beforeUpload.lastAsyncUploadState) return null;
+      return seen;
     }, UPLOAD_POLL_TIMEOUT_MS);
     if (settled === null) {
       console.error(`\nUpload was still processing after ${UPLOAD_POLL_TIMEOUT_MS / 1000}s.`);
@@ -301,7 +328,12 @@ if (!publishOnly) {
     );
     process.exit(1);
   }
-  console.log(`✓ Uploaded ${uploaded.crxVersion ?? version} as a draft.`);
+  console.log(
+    uploaded.crxVersion
+      ? `✓ Uploaded ${uploaded.crxVersion} as a draft.`
+      : "✓ Upload succeeded. The store echoed no version back, so which package the draft" +
+          "\n  now holds is unconfirmed — only a submission makes it readable again.",
+  );
 }
 
 if (!wantsPublish) {
@@ -314,12 +346,18 @@ if (!wantsPublish) {
 }
 
 const body =
-  staged === undefined
+  stagedPercentage === undefined
     ? { publishType: "DEFAULT_PUBLISH" }
     : {
         publishType: "STAGED_PUBLISH",
-        deployInfos: [{ deployPercentage: percentage(staged, "--staged") }],
+        deployInfos: [{ deployPercentage: stagedPercentage }],
       };
+
+// Sampled before the call for the same reason as the upload snapshot: `PUBLISHED (0.4.0)`
+// is only evidence when 0.4.0 was not already published a moment ago.
+const beforePublish = await fetchStatus();
+const alreadySubmitted = versionsIn(beforePublish.submittedItemRevisionStatus).includes(version);
+const alreadyPublished = versionsIn(beforePublish.publishedItemRevisionStatus).includes(version);
 
 console.log(`\nPublishing (${body.publishType})…`);
 const published = await call<PublishItemResponse>("POST", "publish", body);
@@ -332,18 +370,31 @@ for (const warning of published.warningInfo?.warnings ?? []) {
 // It can lag a few seconds behind the call, hence the poll.
 const confirmed = await poll(async () => {
   const status = await fetchStatus();
-  return versionsIn(status).includes(version) ? status : null;
+  const submitted = versionsIn(status.submittedItemRevisionStatus).includes(version);
+  const newlyPublished =
+    !alreadyPublished && versionsIn(status.publishedItemRevisionStatus).includes(version);
+  return submitted || newlyPublished ? status : null;
 }, PUBLISH_POLL_TIMEOUT_MS);
 
 if (confirmed === null) {
   console.error(
     `\n✗ publish answered ${published.state ?? "?"}, but ${PUBLISH_POLL_TIMEOUT_MS / 1000}s later the` +
-      `\n  API still does not name ${version} in either revision. Treat the publish as` +
-      "\n  unconfirmed and check the Developer Dashboard before re-running.",
+      `\n  API still does not show ${version} submitted, or newly published. Treat the publish` +
+      "\n  as unconfirmed — which is not the same as failed — and check the Developer" +
+      "\n  Dashboard before re-running.",
   );
   report(await fetchStatus());
   process.exit(1);
 }
 
-console.log(`\n✓ Store confirms ${version} is submitted.`);
+if (alreadySubmitted) {
+  // Reported rather than smoothed over: the version is in the queue, but it was there
+  // before this call too, so nothing here separates that from what this call did.
+  console.log(
+    `\n✓ Store shows ${version} submitted — but it already did before this call, so this` +
+      "\n  run cannot tell its own effect from the submission that was already there.",
+  );
+} else {
+  console.log(`\n✓ Store confirms ${version} is submitted.`);
+}
 report(confirmed);

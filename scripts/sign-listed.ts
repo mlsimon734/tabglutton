@@ -11,7 +11,15 @@ import { loadSigningEnv } from "./sign-env.js";
 
 loadSigningEnv();
 
-const dirty = spawnSync("git", ["status", "--porcelain"], { encoding: "utf8" }).stdout;
+const status = spawnSync("git", ["status", "--porcelain"], { encoding: "utf8" });
+// A git that could not run answers `null` stdout, and a git that failed answers "" with a
+// nonzero status — both of which would read as "clean" and wave a mismatched source zip
+// through. Absence of an answer is not an answer.
+if (status.status !== 0 || status.stdout === null) {
+  console.error(`Could not read \`git status\` (status ${status.status}). Refusing to sign blind.`);
+  process.exit(1);
+}
+const dirty = status.stdout;
 if (dirty.trim()) {
   console.error(
     "Working tree is dirty. The source zip is `git archive HEAD`, so it would not match" +
@@ -42,7 +50,7 @@ const steps: [string, string[]][] = [
 for (const [command, argv] of steps) {
   const ran = spawnSync(command, argv, { stdio: "inherit", env: process.env });
   if (ran.status !== 0) {
-    console.error(`\n${command} ${argv[0]} failed (status ${ran.status}).`);
+    console.error(`\n${command} ${argv.join(" ")} failed (status ${ran.status}).`);
     process.exit(ran.status ?? 1);
   }
 }

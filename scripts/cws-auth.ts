@@ -91,7 +91,11 @@ const consentUrl = `${AUTH_ENDPOINT}?${new URLSearchParams({
 console.log("Opening the Google consent screen. If it does not open, visit:\n");
 console.log(`  ${consentUrl}\n`);
 const opener = process.platform === "darwin" ? "open" : "xdg-open";
-spawn(opener, [consentUrl], { stdio: "ignore", detached: true }).unref();
+// ENOENT arrives as an unhandled 'error' event, which would kill the process and defeat
+// the URL printed just above. An absent opener just means the user pastes it.
+spawn(opener, [consentUrl], { stdio: "ignore", detached: true })
+  .on("error", () => {})
+  .unref();
 
 const timer = setTimeout(
   () => fail(new Error(`No redirect arrived within ${CONSENT_TIMEOUT_MS / 1000}s.`)),
