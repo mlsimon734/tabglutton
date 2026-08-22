@@ -355,6 +355,18 @@ field errors, so a listing that looks complete is not submittable:
    link**, not a code; the address reads "unverified" and Publish stays blocked until the
    link is followed. Adding and verifying are two separate steps in one place.
 
+### A fourth gate: a new permission needs a justification, which un-certifies the third
+
+Measured on 0.4.0, whose `optional_permissions: ["downloads"]` was new since `0.3.1`.
+Optional does not exempt it. The API answers only `HTTP 400: Your submission does not meet
+the requirements`, and the dashboard greys out _Submit for review_ with no field marked —
+the reason is behind the **"Why can't I submit?"** link, as with the blockers above.
+
+**Filling the justification then resets the data-usage certification**, so clearing this
+blocker immediately fails on gate 1 and reads like the fix not taking. Tick the three boxes
+again before saving. `tabGroups` ([#34](https://github.com/mlsimon734/tabglutton/issues/34))
+is the next permission due to walk into this.
+
 ### Single purpose statement
 
 ```
