@@ -70,9 +70,20 @@ The development builds are written to:
   `https://arxiv.org/abs/1706.03762` as `{ itemType: "preprint", label: "arXiv.org" }`.
 - The same setup exercised Tabglutton's full selected-tab route for that paper. The Connector saved
   it to Zotero, Tabglutton reported one Zotero save with no failures, and the source tab closed.
-- The port to master `c279ccc` builds both targets and both generated backgrounds carry the external
-  API, but it has not been exercised in a live browser; the end-to-end Chrome run above was the
-  `48ad1fe0` build.
+- The port to master `c279ccc` builds both targets with the external API in both generated
+  backgrounds. A live Firefox 134.0.2 run (`scratch-chrome/verify-zotero-external-api.ts`, local
+  only) installed the patched Connector and `dist-firefox` as temporary add-ons and drove the API
+  from Tabglutton's own options page: `getTabInfo` answered `unauthorized` until
+  `externalAPI.allowedExtensions` named `tabglutton@addons.local`, and then
+  `{ state: "ready", isPDF: false, translator: { itemType: "preprint", label: "arXiv.org" } }` for
+  the arXiv abstract. A bad `version` answers `unsupported-version` and a bad `action`
+  `unknown-action`.
+- **A pref written from a page reaches the running background**, which is what makes the Config
+  Editor a real remedy rather than a setting that needs a restart: `Prefs.set` is listed in
+  `src/common/messages.js`, so a page's call is proxied to the background, which owns the cache
+  `Prefs.get` reads. Measured — the same session that wrote the pref was authorized by it.
+- `saveTab` was not re-exercised after the rebase: no Zotero client was running on the test machine.
+  The Chrome run below covers that path on the pre-allowlist revision.
 - Firefox source and output are validated, but its end-to-end browser smoke test remains manual. The
   Firefox 134 automation runtime available during this POC predates WebDriver BiDi's
   `webExtension.install` command and could not install both temporary add-ons programmatically.
