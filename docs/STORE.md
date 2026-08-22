@@ -48,7 +48,9 @@ These bind every release, not just the first one.
   code is machine-generated, and AMO requires the original plus reproducible build
   instructions whenever that is true. `bun run package` emits
   `web-ext-artifacts/tabglutton-source-<version>.zip` via `git archive`. The source step is
-  **after** the button labelled "Submit Version", not alongside the package — see §3.
+  **after** the button labelled "Submit Version", not alongside the package — see §3, or
+  skip the ordering entirely with `bun run sign:listed`, which passes the zip on the
+  command line (§7).
 - **The submission flow defaults to the wrong channel, and states it rather than asking.**
   The upload page prints the current choice as prose ("On your own.") with a small `Change`
   link, and the file picker sits directly beneath it. The actual radios live on a separate
@@ -59,6 +61,9 @@ These bind every release, not just the first one.
   ```
   https://addons.mozilla.org/en-US/developers/addon/tabglutton/versions/submit/distribution?channel=listed
   ```
+
+  `bun run sign:listed` (§7) names the channel on every invocation and inherits nothing,
+  which is the other way out of this.
 
 - **Versions must be unique and strictly increasing on AMO**, and Firefox compares
   `0.1.3 < 0.1.3.1` — so the four-part `sign:dev` builds already consumed a range the
@@ -191,6 +196,10 @@ current-window scope in settings.
 | Tags               | pick from AMO's fixed vocabulary; `tabs`, `productivity`, `bookmarks` are the closest fits |
 
 ### The version-upload flow, in the order it actually happens
+
+This is the web flow; `bun run sign:listed` does the same submission in one command and is
+the shorter path (§7). Keep this section anyway — it is what the console does, and it is
+where the step order and the validation warnings are recorded.
 
 Measured on the `0.3.1` submission. The step order is not what it looks like from the first
 page, and the source upload is not where the wording implies.
@@ -747,7 +756,8 @@ its own.
 
 1. **Ship 0.4.0 to AMO and the Chrome Web Store, and let it roll out.** Non-negotiable, for
    the reason at the top of this file: `BRIDGE_PROTO` 3 has no downgrade path, so a sidecar
-   that lands first refuses the handshake for every installed user.
+   that lands first refuses the handshake for every installed user. §7 is how both of those
+   submissions are driven — `bun run sign:listed` and `bun run publish:chrome --publish`.
 
 2. **Publish the first version by hand**, from a local `npm login`:
 
@@ -799,3 +809,145 @@ its own.
 - Not done, and the next hardening if this ever wants a per-release human gate: bind the job
   to a GitHub **environment** with required reviewers and name that environment in the npm
   form. That trades flip-once for approve-every-time, which is why it is not the shape here.
+
+---
+
+## 7. Scripted publishing
+
+Both stores are reachable from the terminal. Nothing here replaces the listing itself —
+copy, screenshots, categories, and the privacy certifications in §4 are console work, done
+once and edited by hand afterwards. What is scripted is the repeated part: taking the
+package that `bun run package` just built and getting it into the store, then **asking the
+store whether it actually arrived** rather than believing the call that said so.
+
+This section is the mechanism only. **When** to run any of it belongs to §6, which owns the
+release order — both stores first, the sidecar's npm publish after they have rolled out —
+and that constraint is not restated here so that there is only one copy of it to keep true.
+
+| Command                            | What it does                                                                 |
+| ---------------------------------- | ---------------------------------------------------------------------------- |
+| `bun run cws:auth`                 | one-time: mint a Chrome Web Store refresh token from an OAuth client         |
+| `bun run publish:chrome`           | package the Chrome build and upload it as a **draft** — nothing is submitted |
+| `bun run publish:chrome --publish` | upload, then submit for review                                               |
+| `bun run publish:chrome --status`  | print what the store currently holds                                         |
+| `bun run sign`                     | AMO **unlisted** — self-distribution signing, does not touch the listing     |
+| `bun run sign:listed`              | AMO **listed** — the public submission, source zip included                  |
+| `bun run sign:dev`                 | AMO unlisted with the four-part build counter (`AGENTS.md` § Versioning)     |
+
+`bun scripts/publish-chrome.ts --help` has the full flag list, including `--publish-only`,
+`--cancel`, and `--zip=PATH`.
+
+### Use the V2 API. V1 dies on 15 October 2026
+
+`scripts/publish-chrome.ts` targets **V2**, at `https://chromewebstore.googleapis.com/v2/`.
+The V1 API at `https://www.googleapis.com/chromewebstore/v1.1/` is deprecated and supported
+only until **15 October 2026**, so every recipe and blog post older than that is a rewrite
+waiting to happen — and `chrome-webstore-upload-cli`, the obvious dependency, is one of
+them. There is no reason to take a dependency here: the whole surface is an OAuth refresh
+and two HTTPS calls.
+
+One shape change is worth stating outright because it is what breaks a ported V1 recipe.
+V2 addresses items as **`publishers/{publisherId}/items/{itemId}`**; V1 needed only the item
+id. Without `CWS_PUBLISHER_ID` every call 404s, and the publisher id is not discoverable
+through the API — read it off the Developer Dashboard, **PUBLISHER → Settings**, the same
+page §4 sends you to for the contact email.
+
+The endpoints used:
+
+| Call                          | Method and path                                      |
+| ----------------------------- | ---------------------------------------------------- |
+| upload a package              | `POST /upload/v2/{item}:upload`, raw zip as the body |
+| read the item's state         | `GET /v2/{item}:fetchStatus`                         |
+| submit for review / publish   | `POST /v2/{item}:publish`                            |
+| withdraw a pending submission | `POST /v2/{item}:cancelSubmission`                   |
+
+Note the two `:upload` paths. The package goes to the one **under `/upload`** — the media
+endpoint. The identically named path without that prefix is the metadata-only variant and
+takes no package at all.
+
+V2 also offers staged rollouts — `STAGED_PUBLISH` with a percentage, widened afterwards
+through `:setPublishedDeployPercentage`. Deliberately not wrapped. There is no Chrome
+population here to stagger a release across, and it is the one path that could not be
+exercised before shipping it, so it would be untested code around an untested API.
+
+### One-time setup, and it is all human work
+
+Only a person can do this part; the script cannot bootstrap itself.
+
+1. **A Google Cloud project.** <https://console.cloud.google.com> → create or pick one.
+2. **Enable the Chrome Web Store API** in that project (APIs & Services → Library → search
+   for it → Enable). A client that skips this authorizes fine and then fails every call.
+3. **OAuth consent screen** → **External**. Fill in the required app fields, skip the
+   scopes screen, and **add your own Google account as a test user** — an app left in
+   Testing only issues tokens to listed test users.
+4. **Credentials → Create credentials → OAuth client ID → application type "Desktop app".**
+   Not "Web application", which is what the official reference tells you to pick because it
+   walks you through the OAuth Playground. `scripts/cws-auth.ts` binds a loopback listener
+   on an ephemeral port instead, and a Desktop app client is the only type that accepts a
+   loopback redirect it was never told about in advance. (The reason there is a listener at
+   all: Google retired the copy-the-code-off-the-page flow, `urn:ietf:wg:oauth:2.0:oob`, in
+   2022.)
+5. Put the client id and secret in `.env` as `CWS_CLIENT_ID` / `CWS_CLIENT_SECRET`, add
+   `CWS_PUBLISHER_ID` from the dashboard, then run:
+
+   ```
+   bun run cws:auth
+   ```
+
+   It opens the consent screen, catches the redirect, exchanges the code, and prints a
+   refresh token. It deliberately does **not** write `.env` itself — paste the value in as
+   `CWS_REFRESH_TOKEN`. Scope is `https://www.googleapis.com/auth/chromewebstore`.
+
+`.env` is gitignored and is the only place any of this lives.
+
+### Two gotchas that are not the script's fault
+
+- **The Google account must have 2-Step Verification enabled.** Google requires it to
+  publish or update an extension at all. Without it the OAuth dance succeeds and the
+  publish call is the thing that fails.
+- **A refresh token dies after six months unused**, and also when the account's password
+  changes. Releases here are further apart than that, so expect to re-run `cws:auth`
+  roughly as often as you release. `publish-chrome.ts` recognizes `invalid_grant` and says
+  so rather than reporting an opaque 400.
+
+### What the verification actually proves, and what it does not
+
+The point of querying `fetchStatus` after a publish is the failure this exists to catch: a
+call that answers `200` with a plausible `state`, and did not take. So the verdict is
+always what a **second, separate** read says, never the publish response — the same rule
+§3 states for AMO ("confirm the channel actually took by querying the API"). The script
+polls `fetchStatus` for up to 60s and exits non-zero unless the version it just uploaded
+appears in the item's published or submitted revision. A timeout is reported as
+_unconfirmed_, not as _failed_, because those are different facts and only one of them is
+a reason to re-run.
+
+An **upload** is weaker, and the script says so rather than dressing it up. A package that
+has been uploaded but not submitted is not a revision the store will describe: it is
+neither published nor submitted, so `fetchStatus` has nothing to name it by. What can be
+confirmed is that the upload succeeded (`uploadState`, or `lastAsyncUploadState` when the
+store took the package asynchronously) and that the version the store echoed back is the
+version in this tree — a mismatch there means the wrong zip, and is a hard failure. A
+draft upload reporting success is a claim about the upload, not about the store's draft.
+
+### The AMO half, and why the listed path looked absent
+
+`bun run sign` is `--channel=unlisted`. That is **self-distribution signing** — it mints a
+signed XPI and never touches the public listing, which is why there appeared to be no
+scripted path to AMO. `bun run sign:listed` is the listed one:
+
+```
+web-ext sign --channel=listed --upload-source-code=web-ext-artifacts/tabglutton-source-<version>.zip
+```
+
+The source upload is not optional. `build.ts` minifies, so the reviewed code is
+machine-generated and AMO bounces a listed submission without the original (§1). Passing it
+on the command line also collapses the ordering trap in §3, where the source step hides
+_after_ the button labelled "Submit Version".
+
+`sign:listed` refuses to run on a dirty tree. The source zip is `git archive HEAD`, so
+uncommitted work would ship source that does not build the package being signed — a
+mismatch that surfaces in a review queue days later, if at all. Commit first.
+
+Neither AMO script picks the channel from anything sticky, which is the other half of the
+§1 trap: the web flow inherits the last channel used, and every `sign:dev` build ever made
+was unlisted.

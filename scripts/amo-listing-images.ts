@@ -84,7 +84,11 @@ const base64url = (bytes: Uint8Array): string =>
     .replaceAll("/", "_")
     .replaceAll("=", "");
 
-const utf8 = (text: string): Uint8Array => new TextEncoder().encode(text);
+// The cast is the ArrayBufferLike/ArrayBuffer split: `encode` is typed as returning a view
+// over either, and crypto.subtle's BufferSource wants a plain ArrayBuffer. TextEncoder
+// never hands back a SharedArrayBuffer, so this is narrowing, not a lie.
+const utf8 = (text: string): Uint8Array<ArrayBuffer> =>
+  new TextEncoder().encode(text) as Uint8Array<ArrayBuffer>;
 
 async function mintToken(issuer: string, secret: string): Promise<string> {
   const issued = Math.floor(Date.now() / 1000);
