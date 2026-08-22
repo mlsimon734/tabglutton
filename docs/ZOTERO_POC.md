@@ -82,8 +82,17 @@ The development builds are written to:
   Editor a real remedy rather than a setting that needs a restart: `Prefs.set` is listed in
   `src/common/messages.js`, so a page's call is proxied to the background, which owns the cache
   `Prefs.get` reads. Measured — the same session that wrote the pref was authorized by it.
-- `saveTab` was not re-exercised after the rebase: no Zotero client was running on the test machine.
-  The Chrome run below covers that path on the pre-allowlist revision.
+- `saveTab` was re-exercised on that same Firefox against a live Zotero client
+  (`scratch-chrome/verify-zotero-save.ts`): it answered `{ ok: true, status: "saved" }` in 1.7s, and
+  the library held the item a second later — a `preprint` titled "Attention Is All You Need" with a
+  note and a `Preprint PDF` attachment, `dateAdded` 2026-08-22 20:16:44 UTC. `firstUse` has to be
+  cleared first, because the API refuses to save while the Connector's own onboarding is pending;
+  that refusal is deliberate and is not a bug to route around.
+- **Confirming a save from outside the client needs the WAL.** Zotero keeps its SQLite in WAL mode,
+  so a read opened with `immutable=1` — which ignores the log by design — reported a library frozen
+  days earlier and made a save that had just landed look like it had failed. Copy `zotero.sqlite`
+  together with its `-wal` and `-shm` and query the copy. The local HTTP API is the cleaner route
+  but answers 403 unless the user has switched it on in Zotero's Advanced settings.
 - Firefox source and output are validated, but its end-to-end browser smoke test remains manual. The
   Firefox 134 automation runtime available during this POC predates WebDriver BiDi's
   `webExtension.install` command and could not install both temporary add-ons programmatically.
