@@ -1,5 +1,15 @@
 name: release
 
+# Every action is pinned to a full commit SHA, with its release tag in the trailing
+# comment. This workflow hands a job `id-token: write`, so a mutable tag here is not a
+# supply-chain risk in the abstract: retag the action and the next release mints this
+# repository's npm publishing credential for whoever moved it — the tj-actions/changed-files
+# shape exactly. The comment is load-bearing, not decoration: Renovate reads the tag from it
+# to offer updates, and disables any action pinned to a bare SHA with no comment.
+#
+# The filename is load-bearing too. npm's trusted publisher for `tabglutton-gullet` names
+# `release.yml`; renaming this file breaks publishing until the npm side is edited to match.
+
 # Release tags only. `sign:dev` builds carry a fourth version part (v0.2.0.1) and
 # are local and unpushed by design, so they never reach this trigger — the pattern
 # refuses them a second time in case one is ever pushed by hand.
@@ -20,16 +30,24 @@ permissions:
 jobs:
   release:
     runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.tag || github.ref }}
 
+      # Through `env:` rather than straight into the script: `inputs.tag` is free text
+      # from whoever dispatched the run, and this workflow is the one holding release
+      # credentials.
       - name: Resolve tag
         id: tag
-        run: echo "tag=${{ inputs.tag || github.ref_name }}" >> "$GITHUB_OUTPUT"
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+          REF_NAME: ${{ github.ref_name }}
+        run: echo "tag=${INPUT_TAG:-$REF_NAME}" >> "$GITHUB_OUTPUT"
 
-      - uses: oven-sh/setup-bun@v2
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: latest
 
@@ -39,10 +57,12 @@ jobs:
       # The tag is what AMO and the Chrome Web Store are told the version is, so a
       # tag that disagrees with the manifest would ship mislabelled artifacts.
       - name: Verify tag matches package.json version
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
         run: |
           version="$(bun --print 'require("./package.json").version')"
-          if [ "v$version" != "${{ steps.tag.outputs.tag }}" ]; then
-            echo "::error::tag ${{ steps.tag.outputs.tag }} does not match package.json version $version"
+          if [ "v$version" != "$TAG" ]; then
+            echo "::error::tag $TAG does not match package.json version $version"
             exit 1
           fi
 
@@ -55,11 +75,139 @@ jobs:
       - name: Release notes
         run: bun scripts/release-notes.ts > release-notes.md
 
+      # Rebuilding a release for a tag already pushed is the documented recovery
+      # (AGENTS.md §Versioning), and it now has to be able to reach `publish-npm`: a
+      # trusted-publisher typo surfaces only as ENEEDAUTH at publish time, is fixed on
+      # npmjs.com, and is retried from here. An unconditional `gh release create` would
+      # fail on the existing release and skip the publish job with it.
       - name: Publish GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.tag.outputs.tag }}
         run: |
-          gh release create "${{ steps.tag.outputs.tag }}" \
-            --title "${{ steps.tag.outputs.tag }}" \
-            --notes-file release-notes.md \
-            web-ext-artifacts/*.zip
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release edit "$TAG" --notes-file release-notes.md
+            gh release upload "$TAG" web-ext-artifacts/*.zip --clobber
+          else
+            gh release create "$TAG" \
+              --title "$TAG" \
+              --notes-file release-notes.md \
+              web-ext-artifacts/*.zip
+          fi
+
+  # ── Publish `tabglutton-gullet` to npm ────────────────────────────────────────
+  #
+  # Trusted publishing (OIDC): the job asks GitHub for a short-lived identity token
+  # and npm exchanges it for a one-shot publish credential. There is no npm token in
+  # this repository — no `NODE_AUTH_TOKEN`, no `secrets.*` in this job, nothing to
+  # leak, rotate, or steal from a compromised action.
+  #
+  # ┌──────────────────────────────────────────────────────────────────────────┐
+  # │ THIS JOB IS OFF, DELIBERATELY. It is skipped unless the repository        │
+  # │ variable PUBLISH_GULLET_TO_NPM is set to "true" (GitHub compares          │
+  # │ expression strings case-insensitively, so "True" counts as well; every    │
+  # │ other value, and an unset variable, leaves the job skipped).              │
+  # │                                                                          │
+  # │ The flip: repo Settings → Secrets and variables → Actions → Variables     │
+  # │ → New repository variable → PUBLISH_GULLET_TO_NPM = true. One human,      │
+  # │ once; every later release tag then publishes on its own.                  │
+  # └──────────────────────────────────────────────────────────────────────────┘
+  #
+  # Four things must be true before flipping it. Publishing before they are ships a
+  # package whose only documented use is broken for everyone who follows the
+  # instructions:
+  #
+  #  1. 0.4.0 is live on AMO *and* the Chrome Web Store, and has rolled out.
+  #     `BRIDGE_PROTO` went to 3 in 0.4.0 and there is deliberately no downgrade
+  #     path, so a sidecar published ahead of the extension refuses the handshake for
+  #     every installed user. The order is fixed: stores first, npm second — see the
+  #     note at the top of docs/STORE.md.
+  #
+  #  2. `tabglutton-gullet` exists on npmjs.com. The name has never been published,
+  #     and npm's trusted-publisher form lives on a package's own settings page — so
+  #     the first version has to go out by hand from a local `npm login`. This job
+  #     takes over from the second. (Reasoned from npm's docs, not tested: they say
+  #     where the form lives and are silent on unpublished names.)
+  #
+  #  3. The trusted publisher is configured at
+  #     npmjs.com/package/tabglutton-gullet/access → Trusted Publisher → GitHub
+  #     Actions, with Organization or user `mlsimon734`, Repository `tabglutton`,
+  #     Workflow filename `release.yml`, Environment blank, Allowed actions
+  #     `npm publish`. Every field is case-sensitive, and npm validates none of them
+  #     on save — a typo surfaces only as ENEEDAUTH at publish time.
+  #
+  #  4. gullet/package.json carries the tag's version. Checked below rather than
+  #     trusted, so a drifted sidecar version fails the job instead of publishing.
+  #     The tag comes from the `release` job's output, so the two halves of a release
+  #     can never build from different refs.
+  #
+  # Why the toolchain is split: Bun builds the artifact, npm ships it. Neither bun nor
+  # pnpm can mint an OIDC credential, and the exchange is implemented in npm >= 11.5.1 —
+  # newer than the npm bundled with the runner's default Node, and not something to leave
+  # to whatever the Node line happens to bundle, hence the explicit upgrade. Provenance
+  # attestations are generated automatically for an OIDC publish from a public repo;
+  # `--provenance` is not needed and is not passed.
+  #
+  # The toolchain versions are floating on purpose, and the pinning rule above is about
+  # actions specifically. An action is arbitrary repository code run with this job's
+  # token behind a tag its author can move; `bun-version: latest` and `npm@latest` are
+  # signed registry artifacts, where clearing npm's 11.5.1 floor is the property that
+  # matters and npm's own docs recommend `latest`.
+  publish-npm:
+    name: Publish Gullet to npm
+    needs: release
+    if: vars.PUBLISH_GULLET_TO_NPM == 'true'
+    # Trusted publishing works only from GitHub-hosted runners.
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # mints the OIDC token npm exchanges for a publish credential
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.release.outputs.tag }}
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: latest
+
+      # registry-url is what writes the .npmrc pointing at npmjs.org. Node 24 clears
+      # trusted publishing's 22.14 floor.
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24"
+          registry-url: https://registry.npmjs.org
+
+      - name: Install npm with trusted publishing support
+        run: |
+          npm install -g npm@latest
+          npm --version
+
+      # The sidecar's version is kept equal to the extension's so "keep them on the
+      # same version" is a rule a user can follow; a release that broke that would
+      # publish a sidecar nobody could pair with the tagged extension.
+      - name: Verify tag matches gullet/package.json version
+        env:
+          TAG: ${{ needs.release.outputs.tag }}
+        run: |
+          version="$(bun --print 'require("./gullet/package.json").version')"
+          if [ "v$version" != "$TAG" ]; then
+            echo "::error::tag $TAG does not match gullet/package.json version $version"
+            exit 1
+          fi
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      # A fail-fast gate, not the shipping build: `npm publish` runs gullet's `prepack`,
+      # which is this same `bun run build`. prepack is what makes a by-hand
+      # `cd gullet && npm publish` correct too (docs/STORE.md §6 step 2), so it stays.
+      - name: Build Gullet
+        run: bun run build:gullet
+
+      # No NODE_AUTH_TOKEN and no env: block — npm detects the OIDC environment and
+      # authenticates with it. gullet/package.json also sets publishConfig.access, so
+      # the flag restates the intent rather than supplying it.
+      - name: Publish to npm
+        working-directory: gullet
+        run: npm publish --access public

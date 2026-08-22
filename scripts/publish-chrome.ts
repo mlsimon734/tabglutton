@@ -5,7 +5,7 @@
 // chromewebstore/v1.1`) is deprecated and supported only until 15 October 2026, so nothing
 // new should be built on it. V2 paths are named `publishers/{publisherId}/items/{itemId}`,
 // which is the one shape change that bites: V1 needed only the item id, so a V1 recipe
-// ported across will 404 without CWS_PUBLISHER_ID. Setup: docs/STORE.md 6.
+// ported across will 404 without CWS_PUBLISHER_ID. Setup: docs/STORE.md 7.
 //
 // Uploading and publishing are separate acts on purpose. An upload only replaces the draft
 // package; nothing reaches users, and nothing is queued for review, until --publish.

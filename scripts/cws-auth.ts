@@ -4,7 +4,7 @@
 // Google retired `urn:ietf:wg:oauth:2.0:oob` in 2022, so the code cannot be copied off a
 // success page any more — it has to come back over a redirect. A Desktop app client is the
 // one type that accepts an unregistered loopback port, which is why the setup in
-// docs/STORE.md 6 says Desktop app and not Web application.
+// docs/STORE.md 7 says Desktop app and not Web application.
 import { spawn } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { loadEnv, requireEnv } from "./sign-env.js";

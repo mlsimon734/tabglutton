@@ -27,6 +27,10 @@ Publishing the sidecar first would ship a package whose only documented use is b
 everyone who follows the instructions. Under the versioning rule in `AGENTS.md` a
 `BRIDGE_PROTO` bump is a minor, so that release is **0.4.0** on both halves.
 
+The publish itself is automated and switched off: `.github/workflows/release.yml` carries a
+`publish-npm` job that is skipped until a repository variable is flipped. §6 is the order to
+do it in.
+
 The two versions are deliberately kept equal — extension `0.3.1` ships with Gullet `0.3.1`
 — so "keep them on the same version" is a rule a user can actually follow. Encoding the
 wire protocol in the npm major was considered and dropped: the package was already `0.1.0`
@@ -46,7 +50,7 @@ These bind every release, not just the first one.
   `web-ext-artifacts/tabglutton-source-<version>.zip` via `git archive`. The source step is
   **after** the button labelled "Submit Version", not alongside the package — see §3, or
   skip the ordering entirely with `bun run sign:listed`, which passes the zip on the
-  command line (§6).
+  command line (§7).
 - **The submission flow defaults to the wrong channel, and states it rather than asking.**
   The upload page prints the current choice as prose ("On your own.") with a small `Change`
   link, and the file picker sits directly beneath it. The actual radios live on a separate
@@ -58,7 +62,7 @@ These bind every release, not just the first one.
   https://addons.mozilla.org/en-US/developers/addon/tabglutton/versions/submit/distribution?channel=listed
   ```
 
-  `bun run sign:listed` (§6) names the channel on every invocation and inherits nothing,
+  `bun run sign:listed` (§7) names the channel on every invocation and inherits nothing,
   which is the other way out of this.
 
 - **Versions must be unique and strictly increasing on AMO**, and Firefox compares
@@ -194,7 +198,7 @@ current-window scope in settings.
 ### The version-upload flow, in the order it actually happens
 
 This is the web flow; `bun run sign:listed` does the same submission in one command and is
-the shorter path (§6). Keep this section anyway — it is what the console does, and it is
+the shorter path (§7). Keep this section anyway — it is what the console does, and it is
 where the step order and the validation warnings are recorded.
 
 Measured on the `0.3.1` submission. The step order is not what it looks like from the first
@@ -725,13 +729,100 @@ the cockpit emptying a real backlog (filter → select → Devour → notes land
 
 ---
 
-## 6. Scripted publishing
+## 6. Gullet's npm publish
+
+`tabglutton-gullet` is published by the `publish-npm` job in
+`.github/workflows/release.yml`, which runs after the GitHub release is cut for a `v*` tag.
+It authenticates by **trusted publishing**: the job asks GitHub for a short-lived OIDC token
+and npm exchanges it for a one-shot publish credential. There is no npm token in this
+repository — no `NODE_AUTH_TOKEN`, no `secrets.*` in that job, nothing to leak or rotate.
+The long-lived credential that a compromised action steals is the one that does not exist
+here, which is also why every action in both workflows is pinned to a commit SHA rather than
+a tag a third party can move.
+
+Bun builds the artifact (`bun run build:gullet`) and npm only ships it. Neither bun nor pnpm
+implements the OIDC exchange, so the split is structural rather than a preference; npm
+`>= 11.5.1` is the floor and the job installs it explicitly rather than trusting the runner's
+bundled version.
+
+**The job is off until a human turns it on.** It is skipped unless the repository variable
+`PUBLISH_GULLET_TO_NPM` is set to `true` — repo **Settings → Secrets and variables →
+Actions → Variables → New repository variable**. GitHub compares expression strings
+case-insensitively, so `True` counts as well; every other value, and an unset variable,
+leaves the job skipped. That flip happens once; every later release tag then publishes on
+its own.
+
+### The order for the first publish
+
+1. **Ship 0.4.0 to AMO and the Chrome Web Store, and let it roll out.** Non-negotiable, for
+   the reason at the top of this file: `BRIDGE_PROTO` 3 has no downgrade path, so a sidecar
+   that lands first refuses the handshake for every installed user. §7 is how both of those
+   submissions are driven — `bun run sign:listed` and `bun run publish:chrome --publish`.
+
+2. **Publish the first version by hand**, from a local `npm login`:
+
+   ```sh
+   cd gullet && npm publish --access public   # prepack runs `bun run build`
+   ```
+
+   npm's trusted-publisher form lives on a package's own settings page, and that page does
+   not exist for a name that has never been published. _Reasoned from npm's docs, not
+   tested_ — they say where the form lives and are silent on unpublished names. If npm turns
+   out to accept a publisher for a name it has never seen, skip to step 3 and let the
+   workflow do the first publish too.
+
+3. **Configure the trusted publisher** at `npmjs.com/package/tabglutton-gullet/access` →
+   **Trusted Publisher** → **GitHub Actions**:
+
+   | Field                | Value         |
+   | -------------------- | ------------- |
+   | Organization or user | `mlsimon734`  |
+   | Repository           | `tabglutton`  |
+   | Workflow filename    | `release.yml` |
+   | Environment name     | _(blank)_     |
+   | Allowed actions      | `npm publish` |
+
+   Every field is case-sensitive, the workflow filename is the bare filename with its
+   extension and not a path, and **npm validates none of it on save** — a typo surfaces only
+   as `ENEEDAUTH` at publish time. The filename being part of the package's identity is why
+   `release.yml` must not be renamed without editing the npm side to match.
+
+4. **Restrict token publishing.** Package **Settings → Publishing access → "Require
+   two-factor authentication and disallow tokens"**. npm recommends this once a trusted
+   publisher exists; it does not affect OIDC publishes.
+
+5. **Flip `PUBLISH_GULLET_TO_NPM` to `true`.** From here the sidecar ships with the tag.
+
+### Notes
+
+- The job re-checks `gullet/package.json` against the tag and fails rather than publishing a
+  sidecar whose version disagrees with the extension it pairs with. It takes that tag from
+  the `release` job's output, so the two halves of a release cannot build from different
+  refs.
+- **Retrying is real.** `ENEEDAUTH` from a mistyped trusted-publisher field is fixed on
+  npmjs.com and retried by re-running the workflow with the same tag — the release job
+  updates an existing GitHub release instead of failing on it, so the re-run reaches
+  `publish-npm` rather than stopping short of it.
+- **Provenance attestations are generated automatically** for an OIDC publish from a public
+  repository, so `--provenance` is neither needed nor passed.
+- Trusted publishing works only from GitHub-hosted runners; self-hosted is unsupported.
+- Not done, and the next hardening if this ever wants a per-release human gate: bind the job
+  to a GitHub **environment** with required reviewers and name that environment in the npm
+  form. That trades flip-once for approve-every-time, which is why it is not the shape here.
+
+---
+
+## 7. Scripted publishing
 
 Both stores are reachable from the terminal. Nothing here replaces the listing itself —
 copy, screenshots, categories, and the privacy certifications in §4 are console work, done
 once and edited by hand afterwards. What is scripted is the repeated part: taking the
 package that `bun run package` just built and getting it into the store, then **asking the
 store whether it actually arrived** rather than believing the call that said so.
+
+This section is the mechanism only. **When** to run any of it belongs to §6, which owns the
+release order — both stores first, the sidecar's npm publish after they have rolled out —
+and that constraint is not restated here so that there is only one copy of it to keep true.
 
 | Command                            | What it does                                                                 |
 | ---------------------------------- | ---------------------------------------------------------------------------- |

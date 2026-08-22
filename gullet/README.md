@@ -280,3 +280,14 @@ bun test                   # protocol, config, selection, MCP, and a live-socket
 The wire contract lives in
 [`src/bridge-protocol.ts`](https://github.com/mlsimon734/tabglutton/blob/main/src/bridge-protocol.ts)
 and is imported by both halves, so extension and sidecar are typechecked against one definition.
+
+### Releasing
+
+The npm package is built by Bun and published by `.github/workflows/release.yml` when a
+`v*` tag is pushed, using npm **trusted publishing** — a short-lived OIDC credential minted
+for that one run, so no npm token exists in the repository. That job is switched off until
+the repository variable `PUBLISH_GULLET_TO_NPM` is set to `true`, because a sidecar must
+never reach npm ahead of the extension carrying the same `BRIDGE_PROTO`: there is no
+downgrade path, and an early publish breaks the handshake for every installed user. The
+order to turn it on, and the npm-side configuration it needs, are in
+[`docs/STORE.md`](https://github.com/mlsimon734/tabglutton/blob/main/docs/STORE.md) §6.
