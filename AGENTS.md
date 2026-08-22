@@ -130,7 +130,7 @@ The current history uses a concise imperative subject with optional scope detail
 
 Keep browser permissions in `manifest.json` minimal and justify new permissions in the PR. Do not commit generated profiles, packaged zips, or local browser state. WebExtension tooling should always target `dist-firefox/` or `dist-chrome/`, not source directories directly.
 
-`.env`'s `WEB_EXT_API_KEY` / `WEB_EXT_API_SECRET` are **release-signing credentials only** — `bun run sign` and `sign:dev` read them and nothing else does. Developing, building, and the whole of `bun run check` work without them, so a checkout missing `.env` is not a broken checkout.
+`.env` holds **store credentials only**: `WEB_EXT_API_KEY` / `WEB_EXT_API_SECRET` for AMO (`bun run sign`, `sign:listed`, `sign:dev`) and `CWS_PUBLISHER_ID` / `CWS_CLIENT_ID` / `CWS_CLIENT_SECRET` / `CWS_REFRESH_TOKEN` for the Chrome Web Store (`bun run publish:chrome`, minted once by `cws:auth`). Nothing else reads them, they all load through `scripts/sign-env.ts`, and developing, building, and the whole of `bun run check` work without any of them — so a checkout missing `.env` is not a broken checkout. Setup and the API contract are `docs/STORE.md` §6; the Chrome half targets the **V2** API because V1 is supported only until 15 October 2026.
 
 ## Maintaining this file
 
