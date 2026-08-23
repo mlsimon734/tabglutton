@@ -2,6 +2,18 @@
 
 All notable changes to Tabglutton are documented here.
 
+## [0.4.1](https://github.com/mlsimon734/tabglutton/compare/v0.4.0...v0.4.1) (unreleased)
+
+- **A "Copy diagnostics" button on the options page**, under a new Troubleshooting heading.
+  One click puts a paste-ready block on the clipboard: extension version and build target,
+  engine and its full version, platform, tab and duplicate counts, the scope and clip
+  destination, which of the three optional permissions are actually held, the bridge's state,
+  and the last ten bridge failures with the ones that repeated collapsed into a count. It
+  carries no bridge token, no page addresses and no tab titles — the block is assembled from
+  a fixed set of counts and enum values rather than from a settings object, so there is
+  nothing in it to redact. The bridge error log is session-scoped, which on Chrome means it
+  is empty after the service worker has idled out.
+
 ## [0.4.0](https://github.com/mlsimon734/tabglutton/compare/v0.3.1...v0.4.0) (2026-08-21)
 
 Two threads. Devour no longer requires Obsidian — a clip can land as a plain markdown file

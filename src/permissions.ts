@@ -27,16 +27,33 @@ export const CLIP_ORIGINS = ["*://*/*"];
 export const BRIDGE_ORIGINS = ["http://127.0.0.1/*"];
 
 /**
+ * A grant, with "could not ask" kept apart from "not granted" — see
+ * `downloadsGrant` for why every caller that *acts* needs the third answer.
+ */
+export type PermissionGrant = "held" | "missing" | "unknown";
+
+/**
  * Safe to call anywhere, including the background page. Answers only what has
  * already been granted — it never prompts, so it cannot substitute for
  * `requestOrigins` in a flow that needs the access.
  */
-export async function hasOrigins(origins: string[]): Promise<boolean> {
+export async function originsGrant(origins: string[]): Promise<PermissionGrant> {
   try {
-    return await browser.permissions.contains({ origins });
-  } catch {
-    return false;
+    return (await browser.permissions.contains({ origins })) ? "held" : "missing";
+  } catch (err) {
+    console.warn("[tabglutton] origin permission check failed", err);
+    return "unknown";
   }
+}
+
+/**
+ * The fail-safe collapse, for the callers that gate on the access itself. A
+ * check that threw reads as "not held": everything downstream of this either
+ * refuses to inject or declines to dial, and neither costs anything it cannot
+ * retry.
+ */
+export async function hasOrigins(origins: string[]): Promise<boolean> {
+  return (await originsGrant(origins)) === "held";
 }
 
 /**
@@ -57,7 +74,7 @@ export async function hasOrigins(origins: string[]): Promise<boolean> {
  * inability to check is never a verdict. Never prompts; safe from the
  * background page, for the same reason as `hasOrigins`.
  */
-export type DownloadsGrant = "held" | "missing" | "unknown";
+export type DownloadsGrant = PermissionGrant;
 
 export async function downloadsGrant(): Promise<DownloadsGrant> {
   try {

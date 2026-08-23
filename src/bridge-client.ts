@@ -31,6 +31,7 @@ import {
   type ResponseMessage,
 } from "./bridge-protocol.js";
 import { getBrowserInfoOnce } from "./browser-info.js";
+import { BridgeErrorLog, type BridgeErrorEntry } from "./diagnostics.js";
 import { BRIDGE_ORIGINS, hasOrigins } from "./permissions.js";
 import { loadBridgeLastPort, saveBridgeLastPort, type Settings } from "./storage.js";
 import { IS_CHROME, TARGET } from "./target.js";
@@ -253,6 +254,15 @@ export class BridgeClient {
    * permissions.contains on every 3s probe keeps a Chrome MV3 worker awake.
    */
   private hostAccessGrant: Promise<boolean> | null = null;
+  /**
+   * The last few failures, for the options page's diagnostics block. Recorded
+   * beside each `console.warn` that already reports one, so there is one list
+   * of what counts as a bridge failure rather than two that drift.
+   *
+   * Dies with the page, which on Chrome MV3 means a report filed after the
+   * service worker has idled out shows an empty log — see `BridgeErrorLog`.
+   */
+  private readonly errorLog = new BridgeErrorLog();
   private label = IS_CHROME ? "Chrome" : "Firefox";
   /** Whether `start()` has run, i.e. whether the settings we read are real ones. */
   private started = false;
@@ -397,6 +407,11 @@ export class BridgeClient {
     return this.phase === "open" ? (this.socketPort ?? undefined) : undefined;
   }
 
+  /** Oldest first. Copies, so a caller cannot edit the log by holding it. */
+  get recentErrors(): readonly BridgeErrorEntry[] {
+    return this.errorLog.list();
+  }
+
   /**
    * Whether we may talk to the sidecar at all.
    *
@@ -416,6 +431,7 @@ export class BridgeClient {
     if (this.hostAccessDenied !== !granted) {
       this.hostAccessDenied = !granted;
       if (!granted) {
+        this.errorLog.record("no-site-access");
         console.warn(
           "[tabglutton] the bridge has no site access to 127.0.0.1, so it cannot reach " +
             "Gullet. Re-enable the bridge in Tabglutton's settings to be asked for it.",
@@ -438,6 +454,7 @@ export class BridgeClient {
     if (this.portObstruction === found) return;
     this.portObstruction = found;
     if (found === "foreign") {
+      this.errorLog.record("port-foreign", String(this.deps.getSettings().bridgePort));
       console.warn(
         `[tabglutton] port ${this.deps.getSettings().bridgePort} answers, but not as Gullet — ` +
           `another program is using it. Not dialling. Change the port in Tabglutton's ` +
@@ -445,6 +462,7 @@ export class BridgeClient {
       );
     }
     if (found === "incompatible") {
+      this.errorLog.record("port-incompatible");
       console.warn(
         `[tabglutton] a Gullet is running, but it speaks a different bridge protocol than ` +
           `this extension. Not dialling — mixed versions are refused rather than allowed to ` +
@@ -602,6 +620,9 @@ export class BridgeClient {
       // Constructor threw, so no close/error event will arrive to route us
       // through teardown(). Nothing to retry into either — this never reached a
       // connection — so the alarm picks it up on its own schedule.
+      // The port, not the exception — a WebSocket construction error quotes the
+      // URL it was given, and this log is rendered into a block pasted in public.
+      this.errorLog.record("dial-failed", String(port));
       console.warn("[tabglutton] bridge dial failed", err);
       if (settings.bridgePortMode === "auto") this.scheduleIdleProbe();
       return;
@@ -622,6 +643,7 @@ export class BridgeClient {
     // can clear. Sized to bound that case without preempting a slow-but-live
     // connect, which is the mistake this replaces.
     this.handshakeTimer = setTimeout(() => {
+      this.errorLog.record("dial-timeout", String(port));
       console.warn(`[tabglutton] bridge dial timed out after ${Date.now() - dialStarted}ms`);
       this.teardown();
     }, BRIDGE_DIAL_TIMEOUT_MS);
@@ -634,6 +656,7 @@ export class BridgeClient {
       this.clearHandshakeTimer();
       console.debug(`[tabglutton] bridge socket open after ${Date.now() - dialStarted}ms`);
       this.handshakeTimer = setTimeout(() => {
+        this.errorLog.record("handshake-timeout", String(port));
         console.warn("[tabglutton] bridge handshake timed out");
         this.teardown();
       }, BRIDGE_HANDSHAKE_TIMEOUT_MS);
@@ -659,6 +682,13 @@ export class BridgeClient {
     switch (msg.type) {
       case "challenge": {
         if (msg.proto !== BRIDGE_PROTO) {
+          // Narrowed before it is recorded, not merely stringified: the frame
+          // comes off a local socket that has proved nothing yet, and the block
+          // this log renders into is pasted in public.
+          this.errorLog.record(
+            "proto-mismatch",
+            typeof msg.proto === "number" ? String(msg.proto) : "unknown",
+          );
           console.warn(
             `[tabglutton] bridge protocol mismatch: sidecar speaks ${msg.proto}, extension speaks ${BRIDGE_PROTO}`,
           );
@@ -670,6 +700,7 @@ export class BridgeClient {
         // hashed material now, so neither may be guessed at.
         const port = this.socketPort;
         if (typeof msg.nonce !== "string" || port === null) {
+          this.errorLog.record("bad-challenge");
           console.warn("[tabglutton] bridge sidecar sent a malformed challenge");
           this.teardown();
           return;
@@ -702,6 +733,7 @@ export class BridgeClient {
           !proofsMatch(msg.proof, expected)
         ) {
           // Something is on our port that does not know the token. Do not talk to it.
+          this.errorLog.record("auth-failed", this.socketPort?.toString());
           console.warn("[tabglutton] bridge server failed the token challenge");
           this.teardown();
           return;
@@ -759,6 +791,9 @@ export class BridgeClient {
         return;
       }
       case "hello-error":
+        // The sidecar's own sentence goes to the console but not to the log —
+        // it is free text arriving from a process that has proved nothing.
+        this.errorLog.record("handshake-rejected", this.socketPort?.toString());
         console.warn("[tabglutton] bridge rejected the handshake:", msg.error.message);
         this.teardown();
         return;
@@ -796,6 +831,10 @@ export class BridgeClient {
       // A BridgeRequestError is an answer, not an incident; anything else is a
       // bug worth surfacing in the console as well as on the wire.
       if (!(err instanceof BridgeRequestError)) {
+        // The method name, never the exception: clip and load failures quote
+        // the URL they failed on, and this log is rendered into a block that
+        // gets pasted into public issues.
+        this.errorLog.record("method-failed", method);
         console.warn("[tabglutton] bridge method threw", method, err);
       }
       return { type: "response", id, error: toBridgeError(err) };
@@ -852,6 +891,7 @@ export class BridgeClient {
         return;
       }
       if (this.awaitingPong) {
+        this.errorLog.record("heartbeat-lost", this.socketPort?.toString());
         console.warn("[tabglutton] bridge heartbeat lost, reconnecting");
         this.teardown();
         return;

@@ -8,6 +8,7 @@ import { BridgeClient, type BridgeStatus } from "./bridge-client.js";
 import { BridgeMethodRunner, isHttpUrl } from "./bridge-methods.js";
 import { getBrowserInfoOnce } from "./browser-info.js";
 import { clipDownloadPath, saveClipFile, type SavedClipFile } from "./clip-file.js";
+import type { DiagnosticsBackgroundFacts } from "./diagnostics.js";
 import {
   markdownForClip,
   OBSIDIAN_HANDOFF_GAP_MS,
@@ -46,6 +47,7 @@ export type ReopenTabsMessage = {
 };
 export type OpenCockpitMessage = { type: "open-cockpit" };
 export type GetBridgeStatusMessage = { type: "get-bridge-status" };
+export type GetDiagnosticsMessage = { type: "get-diagnostics" };
 export type IncomingMessage =
   | GetScopedTabsMessage
   | ClipSelectedTabsMessage
@@ -55,7 +57,15 @@ export type IncomingMessage =
   | FocusTabMessage
   | ReopenTabsMessage
   | OpenCockpitMessage
-  | GetBridgeStatusMessage;
+  | GetBridgeStatusMessage
+  | GetDiagnosticsMessage;
+
+/**
+ * Everything the diagnostics block needs that only this page knows — the bridge
+ * client's state and its error log, and the tab counts. The options page adds
+ * the permission grants and renders; see `collectDiagnostics`.
+ */
+export type GetDiagnosticsResponse = DiagnosticsBackgroundFacts;
 
 export interface GetBridgeStatusResponse {
   status: BridgeStatus;
@@ -1047,9 +1057,103 @@ browser.runtime.onMessage.addListener(async (rawMsg: unknown): Promise<unknown> 
       };
       return response;
     }
+    case "get-diagnostics":
+      return collectDiagnostics();
   }
   return undefined;
 });
+
+/**
+ * The half of the diagnostics block this page owns.
+ *
+ * Deliberately assembled field by field out of `settings` rather than spread
+ * from it: `Settings` carries `bridgeToken`, a spread would carry it into a
+ * block whose whole purpose is to be pasted into a public issue, and a later
+ * field added to `Settings` would be published by a spread without anyone
+ * deciding to publish it. Same reason `loggableSettings` exists a few lines
+ * down. Nothing here reads a tab's URL or title either — `queryScopedTabs`
+ * returns whole tabs, and only their count leaves this function.
+ *
+ * The grants are not read here on purpose: `permissions.contains` is a
+ * WebExtension API call, every one of them resets Chrome's 30s MV3 idle timer,
+ * and the options page can ask the same question without touching this worker's
+ * clock at all.
+ */
+async function collectDiagnostics(): Promise<GetDiagnosticsResponse> {
+  const inScope = (await queryScopedTabs()).filter(tabInScope);
+  const all = await browser.tabs.query({});
+  // Counted over the same list `tabsInScope` reports, so the two numbers in the
+  // block cannot disagree. That still matches the badge: `refreshBadge` groups
+  // the unfiltered scoped list, and the only tabs `tabInScope` drops beyond it
+  // have no URL, which `groupDuplicates` skips anyway.
+  const duplicates = groupDuplicates(inScope, normalizeOptsFrom(settings)).reduce(
+    (n, group) => n + (group.tabs.length - 1),
+    0,
+  );
+  return {
+    engine: await engineLabel(),
+    platform: await platformLabel(),
+    tabsInScope: inScope.length,
+    tabsTotal: all.length,
+    duplicates,
+    windows: new Set(all.map((tab) => tab.windowId)).size,
+    scope: settings.scope,
+    clipDestination: settings.clipDestination,
+    zoteroRouting: settings.zoteroRoutingEnabled,
+    bridge: {
+      enabled: settings.bridgeEnabled,
+      hasToken: settings.bridgeToken.length > 0,
+      portMode: settings.bridgePortMode,
+      fixedPort: settings.bridgePort,
+      status: bridge.status,
+      connectedPort: bridge.connectedPort,
+      allowTabLoad: settings.bridgeAllowTabLoad,
+      errors: bridge.recentErrors,
+    },
+  };
+}
+
+/** Chrome's client-hints surface, which the DOM lib does not declare. */
+interface UserAgentData {
+  getHighEntropyValues?: (hints: string[]) => Promise<{ uaFullVersion?: string }>;
+}
+
+/**
+ * Gecko answers with a name and version outright; Chrome has no
+ * `getBrowserInfo`, so the version comes from client hints, falling back to the
+ * user-agent string. The fallback is the poorer answer on purpose rather than
+ * by accident: Chrome's UA reduction freezes the last three parts, so it
+ * reports `151.0.0.0` for what is really `151.0.7922.174` — measured on 151 —
+ * and a build number is exactly what makes a bug report reproducible.
+ *
+ * Every branch can come up empty, and "unknown" is a better line in a report
+ * than a confidently wrong one.
+ */
+async function engineLabel(): Promise<string> {
+  if (!IS_CHROME) {
+    const info = await getBrowserInfoOnce();
+    if (info?.name) return info.version ? `${info.name} ${info.version}` : info.name;
+    return "Firefox (version unknown)";
+  }
+  const uaData = (navigator as Navigator & { userAgentData?: UserAgentData }).userAgentData;
+  try {
+    const full = (await uaData?.getHighEntropyValues?.(["uaFullVersion"]))?.uaFullVersion;
+    if (full) return `Chrome ${full}`;
+  } catch (err) {
+    console.warn("[tabglutton] client-hint version lookup failed", err);
+  }
+  const version = /Chrome\/([\d.]+)/.exec(navigator.userAgent)?.[1];
+  return version ? `Chrome ${version}` : "Chrome (version unknown)";
+}
+
+async function platformLabel(): Promise<string> {
+  try {
+    const { os, arch } = await browser.runtime.getPlatformInfo();
+    return `${os} ${arch}`;
+  } catch {
+    return "unknown";
+  }
+}
 
 const COCKPIT_URL = browser.runtime.getURL("popup/devour.html");
 
