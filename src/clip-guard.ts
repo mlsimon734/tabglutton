@@ -39,8 +39,10 @@ export type ClipGuardReason = "thin-content";
  *
  * The other constraint is that it stay well under anything a reader would call
  * an article, because a page refused here keeps its tab and costs one manual
- * retry. #49 accepts that trade in that direction only, so when the two
- * constraints disagree the floor moves up, not down.
+ * save. #49 accepts that trade in that direction only, so when the two
+ * constraints disagree the floor moves up, not down. A 308-character
+ * encyclopedia stub is refused, and `tests/clip-guard.test.ts` pins it so the
+ * cost reads as a page rather than as a number.
  *
  * Characters, not words: a word count refuses every page in a language that
  * does not space its words, whereas a character floor is merely stricter for the
