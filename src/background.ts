@@ -6,8 +6,17 @@
 // is unresolvable in a Firefox module service worker and aborts registration.
 import { BridgeClient, type BridgeStatus } from "./bridge-client.js";
 import { BridgeMethodRunner, isHttpUrl } from "./bridge-methods.js";
+import type { ClipMark } from "./bridge-protocol.js";
 import { getBrowserInfoOnce } from "./browser-info.js";
 import { clipDownloadPath, saveClipFile, type SavedClipFile } from "./clip-file.js";
+import {
+  loadClipMemory,
+  lookupClip,
+  recordClip,
+  type ClipMemory,
+  type ClipMemoryEntry,
+  type ClipTarget,
+} from "./clip-memory.js";
 import {
   markdownForClip,
   OBSIDIAN_HANDOFF_GAP_MS,
@@ -119,6 +128,17 @@ export interface PopupTab {
   pinned: boolean;
   windowId: number | undefined;
   index: number;
+  /**
+   * Present when this page has been clipped before, from any tab and in any
+   * earlier session. A record of the past, never a claim about the vault or the
+   * download folder as they are now — see `ClipMark` and `src/clip-memory.ts`.
+   *
+   * The whole entry, where the wire's `BridgeTab` carries only the state: this
+   * one crosses `runtime.sendMessage` to a surface with a tooltip to fill, not
+   * into a model's context, so the listing budget `BridgeTab` protects does not
+   * apply.
+   */
+  clipped?: ClipMemoryEntry;
 }
 
 export interface ClosedTabRecord {
@@ -347,8 +367,8 @@ function safeFavIconUrl(raw: string | undefined): string | undefined {
   }
 }
 
-function tabToPopupTab(t: Tab): PopupTab {
-  return {
+function tabToPopupTab(t: Tab, memory: ClipMemory): PopupTab {
+  const tab: PopupTab = {
     id: t.id ?? -1,
     title: t.title,
     url: t.url,
@@ -359,6 +379,9 @@ function tabToPopupTab(t: Tab): PopupTab {
     windowId: t.windowId,
     index: t.index,
   };
+  const clipped = lookupClip(memory, t.url, normalizeOptsFrom(settings));
+  if (clipped) tab.clipped = clipped;
+  return tab;
 }
 
 function tabToClosedRecord(t: Tab): ClosedTabRecord | null {
@@ -730,6 +753,19 @@ async function downloadFailureDetail(err: unknown): Promise<string> {
   return errorMessage(err);
 }
 
+/**
+ * Note one clip in the clip memory, against the settings this run is using.
+ * Never throws (see `recordClip`) — the page is already filed by the time this
+ * runs, and a memory write that fails must not turn it into a reported failure.
+ */
+async function rememberClip(
+  url: string | undefined,
+  state: ClipMark,
+  destination: ClipTarget,
+): Promise<void> {
+  await recordClip({ url, state, destination }, normalizeOptsFrom(settings));
+}
+
 function clipBlocked(blocked: ClipBlockedReason): ClipSelectedTabsResponse {
   return { failed: 0, obsidianSaved: 0, fileSaved: 0, zoteroSaved: 0, blocked, failures: [] };
 }
@@ -825,6 +861,9 @@ async function clipSelectedTabs(tabIds: number[]): Promise<ClipSelectedTabsRespo
           console.warn("[tabglutton] Zotero save failed for tab", tabId, err);
           continue;
         }
+        // The Connector accepted the item, which is its report of a handoff and
+        // not a file this extension ever sees — `launched`, like Obsidian.
+        await rememberClip(meta.url, "launched", "zotero");
         try {
           await browser.tabs.remove(tabId);
         } catch (err) {
@@ -881,6 +920,10 @@ async function clipSelectedTabs(tabIds: number[]): Promise<ClipSelectedTabsRespo
           );
           continue;
         }
+        // `verified`: reaching here means saveClipFile watched the download
+        // reach `state: "complete"`, which is the same evidence that licenses
+        // the close below. The unconfirmed branch above never gets this far.
+        await rememberClip(res.payload.url || meta.url, "verified", "file");
         // No OBSIDIAN_HANDOFF_GAP_MS here: that gap paces an external app
         // reading the OS clipboard, and this destination touches neither.
         // saveClipFile has now seen the file land, so the close is safe.
@@ -936,6 +979,10 @@ async function clipSelectedTabs(tabIds: number[]): Promise<ClipSelectedTabsRespo
         continue;
       }
 
+      // `launched` and nothing stronger: the popup has no sidecar to ask, and a
+      // refused obsidian:// launch is indistinguishable from a taken one.
+      await rememberClip(res.payload.url || meta.url, "launched", "obsidian");
+
       await delay(OBSIDIAN_HANDOFF_GAP_MS);
       try {
         await browser.tabs.remove(tabId);
@@ -964,9 +1011,11 @@ browser.runtime.onMessage.addListener(async (rawMsg: unknown): Promise<unknown> 
       return finishClipResult(msg);
     case "get-scoped-tabs": {
       const tabs = (await queryScopedTabs()).filter(tabInScope);
+      // One read for the whole listing, not one per tab.
+      const memory = await loadClipMemory();
       const response: GetScopedTabsResponse = {
         tabs: tabs
-          .map(tabToPopupTab)
+          .map((t) => tabToPopupTab(t, memory))
           .sort((a, b) => (a.windowId ?? 0) - (b.windowId ?? 0) || a.index - b.index),
         settings,
       };
