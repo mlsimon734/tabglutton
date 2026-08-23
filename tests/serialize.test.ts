@@ -183,33 +183,60 @@ describe("createTaskPool", () => {
     await Promise.all(tasks);
   });
 
-  test("stays under the limit when new tasks arrive while it is draining", async () => {
-    // Devour dispatches every save up front, but a bridge-shaped caller enqueues
-    // as it goes — so the ceiling has to hold against tasks arriving one at a
-    // time into a pool that is already handing slots back.
-    const pool = createTaskPool(2);
-    let running = 0;
-    let peak = 0;
-    const task = async (): Promise<void> => {
-      running += 1;
-      peak = Math.max(peak, running);
-      await delay(20);
-      running -= 1;
-    };
+  test("holds the limit against a task arriving as a slot is handed over", async () => {
+    // The handoff window: between a slot being freed and the waiting task
+    // resuming, a caller arriving in that gap must not be able to take the slot
+    // out from under the waiter and put `limit + 1` in flight.
+    //
+    // Where that window falls depends on how many microtask turns the pool takes
+    // to get from a finished task to a resumed waiter, so the arrival is swept
+    // across turns rather than pinned to one — a pool whose internals shift
+    // would otherwise start passing this vacuously. Measured: an implementation
+    // that releases the slot before waking the waiter peaks at 3 here.
+    for (let turnsBeforeArrival = 0; turnsBeforeArrival <= 5; turnsBeforeArrival += 1) {
+      const pool = createTaskPool(2);
+      const finish = deferred<void>();
+      const hold = deferred<void>();
+      let running = 0;
+      let peak = 0;
+      const track = (until: Promise<void>) => async (): Promise<void> => {
+        running += 1;
+        peak = Math.max(peak, running);
+        await until;
+        running -= 1;
+      };
 
-    // Each task outlives several arrivals, so the pool is always both draining
-    // and being enqueued into.
-    const inFlight: Promise<void>[] = [];
-    for (let i = 0; i < 8; i += 1) {
-      inFlight.push(pool(task));
-      await delay(1);
+      const first = pool(track(finish.promise));
+      const second = pool(track(hold.promise));
+      const waiter = pool(track(hold.promise));
+
+      finish.resolve();
+      for (let turn = 0; turn < turnsBeforeArrival; turn += 1) await Promise.resolve();
+      const latecomer = pool(track(hold.promise));
+
+      hold.resolve();
+      await Promise.all([first, second, waiter, latecomer]);
+      expect(peak).toBe(2);
+      expect(running).toBe(0);
     }
-    await Promise.all(inFlight);
-    expect(peak).toBe(2);
-    expect(running).toBe(0);
   });
 
-  test("a rejecting task frees its slot and reaches only its own caller", async () => {
+  test("a rejecting task frees its slot rather than wedging the pool", async () => {
+    // A limit of one, and the next task enqueued only after the rejection has
+    // been delivered: with more slots or an earlier enqueue the survivor would
+    // inherit some *other* task's slot and a leak would go unnoticed.
+    const pool = createTaskPool(1);
+    await expect(
+      pool(async () => {
+        throw new Error("nope");
+      }),
+    ).rejects.toThrow("nope");
+
+    const ran = await Promise.race([pool(async () => "ran"), delay(200).then(() => "wedged")]);
+    expect(ran).toBe("ran");
+  });
+
+  test("a rejection reaches its own caller and nobody else", async () => {
     const pool = createTaskPool(2);
     const results = await Promise.allSettled([
       pool(async () => {
@@ -221,7 +248,7 @@ describe("createTaskPool", () => {
     expect(results.map((r) => r.status)).toEqual(["rejected", "fulfilled", "fulfilled"]);
   });
 
-  test("a limit of one runs strictly one at a time, like the queue", async () => {
+  test("a limit of one runs strictly one at a time, in call order", async () => {
     const pool = createTaskPool(1);
     const order: string[] = [];
     const slow = pool(async () => {

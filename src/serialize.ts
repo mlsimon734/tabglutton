@@ -8,10 +8,11 @@
 // read-modify-write two closes can interleave and lose) and the OS clipboard the
 // Obsidian handoff borrows.
 //
-// Not every shared resource wants one caller, though. The Zotero Connector
-// serves concurrent saves by design — each carries its own session — so what its
-// dispatch needs is a ceiling rather than a queue, and `createTaskPool` is that
-// ceiling with `createTaskQueue`'s contract otherwise intact.
+// Not every shared resource wants one caller, though. Zotero's client is
+// understood to serve concurrent saves by design, each carrying its own session
+// — read off upstream's `/connector/updateSession` and its one-entry
+// `SITE_ACCESS_LIMIT_TRANSLATORS`, not measured here — so what that dispatch
+// needs is a ceiling rather than a queue, and `createTaskPool` is that ceiling.
 //
 // Pure, so the ordering and error-isolation rules are unit-testable.
 
@@ -50,9 +51,11 @@ export function createTaskQueue(): TaskQueue {
 /**
  * A pool that keeps at most `limit` tasks running, starting them in call order.
  *
- * `createTaskQueue()` is the `limit === 1` case, and the rest of its contract is
- * unchanged: a rejecting task is delivered to its own caller and to nobody else,
- * and it frees its slot exactly as a fulfilling one does.
+ * It carries `createTaskQueue`'s contract with a ceiling in place of the queue's
+ * one slot: a rejecting task is delivered to its own caller and to nobody else,
+ * and it frees its slot exactly as a fulfilling one does. It is *not* that queue
+ * at `limit === 1` — the queue always defers to a microtask (`tail.then`), while
+ * a pool with a free slot enters the task synchronously.
  *
  * A freed slot is handed straight to the longest-waiting caller rather than
  * released and re-taken. Releasing it first would let a caller arriving in the

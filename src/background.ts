@@ -644,11 +644,16 @@ const ZOTERO_DETECTION_RETRY_MS = 250;
  *
  * A ceiling, not a queue, and the ceiling *is* the mitigation. Serializing these
  * guarded against two papers raising the Connector's item selector at the same
- * time, which routed tabs almost never do — `ACADEMIC_ITEM_TYPES` in zotero.ts
- * excludes `multiple`, so a search-results page never routes here in the first
- * place. What is left is a rare case whose blast radius this bounds, plus the
- * request rate a source site sees. Both argue for a small number rather than an
- * unbounded `Promise.all` over a backlog of several hundred papers.
+ * time, which routed tabs should almost never do — `ACADEMIC_ITEM_TYPES` in
+ * zotero.ts excludes `multiple`, so a search-results page never routes here in
+ * the first place. What is left is a rare case whose blast radius this bounds,
+ * plus the request rate a source site sees. Both argue for a small number rather
+ * than an unbounded `Promise.all` over a backlog of several hundred papers.
+ *
+ * Reasoned from upstream's source and the serial timings in
+ * [#51](https://github.com/mlsimon734/tabglutton/issues/51), not from a measured
+ * parallel run — see docs/ENGINEERING.md §Concurrency before lowering or raising
+ * it, and before re-serializing this on a hunch.
  */
 const ZOTERO_SAVE_CONCURRENCY = 3;
 
@@ -823,6 +828,9 @@ async function clipSelectedTabs(tabIds: number[]): Promise<ClipSelectedTabsRespo
   const zoteroPool = createTaskPool(ZOTERO_SAVE_CONCURRENCY);
   const zoteroSaves = new Map<number, Promise<void>>();
   for (const tabId of tabIds) {
+    // Phase 1 already collapses a repeated id to one `prepared` entry, so this
+    // keeps phase 2 agreeing with it — and keeps a second dispatch from
+    // orphaning the first tab's promise in the map.
     if (zoteroSaves.has(tabId)) continue;
     if (prepared.get(tabId)?.destination.kind !== "zotero") continue;
     const save = zoteroPool(() => saveTabToZotero(settings.zoteroConnectorId, tabId));
