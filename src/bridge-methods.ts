@@ -160,15 +160,18 @@ const NO_INJECTION_TARGET_HINT =
   "Firefox reports this whenever no frame accepted the injection: the page may have been navigating, or it may be one the engine keeps closed to extensions (its own add-on, support, and account sites). The host grant is held, so a second failure means this page cannot be read.";
 
 /**
- * Appended when the Connector could not be asked at all. Routing is on, so this
- * fails every bridge clip the same way until it is fixed, and none of its causes
- * are visible from the error the engine hands back ("Could not establish
- * connection" for an absent Connector reads like a transient miss). The remedies
- * are all in the user's hands, which is what makes them worth naming: the agent
- * cannot act on any of them, but it can say which one to check.
+ * Appended when routing could not get a verdict. Two different failures reach
+ * it and the wording has to hold for both: the Connector could not be reached
+ * at all (absent, disabled, wrong ID, or this extension not in its allowlist),
+ * or it was reached and answered `detecting` until the poll ran out — which is
+ * a property of the one tab, not of the install. Hence the conditional: the
+ * remedies are worth naming because none of them are visible from the engine's
+ * own message ("Could not establish connection" reads like a transient miss),
+ * and worth qualifying because telling someone to reinstall the Connector that
+ * just answered them is worse than saying nothing.
  */
 const ZOTERO_UNREACHABLE_HINT =
-  "Tabglutton could not reach the Zotero Connector. Ask the user to check that the Connector is installed and enabled, that the Connector ID in Tabglutton's settings matches it, and that Tabglutton's own extension ID is listed in the Connector's externalAPI.allowedExtensions preference. The tab was left open.";
+  "Tabglutton could not get a verdict from the Zotero Connector for this tab, so it was left open rather than filed somewhere the user did not choose. A tab that was still loading can do this on its own. If it happens for every tab, ask the user to check that the Connector is installed and enabled, that the Connector ID in Tabglutton's settings matches it, and that Tabglutton's own extension ID is listed in the Connector's externalAPI.allowedExtensions preference.";
 
 /** Pure so the engine-string gate can be pinned without a browser harness. */
 export function isNoInjectionTargetError(message: string | undefined): boolean {

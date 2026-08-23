@@ -4,13 +4,15 @@ All notable changes to Tabglutton are documented here.
 
 ## [0.4.1](https://github.com/mlsimon734/tabglutton/compare/v0.4.0...v0.4.1) (unreleased)
 
-- Devour now dispatches up to three Zotero Connector saves at once instead of one at a time, so a
-  run of papers finishes in roughly a third of the wall-clock. Everything the run reports is
-  unchanged — same counts, same per-tab failures, same order — and the Obsidian handoff stays
-  strictly serial, because it borrows the OS clipboard.
-- **The agent bridge now obeys **Route papers to Zotero**.** With that setting on, `tab_clip`
-  saved papers into Obsidian anyway, so an agent clearing a backlog quietly filed them in the
-  wrong place; it now runs the same routing the popup's Devour does, reports
+- Devour now dispatches up to three Zotero Connector saves at once instead of one at a time. That
+  is the save step only — waking each tab and asking the Connector to identify it are unchanged
+  and usually dominate a backlog run — and the speedup is reasoned from the serial timings rather
+  than measured against a live Connector. Everything the run reports is unchanged: same counts,
+  same per-tab failures, same order. The Obsidian handoff stays strictly serial, because it
+  borrows the OS clipboard.
+- **The agent bridge now obeys the "Route papers to Zotero" setting.** With that setting on,
+  `tab_clip` saved papers into Obsidian anyway, so an agent clearing a backlog quietly filed them
+  in the wrong place; it now runs the same routing the popup's Devour does, reports
   `destination: "zotero"`, and closes the tab only once the Connector confirms the save. A
   Connector that cannot take a routed tab fails that clip with `zotero-failed` and leaves the tab
   open rather than falling back to Obsidian. Naming a `vault` in the call still overrides
