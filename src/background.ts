@@ -163,6 +163,31 @@ interface ClipCurrentResultMessage extends ClipCurrentResponse {
 }
 
 let settings: Settings = defaults();
+/**
+ * The initial load, and the thing to await before reading `settings`.
+ *
+ * This page is an event page on Gecko and a service worker on Chrome, so a
+ * runtime message is frequently what *wakes* it — arriving while the load is
+ * still in flight, when `settings` is still the defaults. For most handlers
+ * that is a scope or a folder being briefly wrong; for the diagnostics block it
+ * would freeze "bridge off, no token, clips to obsidian" into a paste, at the
+ * exact moment someone is filing a report about an install that had been
+ * sitting idle.
+ *
+ * It owns the load rather than signalling one, so there is no path on which it
+ * never settles — a rejected `storage.local.get` would otherwise hang every
+ * awaiting handler forever, which is a worse answer than the stale one this
+ * exists to prevent. A failed load leaves the defaults standing, as before.
+ * Await *this*, never `init()` — the badge pass at the end of init costs
+ * seconds on a thousand-tab backlog.
+ */
+const settingsReady: Promise<void> = (async () => {
+  try {
+    settings = await loadSettings();
+  } catch (err) {
+    console.warn("[tabglutton] initial settings load failed; using defaults", err);
+  }
+})();
 // Only the connected/not-connected split reaches the badge, so that is all we
 // mirror; `bridge.status` stays the source of truth for anyone who asks.
 let bridgeConnected = false;
@@ -1080,6 +1105,10 @@ browser.runtime.onMessage.addListener(async (rawMsg: unknown): Promise<unknown> 
  * clock at all.
  */
 async function collectDiagnostics(): Promise<GetDiagnosticsResponse> {
+  // The message that asked for this may be what woke the page — see
+  // `settingsReady`. Reading `settings` before it resolves would report the
+  // defaults as though they were the user's configuration.
+  await settingsReady;
   const inScope = (await queryScopedTabs()).filter(tabInScope);
   const all = await browser.tabs.query({});
   // Counted over the same list `tabsInScope` reports, so the two numbers in the
@@ -1193,7 +1222,7 @@ browser.runtime.onInstalled.addListener(async (details) => {
 });
 
 void (async function init() {
-  settings = await loadSettings();
+  await settingsReady;
   // Dial before the tab-heavy work below, not after. This is an event page: the
   // browser re-runs init on every wake, including the wakes the reconnect alarm
   // causes, so anything ahead of `start()` is paid again on every single

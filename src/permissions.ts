@@ -74,9 +74,7 @@ export async function hasOrigins(origins: string[]): Promise<boolean> {
  * inability to check is never a verdict. Never prompts; safe from the
  * background page, for the same reason as `hasOrigins`.
  */
-export type DownloadsGrant = PermissionGrant;
-
-export async function downloadsGrant(): Promise<DownloadsGrant> {
+export async function downloadsGrant(): Promise<PermissionGrant> {
   try {
     return (await browser.permissions.contains({ permissions: ["downloads"] }))
       ? "held"

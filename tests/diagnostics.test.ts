@@ -50,41 +50,41 @@ function facts(over: Partial<DiagnosticsFacts> = {}): DiagnosticsFacts {
 describe("BridgeErrorLog", () => {
   test("keeps entries oldest first", () => {
     const log = new BridgeErrorLog();
-    log.record("dial-timeout", "4589", T0);
-    log.record("heartbeat-lost", "4589", T0 + 1_000);
+    log.record("dial-timeout", 4589, T0);
+    log.record("heartbeat-lost", 4589, T0 + 1_000);
 
     expect(log.list()).toEqual([
-      { at: T0, kind: "dial-timeout", subject: "4589", count: 1 },
-      { at: T0 + 1_000, kind: "heartbeat-lost", subject: "4589", count: 1 },
+      { at: T0, kind: "dial-timeout", subject: 4589, count: 1 },
+      { at: T0 + 1_000, kind: "heartbeat-lost", subject: 4589, count: 1 },
     ]);
   });
 
   test("drops the oldest entry once the capacity is reached", () => {
     const log = new BridgeErrorLog(3);
     // Distinct subjects so nothing coalesces and every record takes a slot.
-    for (let i = 0; i < 5; i += 1) log.record("dial-failed", String(4589 + i), T0 + i);
+    for (let i = 0; i < 5; i += 1) log.record("dial-failed", 4589 + i, T0 + i);
 
-    expect(log.list().map((entry) => entry.subject)).toEqual(["4591", "4592", "4593"]);
+    expect(log.list().map((entry) => entry.subject)).toEqual([4591, 4592, 4593]);
   });
 
   test("collapses consecutive identical failures into a count", () => {
     const log = new BridgeErrorLog();
-    log.record("dial-timeout", "4589", T0);
-    log.record("dial-timeout", "4589", T0 + 30_000);
-    log.record("dial-timeout", "4589", T0 + 60_000);
+    log.record("dial-timeout", 4589, T0);
+    log.record("dial-timeout", 4589, T0 + 30_000);
+    log.record("dial-timeout", 4589, T0 + 60_000);
 
     // One slot, the newest timestamp — the reconnect loop this exists to catch
     // would otherwise fill every slot with the same line inside five minutes.
     expect(log.list()).toEqual([
-      { at: T0 + 60_000, kind: "dial-timeout", subject: "4589", count: 3 },
+      { at: T0 + 60_000, kind: "dial-timeout", subject: 4589, count: 3 },
     ]);
   });
 
   test("does not collapse across a different failure", () => {
     const log = new BridgeErrorLog();
-    log.record("dial-timeout", "4589", T0);
-    log.record("auth-failed", "4589", T0 + 1);
-    log.record("dial-timeout", "4589", T0 + 2);
+    log.record("dial-timeout", 4589, T0);
+    log.record("auth-failed", 4589, T0 + 1);
+    log.record("dial-timeout", 4589, T0 + 2);
 
     expect(log.list().map((entry) => [entry.kind, entry.count])).toEqual([
       ["dial-timeout", 1],
@@ -95,15 +95,15 @@ describe("BridgeErrorLog", () => {
 
   test("distinguishes the same failure on different ports", () => {
     const log = new BridgeErrorLog();
-    log.record("dial-failed", "4589", T0);
-    log.record("dial-failed", "4590", T0 + 1);
+    log.record("dial-failed", 4589, T0);
+    log.record("dial-failed", 4590, T0 + 1);
 
     expect(log.list()).toHaveLength(2);
   });
 
   test("hands out copies, so a caller cannot edit the log by holding it", () => {
     const log = new BridgeErrorLog();
-    log.record("heartbeat-lost", "4589", T0);
+    log.record("heartbeat-lost", 4589, T0);
     const first = log.list()[0];
     if (!first) throw new Error("expected one entry");
     first.count = 99;
@@ -121,6 +121,14 @@ describe("agoLabel", () => {
     expect(agoLabel(3 * 3_600_000)).toBe("3h ago");
     expect(agoLabel(2 * 86_400_000)).toBe("2d ago");
   });
+
+  test("floors rather than rounds, so no bucket overflows its own name", () => {
+    // Rounding here produced "60s ago" and "24h ago" — a unit the next bucket
+    // up is supposed to own.
+    expect(agoLabel(59_600)).toBe("59s ago");
+    expect(agoLabel(59.6 * 60_000)).toBe("59m ago");
+    expect(agoLabel(23.7 * 3_600_000)).toBe("23h ago");
+  });
 });
 
 describe("renderDiagnostics", () => {
@@ -133,8 +141,9 @@ describe("renderDiagnostics", () => {
             status: "idle",
             connectedPort: undefined,
             errors: [
-              { at: T0 - 9 * 60_000, kind: "handshake-timeout", subject: "4589", count: 3 },
-              { at: T0 - 4 * 60_000, kind: "method-failed", subject: "tabs_list", count: 1 },
+              { at: T0 - 9 * 60_000, kind: "handshake-timeout", subject: 4589, count: 3 },
+              { at: T0 - 4 * 60_000, kind: "socket-closed", subject: 1015, count: 2 },
+              { at: T0 - 40_000, kind: "method-failed", subject: "tabs_list", count: 1 },
             ],
           },
         }),
@@ -153,9 +162,10 @@ describe("renderDiagnostics", () => {
         "scope        hidden-false",
         "clips        obsidian · zotero routing off",
         "bridge       on · automatic port · idle · tab load off",
-        "bridge errors (2, oldest first)",
+        "bridge errors (3, oldest first)",
         "  9m ago  handshake-timeout 4589 (x3)",
-        "  4m ago  method-failed tabs_list",
+        "  4m ago  socket-closed 1015 (x2)",
+        "  40s ago  method-failed tabs_list",
         "```",
       ].join("\n"),
     );
@@ -225,8 +235,13 @@ describe("renderDiagnostics", () => {
     // `DiagnosticsFacts` has no field that could carry any of these, so this is
     // a regression guard on the interface rather than on a filter: adding a
     // field that leaks one would have to break this test on the way in.
+    //
+    // A `/token/i` assertion would be the obvious thing to write here and is
+    // worse than useless — the renderer says "no token" for a real state, so it
+    // would fail on a correct block while catching nothing. The secret is a
+    // 24-character random string, so that is what to look for.
     expect(block).not.toContain("://");
-    expect(block).not.toMatch(/token/i);
+    expect(block).not.toMatch(/[A-Za-z0-9_-]{24,}/);
   });
 
   test("uses the singular for one duplicate and one window", () => {

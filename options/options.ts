@@ -569,7 +569,10 @@ async function diagnosticsText(): Promise<string> {
 diagnosticsCopy.addEventListener("click", () => {
   void (async () => {
     // `clipboardWrite` is a declared permission, so the awaits above the write
-    // cannot cost it a gesture it never needed.
+    // cannot cost it a gesture it never needed. They can still cost it the
+    // document's *focus* — click here, switch window, and Chrome refuses the
+    // write — which is why `copyText` reports a failure rather than assuming one
+    // cannot happen.
     await copyText(await diagnosticsText(), "Diagnostics copied");
   })();
 });

@@ -454,7 +454,7 @@ export class BridgeClient {
     if (this.portObstruction === found) return;
     this.portObstruction = found;
     if (found === "foreign") {
-      this.errorLog.record("port-foreign", String(this.deps.getSettings().bridgePort));
+      this.errorLog.record("port-foreign", this.deps.getSettings().bridgePort);
       console.warn(
         `[tabglutton] port ${this.deps.getSettings().bridgePort} answers, but not as Gullet — ` +
           `another program is using it. Not dialling. Change the port in Tabglutton's ` +
@@ -622,7 +622,7 @@ export class BridgeClient {
       // connection — so the alarm picks it up on its own schedule.
       // The port, not the exception — a WebSocket construction error quotes the
       // URL it was given, and this log is rendered into a block pasted in public.
-      this.errorLog.record("dial-failed", String(port));
+      this.errorLog.record("dial-failed", port);
       console.warn("[tabglutton] bridge dial failed", err);
       if (settings.bridgePortMode === "auto") this.scheduleIdleProbe();
       return;
@@ -643,7 +643,7 @@ export class BridgeClient {
     // can clear. Sized to bound that case without preempting a slow-but-live
     // connect, which is the mistake this replaces.
     this.handshakeTimer = setTimeout(() => {
-      this.errorLog.record("dial-timeout", String(port));
+      this.errorLog.record("dial-timeout", port);
       console.warn(`[tabglutton] bridge dial timed out after ${Date.now() - dialStarted}ms`);
       this.teardown();
     }, BRIDGE_DIAL_TIMEOUT_MS);
@@ -656,7 +656,7 @@ export class BridgeClient {
       this.clearHandshakeTimer();
       console.debug(`[tabglutton] bridge socket open after ${Date.now() - dialStarted}ms`);
       this.handshakeTimer = setTimeout(() => {
-        this.errorLog.record("handshake-timeout", String(port));
+        this.errorLog.record("handshake-timeout", port);
         console.warn("[tabglutton] bridge handshake timed out");
         this.teardown();
       }, BRIDGE_HANDSHAKE_TIMEOUT_MS);
@@ -664,8 +664,18 @@ export class BridgeClient {
     socket.addEventListener("message", (event) => {
       void this.onMessage(socket, event);
     });
-    socket.addEventListener("close", () => {
-      if (this.socket === socket) this.teardown();
+    socket.addEventListener("close", (event) => {
+      if (this.socket !== socket) return;
+      // The close code, and only the code. It is the highest-value line the
+      // diagnostics block can carry: **1015 is a TLS handshake failure**, which
+      // on this project means the CSP regression documented in AGENTS.md —
+      // Gecko's default MV3 policy rewriting `ws://` to `wss://` — and that
+      // failure is otherwise invisible from both ends. Nothing else here
+      // records it: the constructor did not throw, and the dial timeout needs
+      // two minutes of hanging. `event.reason` is peer-controlled free text and
+      // is deliberately not recorded.
+      this.errorLog.record("socket-closed", event.code);
+      this.teardown();
     });
     // Nothing listening on the port is the normal idle case, not an incident.
     socket.addEventListener("error", () => {
@@ -687,7 +697,7 @@ export class BridgeClient {
           // this log renders into is pasted in public.
           this.errorLog.record(
             "proto-mismatch",
-            typeof msg.proto === "number" ? String(msg.proto) : "unknown",
+            typeof msg.proto === "number" ? msg.proto : undefined,
           );
           console.warn(
             `[tabglutton] bridge protocol mismatch: sidecar speaks ${msg.proto}, extension speaks ${BRIDGE_PROTO}`,
@@ -733,7 +743,7 @@ export class BridgeClient {
           !proofsMatch(msg.proof, expected)
         ) {
           // Something is on our port that does not know the token. Do not talk to it.
-          this.errorLog.record("auth-failed", this.socketPort?.toString());
+          this.errorLog.record("auth-failed", this.socketPort ?? undefined);
           console.warn("[tabglutton] bridge server failed the token challenge");
           this.teardown();
           return;
@@ -793,7 +803,7 @@ export class BridgeClient {
       case "hello-error":
         // The sidecar's own sentence goes to the console but not to the log —
         // it is free text arriving from a process that has proved nothing.
-        this.errorLog.record("handshake-rejected", this.socketPort?.toString());
+        this.errorLog.record("handshake-rejected", this.socketPort ?? undefined);
         console.warn("[tabglutton] bridge rejected the handshake:", msg.error.message);
         this.teardown();
         return;
@@ -891,7 +901,7 @@ export class BridgeClient {
         return;
       }
       if (this.awaitingPong) {
-        this.errorLog.record("heartbeat-lost", this.socketPort?.toString());
+        this.errorLog.record("heartbeat-lost", this.socketPort ?? undefined);
         console.warn("[tabglutton] bridge heartbeat lost, reconnecting");
         this.teardown();
         return;

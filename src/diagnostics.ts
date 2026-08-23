@@ -18,17 +18,19 @@
  *   remembers to extend. There is deliberately no such pass: a block with
  *   nothing secret in it cannot leak one, whereas a redactor is a step you can
  *   forget.
- * - `BridgeErrorEntry.subject` is a term from a fixed vocabulary — a loopback
- *   port or a bridge method name — never a caught error's message. Error text
- *   from the clip and load paths quotes the URL it failed on, so recording it
- *   would put page addresses in the block through the one field that looks
- *   harmless.
+ * - `BridgeErrorEntry.subject` is a term from a fixed vocabulary — a number, or
+ *   a bridge method name — never a caught error's message. Error text from the
+ *   clip and load paths quotes the URL it failed on, so a `string` here would
+ *   put page addresses in the block through the one field that looks harmless.
+ *   The type is the vocabulary rather than a comment describing one, so
+ *   `record("method-failed", String(err))` does not compile.
  *
  * Nothing here touches `browser.*`. The callers gather the facts (the
  * background page holds the bridge's state, the options page has the gesture
  * that may read permissions), and this module stays pure and unit-tested.
  */
 
+import type { BridgeMethod } from "./bridge-protocol.js";
 import type { PermissionGrant } from "./permissions.js";
 import type { BridgePortMode, ClipDestination, ScopeMode } from "./storage.js";
 import type { BridgeStatus } from "./bridge-client.js";
@@ -51,18 +53,22 @@ export type BridgeErrorKind =
   | "dial-timeout"
   | "handshake-timeout"
   | "handshake-rejected"
+  | "socket-closed"
   | "heartbeat-lost"
   | "method-failed";
+
+/**
+ * What a `kind` is qualified by: a number (a loopback port, a WebSocket close
+ * code, a protocol version) or a bridge method name. Deliberately not `string`
+ * — see the vocabulary rule in this module's header.
+ */
+export type BridgeErrorSubject = number | BridgeMethod;
 
 export interface BridgeErrorEntry {
   /** Epoch ms of the most recent occurrence in this run of identical failures. */
   at: number;
   kind: BridgeErrorKind;
-  /**
-   * A loopback port or a bridge method name — see the vocabulary rule in this
-   * module's header. Never free text and never anything a page supplied.
-   */
-  subject?: string;
+  subject?: BridgeErrorSubject;
   /** Consecutive identical failures collapsed into this entry; at least 1. */
   count: number;
 }
@@ -96,7 +102,7 @@ export class BridgeErrorLog {
     this.capacity = Math.max(1, capacity);
   }
 
-  record(kind: BridgeErrorKind, subject?: string, at: number = Date.now()): void {
+  record(kind: BridgeErrorKind, subject?: BridgeErrorSubject, at: number = Date.now()): void {
     const last = this.entries[this.entries.length - 1];
     if (last && last.kind === kind && last.subject === subject) {
       last.count += 1;
@@ -176,13 +182,17 @@ const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
 const DAY = 24 * HOUR;
 
-/** Coarse and relative, so the block carries no wall-clock time from the user's machine. */
+/**
+ * Coarse and relative, so the block carries no wall-clock time from the user's
+ * machine. Floors rather than rounds: the bucket is chosen by comparison and
+ * the number is formatted separately, so rounding lets 59.6s out as "60s ago".
+ */
 export function agoLabel(elapsedMs: number): string {
   if (elapsedMs < 5_000) return "just now";
-  if (elapsedMs < MINUTE) return `${Math.round(elapsedMs / 1_000)}s ago`;
-  if (elapsedMs < HOUR) return `${Math.round(elapsedMs / MINUTE)}m ago`;
-  if (elapsedMs < DAY) return `${Math.round(elapsedMs / HOUR)}h ago`;
-  return `${Math.round(elapsedMs / DAY)}d ago`;
+  if (elapsedMs < MINUTE) return `${Math.floor(elapsedMs / 1_000)}s ago`;
+  if (elapsedMs < HOUR) return `${Math.floor(elapsedMs / MINUTE)}m ago`;
+  if (elapsedMs < DAY) return `${Math.floor(elapsedMs / HOUR)}h ago`;
+  return `${Math.floor(elapsedMs / DAY)}d ago`;
 }
 
 function bridgeLine(bridge: DiagnosticsBridgeFacts): string {
@@ -200,7 +210,7 @@ function bridgeLine(bridge: DiagnosticsBridgeFacts): string {
 
 function errorLines(errors: readonly BridgeErrorEntry[], now: number): string[] {
   return errors.map((entry) => {
-    const subject = entry.subject ? ` ${entry.subject}` : "";
+    const subject = entry.subject === undefined ? "" : ` ${entry.subject}`;
     const repeat = entry.count > 1 ? ` (x${entry.count})` : "";
     return `  ${agoLabel(now - entry.at)}  ${entry.kind}${subject}${repeat}`;
   });
