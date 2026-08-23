@@ -75,6 +75,8 @@ export type ClipFailureReason =
   | "vault-missing"
   | "zotero-failed"
   | "download-failed"
+  /** An auto-close rule's `tabs.remove` was refused and the tab is still open. */
+  | "close-failed"
   /**
    * Not a fault: a site rule marks this site never-devour, so the run left the
    * tab open on purpose. Reported through the same channel because a selected
@@ -901,7 +903,21 @@ async function clipSelectedTabs(tabIds: number[]): Promise<ClipSelectedTabsRespo
         try {
           await browser.tabs.remove(tabId);
         } catch (err) {
-          console.warn("[tabglutton] rule auto-close failed for tab", tabId, err);
+          // A rejection is not proof the close failed — the tab may have gone
+          // on its own since the record read. Ask, and report whichever fact
+          // holds: still open is a failure the summary must carry (a silently
+          // dropped tab counts nowhere at all), already gone owes nothing.
+          let stillOpen = false;
+          try {
+            await browser.tabs.get(tabId);
+            stillOpen = true;
+          } catch {
+            // Gone — someone else closed it; there is nothing left to report.
+          }
+          if (stillOpen) {
+            fail("close-failed", errorMessage(err));
+            console.warn("[tabglutton] rule auto-close failed for tab", tabId, err);
+          }
           continue;
         }
         ruleClosed += 1;
