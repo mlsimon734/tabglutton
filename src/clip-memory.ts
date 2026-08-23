@@ -62,10 +62,12 @@ export type ClipMemory = Record<string, ClipMemoryEntry>;
  * Ceiling on remembered pages, pruned least-recently-clipped first.
  *
  * A normalized-URL map grows forever otherwise, and this one is written back
- * whole on every clip. At the cap an entry costs roughly 120 bytes (a ~70-char
- * key plus a three-field value), so the store tops out near 600 KB — comfortably
- * inside Chrome's 10 MB `storage.local` quota, and a serialize-and-write a clip
- * that already waits on a page load and a 200ms handoff gap will not notice.
+ * whole on every clip. Measured at the cap with realistic keys: 617 KB
+ * serialized, 0.5ms to parse and 0.46ms to upsert — comfortably inside Chrome's
+ * 10 MB `storage.local` quota, and a write a clip that already waits on a page
+ * load and a 200ms handoff gap will not notice. A Devour run of hundreds of tabs
+ * at the cap does move that much through storage per clip, which is the one
+ * shape where batching a single write at the end of the run would pay.
  * Generous in time, too: at a steady seven clips a day it is about two years
  * before anything is forgotten, and what falls off is the page filed longest ago
  * — the one whose tab is least likely to still be in the backlog.
