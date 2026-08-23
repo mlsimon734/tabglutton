@@ -232,10 +232,30 @@
           without saving, or send it to Zotero. Patterns ignore case,
           <code>www.</code>, and tracking params, and can pin a path — <code>github.com</code> takes
           the whole site, <code>reddit.com/r/rust</code> just that corner. Every rule shows on its
-          tabs in the popup and the cockpit before Devour runs.
+          tabs in the popup and the cockpit before Devour runs. A rule can also name a tab group —
+          the cockpit's <strong>Group</strong> button previews those and writes them into the
+          browser's own tab strip.
         </p>
         <ul id="rulesList" class="rules-list"></ul>
         <button type="button" id="ruleAdd" class="mini-button rules-add">Add rule</button>
+
+        <div class="setting block">
+          <div class="setting-text">
+            <strong>Never reorder these sites</strong>
+            <small>
+              The grouping pass parks matching tabs instead of grouping them, whatever the rules
+              say. Comma-separated, same pattern shape as a rule. Pinned tabs are always left alone
+              — grouping would unpin them.
+            </small>
+          </div>
+          <div class="setting-control">
+            <input
+              type="text"
+              id="groupingSkipList"
+              placeholder="e.g. mail.google.com, calendar.google.com"
+            />
+          </div>
+        </div>
       </section>
 
       <section>

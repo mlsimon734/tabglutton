@@ -15,6 +15,13 @@ All notable changes to Tabglutton are documented here.
 - Rule dispositions are visible before they act: matching tabs carry a pill in the popup
   and the Devour cockpit, and the cockpit inspector names the rule, its disposition, and
   the folder it files into.
+- A rule can also carry a tab-group name and colour, and the cockpit's new Group button
+  writes that grouping into the browser's own tab strip — preview first, always: nothing
+  moves that the preview did not show. Unmatched tabs are left alone (no fallback
+  clustering), pinned tabs are excluded because grouping silently unpins them, a skip
+  list parks sites that must never be reordered, and grouping never moves a tab between
+  windows. Needs the new `tabGroups` permission, which browsers do not surface in the
+  install prompt.
 
 ## [0.4.0](https://github.com/mlsimon734/tabglutton/compare/v0.3.1...v0.4.0) (2026-08-21)
 
