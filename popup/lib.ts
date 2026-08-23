@@ -205,6 +205,8 @@ export function reasonLabel(reason: ClipFailureReason): string {
       return "Zotero failed";
     case "download-failed":
       return "file write failed";
+    case "close-failed":
+      return "close failed";
     case "never-devour":
       return "kept by rule";
   }
