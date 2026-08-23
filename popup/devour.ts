@@ -612,16 +612,21 @@ function renderInspectorPreview(tab: PopupTab, root: string): HTMLElement {
   pathSection.append(pathLabel, path);
   wrap.append(pathSection);
 
-  const fmSection = document.createElement("section");
-  fmSection.className = "inspector-section";
-  const fmLabel = document.createElement("span");
-  fmLabel.className = "inspector-section-label";
-  fmLabel.textContent = "Frontmatter preview";
-  const fm = document.createElement("pre");
-  fm.className = "inspector-frontmatter";
-  fm.append(buildFrontmatterPreview(tab));
-  fmSection.append(fmLabel, fm);
-  wrap.append(fmSection);
+  // Only a tab that will actually become a note gets a frontmatter preview —
+  // under "Kept open" or "Closed without saving" it would preview a note the
+  // rule just said will not exist.
+  if (disposition === "devour") {
+    const fmSection = document.createElement("section");
+    fmSection.className = "inspector-section";
+    const fmLabel = document.createElement("span");
+    fmLabel.className = "inspector-section-label";
+    fmLabel.textContent = "Frontmatter preview";
+    const fm = document.createElement("pre");
+    fm.className = "inspector-frontmatter";
+    fm.append(buildFrontmatterPreview(tab));
+    fmSection.append(fmLabel, fm);
+    wrap.append(fmSection);
+  }
 
   const metaSection = document.createElement("section");
   metaSection.className = "inspector-section";
@@ -632,10 +637,13 @@ function renderInspectorPreview(tab: PopupTab, root: string): HTMLElement {
   dl.className = "inspector-meta";
   addDef(dl, "Host", hostOf(tab.url));
   addDef(dl, "Rule", rule ? ruleLabel(rule) : "default");
-  if (disposition !== "devour") {
+  if (disposition === "devour") {
+    // A folder row under a disposition that files nothing would name a place
+    // nothing will go.
+    addDef(dl, "Folder", folder);
+  } else {
     addDef(dl, "Disposition", ruleMark(disposition).label);
   }
-  addDef(dl, "Folder", folder);
   metaSection.append(metaLabel, dl);
   wrap.append(metaSection);
 
