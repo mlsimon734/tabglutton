@@ -6,9 +6,9 @@ All notable changes to Tabglutton are documented here.
 
 - **Gullet's clip verification stays inside the vault.** The note path `tab_clip` reports comes
   off the browser connection, and it was joined onto the vault directory unchecked — so a
-  `../`-laden path had Gullet list, stat and read files elsewhere on disk and report a verdict on
-  them, a weak existence-and-hash oracle for anything holding that connection
-  (`SECURITY-REVIEW.md` §7). A path that resolves outside the vault now answers `unknown` before
+  `../`-laden path had Gullet list a directory elsewhere on disk, stat and read any note by that
+  name in it, and report a verdict on what it found: a weak existence oracle for anything holding
+  that connection (`SECURITY-REVIEW.md` §7). A path that resolves outside the vault now answers `unknown` before
   anything is read, the same soft contract every other "cannot check" in that module follows.
   No in-vault clip verdicts differently.
 

@@ -215,10 +215,13 @@ export function isClipNoteName(entry: string, base: string): boolean {
  * alone rather than becoming `note.md.md`.
  *
  * It arrives off the wire, so the result is required to stay under the vault
- * and `null` says it does not. A plain `join` followed `../../../.ssh/id_ed25519`
- * out of the vault and Gullet then listed, stat'd and read whatever was there,
- * reporting a verdict on it: a weak existence-and-hash oracle for anything
- * holding the browser connection (`SECURITY-REVIEW.md` §7). `resolve` rather
+ * and `null` says it does not. A plain `join` followed a `../`-laden path out of
+ * the vault, and Gullet then listed that directory and stat'd and read any
+ * `<name>.md` in it, reporting a verdict on what it found. Measured at its real
+ * strength, that is an oracle for two things and not for a third: whether a note
+ * by that name exists anywhere on disk, and — in `unknown` versus `missing` —
+ * whether an unreadable directory is there at all; a file with no `.md` was never
+ * reached, and no content ever leaves (`SECURITY-REVIEW.md` §7). `resolve` rather
  * than `join` because an *absolute* `file` is the same escape by another route —
  * join would have buried it inside the vault, resolve takes it whole and the
  * containment check then refuses it.

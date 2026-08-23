@@ -59,6 +59,19 @@ describe("clipNotePath", () => {
   test("refuses an escape whose name already carries the extension", () => {
     expect(clipNotePath("/vaults/test", "../test.md")).toBeNull();
   });
+
+  // Containment resolves the *vault* path too, and a trailing space is a legal
+  // directory name that `parseObsidianVaultEntries` goes out of its way to keep.
+  // Normalizing it away here would send every clip in such a vault to `unknown`.
+  test("preserves a vault directory whose name ends in a space", () => {
+    expect(clipNotePath("/vaults/test ", "Clippings/Note")).toBe("/vaults/test /Clippings/Note.md");
+  });
+
+  // The one branch a "simplify to root + sep" tidy-up would break: at the
+  // filesystem root that prefix becomes "//" and rejects every path.
+  test("a vault at the filesystem root still contains its notes", () => {
+    expect(clipNotePath("/", "Note")).toBe("/Note.md");
+  });
 });
 
 const SINCE = 1_000_000;

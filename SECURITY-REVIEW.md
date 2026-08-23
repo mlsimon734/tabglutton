@@ -493,19 +493,29 @@ old `join` and pass against the fix, and the in-vault cases (including a path wh
 real file outside it, and a `vault-evil` sibling, driven through `defaultReadDir` /
 `defaultModifiedAt` with no injection. That is what shows the oracle rather than arguing it:
 
-| `file` reported                     | before    | after     |
-| ----------------------------------- | --------- | --------- |
-| `Clippings/Real` (in vault, exists) | `landed`  | `landed`  |
-| `Clippings/Absent` (in vault)       | `missing` | `missing` |
-| `../secrets/id_ed25519` **exists**  | `landed`  | `unknown` |
-| `../secrets/absent` **does not**    | `missing` | `unknown` |
-| `../vault-evil/Note`                | `landed`  | `unknown` |
-| `/tmp/…/secrets/id_ed25519`         | `missing` | `unknown` |
+| `file` reported                        | on disk         | before    | after     |
+| -------------------------------------- | --------------- | --------- | --------- |
+| `Clippings/Real` (in vault)            | `Real.md`       | `landed`  | `landed`  |
+| `Clippings/Absent` (in vault)          | —               | `missing` | `missing` |
+| `../secrets/id_ed25519`                | `id_ed25519.md` | `landed`  | `unknown` |
+| `../secrets/absent`                    | —               | `missing` | `unknown` |
+| `../vault-evil/Note`                   | `Note.md`       | `landed`  | `unknown` |
+| `/tmp/…/secrets/id_ed25519` (absolute) | `id_ed25519.md` | `missing` | `unknown` |
 
 Rows 3 and 4 are the finding in two lines: the verdict told existence apart outside the vault.
 Afterwards all four escapes are one indistinguishable `unknown` and the two in-vault rows are
 untouched. Row 6 is also why the fix resolves rather than joins — `join` buried the absolute
 path back inside the vault, so it answered `missing` for the wrong reason.
+
+**State the oracle at its measured strength, since that is this file's own standard.** The `on
+disk` column is load-bearing: `.md` is appended to whatever `file` names, so only a
+`<name>.md` (or Obsidian's `<name> N.md`) is ever stat'd or read, and a plaintext key with no
+extension answered `missing` before the fix, indistinguishable from nothing being there. What
+the pre-fix verdict actually distinguished was (a) whether a **note by that name** exists
+anywhere on disk and (b) via `unknown` versus `missing`, whether an unreadable **directory** is
+there — `/private/var/root` answered `unknown` where `/private/var/definitely-not-here`
+answered `missing`, with no note involved at all. Content never left in any case. Narrower than
+"reads your `.ssh` key", broader than "notes only", and still worth closing.
 
 Not a finding, but adjacent, **[ran]** on `src/clip-format.ts`: on the **mac** branch
 `sanitizeFileName` strips `/` and `:` but not `\`, so a title of `..\..\Windows\...` produces
