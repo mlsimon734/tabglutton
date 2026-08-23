@@ -489,6 +489,24 @@ sibling, and an escape whose name already ends `.md`; **[ran]** all seven fail a
 old `join` and pass against the fix, and the in-vault cases (including a path whose interior
 `..` normalizes back inside) verdict exactly as before.
 
+**[ran]** against a real filesystem too, not only the suite's injected one — a temp vault, a
+real file outside it, and a `vault-evil` sibling, driven through `defaultReadDir` /
+`defaultModifiedAt` with no injection. That is what shows the oracle rather than arguing it:
+
+| `file` reported                     | before    | after     |
+| ----------------------------------- | --------- | --------- |
+| `Clippings/Real` (in vault, exists) | `landed`  | `landed`  |
+| `Clippings/Absent` (in vault)       | `missing` | `missing` |
+| `../secrets/id_ed25519` **exists**  | `landed`  | `unknown` |
+| `../secrets/absent` **does not**    | `missing` | `unknown` |
+| `../vault-evil/Note`                | `landed`  | `unknown` |
+| `/tmp/…/secrets/id_ed25519`         | `missing` | `unknown` |
+
+Rows 3 and 4 are the finding in two lines: the verdict told existence apart outside the vault.
+Afterwards all four escapes are one indistinguishable `unknown` and the two in-vault rows are
+untouched. Row 6 is also why the fix resolves rather than joins — `join` buried the absolute
+path back inside the vault, so it answered `missing` for the wrong reason.
+
 Not a finding, but adjacent, **[ran]** on `src/clip-format.ts`: on the **mac** branch
 `sanitizeFileName` strips `/` and `:` but not `\`, so a title of `..\..\Windows\...` produces
 the note name `\..\..\Windows\...`. Harmless on macOS (backslash is an ordinary filename
