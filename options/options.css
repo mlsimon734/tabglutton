@@ -251,6 +251,123 @@ code {
   border-radius: var(--radius-1);
 }
 
+/* ---------- site rules ---------- */
+
+.rules-list {
+  list-style: none;
+  margin: 0 0 var(--space-3);
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+/* Same card grammar as .radio-card: hairline, radius-3, opaque paper. */
+.rule-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: 12px 14px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-3);
+  background: var(--paper);
+}
+
+.rule-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.rule-row .rule-hosts,
+.rule-row .rule-subfolder {
+  flex: 1;
+  min-width: 0;
+}
+
+.rule-hosts {
+  font-family: var(--font-mono);
+  font-size: var(--fs-small);
+}
+
+/* Same clothes as the text inputs; the arrow is the browser's own and follows
+   color-scheme. */
+select.rule-disposition {
+  font: inherit;
+  font-size: var(--fs-body);
+  color: inherit;
+  background: var(--paper);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-2);
+  padding: 8px 10px;
+  outline: 0;
+  cursor: pointer;
+  transition:
+    border-color var(--duration-fast) var(--easing-soft),
+    box-shadow var(--duration-fast) var(--easing-soft);
+}
+
+select.rule-disposition:focus-visible {
+  border-color: var(--accent-ring);
+  box-shadow: 0 0 0 3px var(--accent-ring);
+}
+
+.rule-actions {
+  display: flex;
+  gap: 2px;
+}
+
+.rule-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  color: var(--muted);
+  background: none;
+  border: 0;
+  border-radius: var(--radius-2);
+  cursor: pointer;
+  transition:
+    color var(--duration-fast) var(--easing-soft),
+    background var(--duration-fast) var(--easing-soft);
+}
+
+.rule-icon:hover:not(:disabled) {
+  color: var(--accent);
+  background: var(--hover-strong);
+}
+
+.rule-icon.danger:hover:not(:disabled) {
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+
+.rule-icon:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.rule-icon:focus-visible {
+  outline: 0;
+  box-shadow: inset 0 0 0 2px var(--accent-ring);
+}
+
+.rule-icon svg {
+  display: block;
+}
+
+.rules-empty {
+  font-size: var(--fs-small);
+  color: var(--muted);
+  padding: var(--space-3) 4px;
+}
+
+.rules-add {
+  align-self: flex-start;
+}
+
 /* ---------- agent bridge ---------- */
 
 .field-row {

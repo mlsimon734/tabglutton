@@ -2,6 +2,20 @@
 
 All notable changes to Tabglutton are documented here.
 
+## [0.4.1](https://github.com/mlsimon734/tabglutton/compare/v0.4.0...v0.4.1) (unreleased)
+
+- Site rules are user-editable on the options page — add, edit, remove, and reorder them;
+  the old built-in GitHub/Social entries are now just the seed, and first match (top to
+  bottom) wins. Patterns run through the same URL canonicalizer as Dedup and can pin a
+  path (`reddit.com/r/rust`), not just a host.
+- A rule can carry a disposition beyond a subfolder: never devour (the tab is kept open and
+  reported, never clipped — the agent bridge respects this too), close without saving (with
+  the same undo toast a dedup close gets), or always send to Zotero (skipping the
+  Connector's detection, whether or not detection-based routing is on).
+- Rule dispositions are visible before they act: matching tabs carry a pill in the popup
+  and the Devour cockpit, and the cockpit inspector names the rule, its disposition, and
+  the folder it files into.
+
 ## [0.4.0](https://github.com/mlsimon734/tabglutton/compare/v0.3.1...v0.4.0) (2026-08-21)
 
 Two threads. Devour no longer requires Obsidian — a clip can land as a plain markdown file
