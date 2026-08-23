@@ -146,6 +146,17 @@ body.chrome-lifted .cockpit-header {
   color: var(--ink);
 }
 
+/* Text search and the clip-memory segments narrow the same list, so they sit
+   together in the header's middle column and share its centring. */
+.header-filters {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  max-width: 700px;
+  margin-inline: auto;
+  min-width: 0;
+}
+
 .header-search {
   position: relative;
   display: flex;
@@ -156,7 +167,8 @@ body.chrome-lifted .cockpit-header {
   padding: 0 14px 0 36px;
   height: 36px;
   max-width: 480px;
-  margin-inline: auto;
+  flex: 1;
+  min-width: 0;
   width: 100%;
   transition:
     border-color var(--duration-fast) var(--easing-soft),
@@ -214,6 +226,46 @@ body.chrome-lifted .cockpit-header {
 
 .header-search:focus-within .search-hint {
   opacity: 0;
+}
+
+/* One well holding three segments, so the group reads as a single control
+   rather than three buttons that happen to be adjacent. */
+.seg {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  height: 36px;
+  background: var(--well);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-pill);
+  flex: none;
+}
+
+.seg[hidden] {
+  display: none;
+}
+
+button.seg-btn {
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  border-radius: var(--radius-pill);
+  padding: 0 12px;
+  height: 100%;
+  font-size: var(--fs-small);
+  white-space: nowrap;
+}
+
+button.seg-btn:hover:not(:disabled) {
+  color: var(--ink);
+  background: var(--hover);
+}
+
+button.seg-btn.is-on {
+  color: var(--ink);
+  background: var(--paper-raised);
+  box-shadow: 0 1px 2px var(--glass-shade);
 }
 
 .header-controls {
@@ -759,6 +811,30 @@ body.initial-load .section-head {
   border-radius: var(--radius-pill);
   padding: 4px 8px;
   white-space: nowrap;
+}
+
+/* Quieter than `.keep-pill`: this one is history, not a claim about what the
+   next click will do. The verified state is the only one that earns the
+   confident colour, and it earns it from a filesystem check. */
+.clip-pill {
+  font-size: var(--fs-micro);
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: var(--track-label);
+  text-transform: uppercase;
+  color: var(--muted);
+  background: var(--well);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-pill);
+  padding: 3px 7px;
+  white-space: nowrap;
+  cursor: help;
+}
+
+.clip-pill.verified {
+  color: var(--success);
+  border-color: transparent;
+  background: var(--success-soft);
 }
 
 .pin-icon {

@@ -16,6 +16,9 @@ import {
   type Settings,
 } from "../src/storage.js";
 import {
+  clipFilterMatches,
+  clipMarkLabel,
+  clipMarkTitle,
   clipSummary,
   computeDedupCount,
   extraTabIds,
@@ -30,12 +33,15 @@ import {
   trackScrollLift,
   visibleGroups,
   visibleTabIds,
+  type ClipFilter,
 } from "./lib.js";
 
 interface CockpitState {
   scopedTabs: PopupTab[];
   settings: Settings | null;
   filter: string;
+  /** Deliberately not persisted: a hidden filter surviving a reopen is a bug report. */
+  clipFilter: ClipFilter;
   selected: Set<number>;
   dedupCount: number;
   toast: ToastState | null;
@@ -61,6 +67,7 @@ const emptyTitleEl = document.getElementById("empty-title") as HTMLParagraphElem
 const emptySubEl = document.getElementById("empty-sub") as HTMLParagraphElement;
 const warningEl = document.getElementById("warning") as HTMLDivElement;
 const filterInput = document.getElementById("filter") as HTMLInputElement;
+const clipFilterEl = document.getElementById("clip-filter") as HTMLDivElement;
 const selectAllBtn = document.getElementById("select-all") as HTMLButtonElement;
 const selectionSummaryEl = document.getElementById("selection-summary") as HTMLSpanElement;
 const dedupBtn = document.getElementById("dedup") as HTMLButtonElement;
@@ -85,6 +92,7 @@ const state: CockpitState = {
   scopedTabs: [],
   settings: null,
   filter: "",
+  clipFilter: "all",
   selected: new Set(),
   dedupCount: 0,
   toast: null,
@@ -105,13 +113,36 @@ function renderWarning(): void {
   }
 }
 
+/** Buttons carry the state; `aria-pressed` is what a screen reader reads off. */
+function renderClipFilter(): void {
+  const clipped = state.scopedTabs.filter((t) => t.clipped !== undefined).length;
+  for (const btn of clipFilterEl.querySelectorAll<HTMLButtonElement>(".seg-btn")) {
+    const on = btn.dataset.clipFilter === state.clipFilter;
+    btn.classList.toggle("is-on", on);
+    btn.setAttribute("aria-pressed", String(on));
+  }
+  // Nothing remembered means nothing to sort by, and three buttons that all
+  // show the same list are three ways to wonder what they do.
+  clipFilterEl.hidden = clipped === 0 && state.clipFilter === "all";
+}
+
 function renderEmpty(groups: TabGroup[]): void {
   if (groups.length > 0) {
     emptyEl.hidden = true;
     return;
   }
   emptyEl.hidden = false;
-  if (state.filter.trim()) {
+  if (
+    state.clipFilter !== "all" &&
+    !state.scopedTabs.some((t) => clipFilterMatches(t, state.clipFilter))
+  ) {
+    emptyTitleEl.textContent =
+      state.clipFilter === "clipped" ? "Nothing here is clipped." : "Everything here is clipped.";
+    emptySubEl.textContent =
+      state.clipFilter === "clipped"
+        ? "Tabglutton has no record of clipping any of these pages."
+        : "Every tab in scope is one Tabglutton remembers clipping — which is not a promise the notes are still on disk.";
+  } else if (state.filter.trim()) {
     emptyTitleEl.textContent = "No matches.";
     emptySubEl.textContent = `No tabs match “${state.filter}”.`;
   } else {
@@ -263,6 +294,14 @@ function renderMarks(tab: PopupTab, group: TabGroup): HTMLSpanElement | null {
     keep.textContent = "keep";
     keep.title = "Dedup keeps this copy — the most recently used one";
     marks.push(keep);
+  }
+
+  if (tab.clipped) {
+    const clipped = document.createElement("span");
+    clipped.className = `clip-pill ${tab.clipped.state}`;
+    clipped.textContent = clipMarkLabel(tab.clipped);
+    clipped.title = clipMarkTitle(tab.clipped);
+    marks.push(clipped);
   }
 
   if (tab.pinned) {
@@ -671,9 +710,21 @@ function renderList(groups: TabGroup[]): HTMLLIElement[] {
   return items;
 }
 
+/** The one place the list model is built, so every reader sees the same filters. */
+function currentGroups(): TabGroup[] {
+  return visibleGroups(
+    state.scopedTabs,
+    state.filter,
+    state.settings,
+    state.stickyOrder,
+    state.clipFilter,
+  );
+}
+
 function render(): void {
   renderWarning();
-  const groups = visibleGroups(state.scopedTabs, state.filter, state.settings, state.stickyOrder);
+  renderClipFilter();
+  const groups = currentGroups();
   if (state.stickyOrder === null) {
     state.stickyOrder = groups.map((g) => g.key);
   }
@@ -712,7 +763,7 @@ async function closeTabs(tabIds: number[]): Promise<void> {
 }
 
 function selectedForOps(): PopupTab[] {
-  const groups = visibleGroups(state.scopedTabs, state.filter, state.settings, state.stickyOrder);
+  const groups = currentGroups();
   return selectedTabsInUiOrder(groups, state.selected);
 }
 
@@ -928,7 +979,7 @@ async function undoDedup(): Promise<void> {
 /* ---------- keyboard ---------- */
 
 function focusableTabIds(): number[] {
-  const groups = visibleGroups(state.scopedTabs, state.filter, state.settings, state.stickyOrder);
+  const groups = currentGroups();
   return visibleTabIds(groups);
 }
 
@@ -1015,8 +1066,18 @@ filterInput.addEventListener("input", () => {
   state.stickyOrder = null;
   render();
 });
+clipFilterEl.addEventListener("click", (e) => {
+  const btn = (e.target as HTMLElement).closest<HTMLButtonElement>(".seg-btn");
+  const next = btn?.dataset.clipFilter;
+  if (next !== "all" && next !== "clipped" && next !== "unclipped") return;
+  state.clipFilter = next;
+  // Same reason the text filter drops it: the list is a different list now, so
+  // holding the old order would place groups by where they used to be.
+  state.stickyOrder = null;
+  render();
+});
 selectAllBtn.addEventListener("click", () => {
-  const groups = visibleGroups(state.scopedTabs, state.filter, state.settings, state.stickyOrder);
+  const groups = currentGroups();
   const ids = visibleTabIds(groups);
   const allSelected = ids.length > 0 && ids.every((id) => state.selected.has(id));
   if (allSelected) {

@@ -1,4 +1,5 @@
 import type { ClipFailureReason, ClipSelectedTabsResponse, PopupTab } from "../src/background.js";
+import type { ClipMemoryEntry, ClipTarget } from "../src/clip-memory.js";
 import { groupDuplicates, pickKeeper } from "../src/dedup.js";
 import { normalizeOptsFrom, type Settings } from "../src/storage.js";
 
@@ -112,14 +113,69 @@ export function extraTabIds(groups: TabGroup[]): number[] {
   return ids;
 }
 
+/**
+ * Which side of the clip memory the list is showing. `unclipped` is the second
+ * pass over a backlog — everything already filed drops out of the way — and
+ * `clipped` is the other half of the same question, the tabs that can go.
+ */
+export type ClipFilter = "all" | "clipped" | "unclipped";
+
+export function clipFilterMatches(tab: PopupTab, filter: ClipFilter): boolean {
+  if (filter === "all") return true;
+  return filter === "clipped" ? tab.clipped !== undefined : tab.clipped === undefined;
+}
+
+function clipTargetLabel(destination: ClipTarget): string {
+  switch (destination) {
+    case "obsidian":
+      return "Obsidian";
+    case "file":
+      return "a file in the download folder";
+    case "zotero":
+      return "Zotero";
+  }
+}
+
+/**
+ * The pill's text. "Clipped" is the whole claim — never "in your vault", which
+ * the extension cannot know: a refused `obsidian://` launch looks exactly like a
+ * taken one from in here. The tick separates the two states without asserting
+ * anything more, and `clipMarkTitle` spells out what it means.
+ */
+export function clipMarkLabel(entry: ClipMemoryEntry): string {
+  return entry.state === "verified" ? "clipped ✓" : "clipped";
+}
+
+/** The hover text behind the pill, where the honest version has room to live. */
+export function clipMarkTitle(entry: ClipMemoryEntry, now: number = Date.now()): string {
+  const when = new Date(entry.at).toLocaleDateString(undefined, {
+    year: new Date(entry.at).getFullYear() === new Date(now).getFullYear() ? undefined : "numeric",
+    month: "short",
+    day: "numeric",
+  });
+  const where = clipTargetLabel(entry.destination);
+  return entry.state === "verified"
+    ? `Clipped to ${where} on ${when}, and the note was seen on disk then. It may have been moved or deleted since.`
+    : `Clipped to ${where} on ${when}. The handoff was launched — nothing could confirm the note reached disk, and it may have been moved or deleted since.`;
+}
+
 export function visibleGroups(
   scopedTabs: PopupTab[],
   filter: string,
   settings: Settings | null,
   stickyOrder?: readonly string[] | null,
+  clipFilter: ClipFilter = "all",
 ): TabGroup[] {
   const ts = tokens(filter);
-  const matching = new Set(scopedTabs.filter((tab) => tabMatches(tab, ts)).map((t) => t.id));
+  // Both filters answer the same question — is this row worth looking at — so
+  // they narrow the same set, and duplicate sets go on being found across the
+  // whole scope and shown whole. A clip filter that split a set would pin `keep`
+  // on a copy Dedup is about to close, exactly as a text filter would.
+  const matching = new Set(
+    scopedTabs
+      .filter((tab) => tabMatches(tab, ts) && clipFilterMatches(tab, clipFilter))
+      .map((t) => t.id),
+  );
 
   // Duplicate sets are found across the whole scope and shown *whole* as soon as
   // one copy matches the filter. Detecting them among the matching tabs instead
