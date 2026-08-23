@@ -1093,9 +1093,11 @@ body.initial-load .section-head {
   scrollbar-width: thin;
 }
 
+/* Count sits beside the name it describes — the panel spans the whole bottom
+   chrome, and a 1fr middle column flung the number to the far edge, the exact
+   fault the queue's max-width exists to prevent. */
 .group-preview-row {
-  display: grid;
-  grid-template-columns: auto 1fr auto;
+  display: flex;
   align-items: center;
   gap: var(--space-3);
   padding: 4px 8px;
