@@ -33,6 +33,11 @@ export interface Settings {
    * who deleted every rule, not a reason to re-seed.
    */
   siteRules: SiteRule[];
+  /**
+   * Patterns (same shape as a rule's) whose tabs a grouping pass must never
+   * reorder — parked, not grouped, whatever the rules say.
+   */
+  groupingSkipList: string[];
   /** Route scholarly items detected by Zotero Connector there instead of Obsidian. */
   zoteroRoutingEnabled: boolean;
   /** Published Connector ID by default; overrideable for an unpacked POC build. */
@@ -71,6 +76,7 @@ const DEFAULTS: Readonly<Settings> = Object.freeze({
   clippingsBaseFolder: "Clippings",
   clipMode: "clipboard",
   siteRules: seedRules(),
+  groupingSkipList: [],
   zoteroRoutingEnabled: false,
   zoteroConnectorId: DEFAULT_ZOTERO_CONNECTOR_ID,
   optionsInTab: true,
@@ -83,7 +89,12 @@ const DEFAULTS: Readonly<Settings> = Object.freeze({
 });
 
 export function defaults(): Settings {
-  return { ...DEFAULTS, extraStripParams: [...DEFAULTS.extraStripParams], siteRules: seedRules() };
+  return {
+    ...DEFAULTS,
+    extraStripParams: [...DEFAULTS.extraStripParams],
+    siteRules: seedRules(),
+    groupingSkipList: [...DEFAULTS.groupingSkipList],
+  };
 }
 
 /** Whether an Obsidian vault is configured — the Obsidian path needs one. */
