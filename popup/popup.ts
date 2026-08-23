@@ -8,6 +8,7 @@ import type {
 } from "../src/background.js";
 import { openOptionsUi } from "../src/open-options.js";
 import { CLIP_ORIGINS, DOWNLOADS_GONE, requestOrigins } from "../src/permissions.js";
+import { pickRule } from "../src/site-rules.js";
 import { clipNeedsPageAccess, hasClipDestination, type Settings } from "../src/storage.js";
 import { IS_CHROME } from "../src/target.js";
 import {
@@ -18,6 +19,7 @@ import {
   markdownForTabs,
   prettifyShortcut,
   reasonLabel,
+  ruleMark,
   selectedTabsInUiOrder,
   sendMessage,
   type TabGroup,
@@ -268,6 +270,18 @@ function renderGroup(group: TabGroup): HTMLLIElement {
  */
 function renderMarks(tab: PopupTab, group: TabGroup): HTMLSpanElement | null {
   const marks: HTMLElement[] = [];
+
+  // Disposition pills come first: a rule about to keep, close, or reroute a
+  // tab has to be readable before Devour runs, not discovered in its report.
+  const rule = state.settings && tab.url ? pickRule(tab.url, state.settings.siteRules) : null;
+  if (rule && rule.disposition !== "devour") {
+    const mark = ruleMark(rule.disposition);
+    const pill = document.createElement("span");
+    pill.className = `rule-pill rule-${rule.disposition}`;
+    pill.textContent = mark.label;
+    pill.title = mark.title;
+    marks.push(pill);
+  }
 
   if (group.kind === "duplicate" && tab.id === group.keeperId) {
     const keep = document.createElement("span");
@@ -594,6 +608,9 @@ async function clipSelected(): Promise<void> {
   }
   mergeClipFailures(tabIds, res.failures);
   await refresh();
+  // Rule-driven closes get the same undo the dedup button offers — a rule the
+  // user wrote is still a close they may want back.
+  if (res.ruleClosed > 0) showUndoToast(res.ruleClosed, res.ruleClosedRestorable);
   restore(clipSummary(res), res.failed === 0 ? 1400 : 2200);
 }
 

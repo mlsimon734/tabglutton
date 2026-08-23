@@ -761,6 +761,21 @@ body.initial-load .section-head {
   white-space: nowrap;
 }
 
+/* Quiet ink, not accent: a rule disposition is a standing decision the user
+   already made, not a state the tool is choosing now. */
+.rule-pill {
+  font-size: var(--fs-micro);
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: var(--track-label);
+  text-transform: uppercase;
+  color: var(--muted);
+  background: var(--hover-strong);
+  border-radius: var(--radius-pill);
+  padding: 4px 8px;
+  white-space: nowrap;
+}
+
 .pin-icon {
   display: inline-flex;
   align-items: center;

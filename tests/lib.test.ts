@@ -184,7 +184,25 @@ describe("visibleGroups duplicates", () => {
 });
 
 function summary(partial: Partial<ClipSelectedTabsResponse> = {}): ClipSelectedTabsResponse {
-  return { failed: 0, obsidianSaved: 0, fileSaved: 0, zoteroSaved: 0, failures: [], ...partial };
+  return {
+    failed: 0,
+    obsidianSaved: 0,
+    fileSaved: 0,
+    zoteroSaved: 0,
+    ruleClosed: 0,
+    ruleClosedRestorable: [],
+    failures: [],
+    ...partial,
+  };
+}
+
+function neverDevourFailure(tabId: number) {
+  return {
+    tabId,
+    title: "t",
+    url: "https://example.com",
+    reason: "never-devour" as const,
+  };
 }
 
 describe("clipSummary", () => {
@@ -211,5 +229,27 @@ describe("clipSummary", () => {
     expect(clipSummary(summary({ fileSaved: 4, zoteroSaved: 1 }))).toBe(
       "Saved 1 to Zotero, 4 to files",
     );
+  });
+
+  test("rule-driven outcomes are named apart from failures", () => {
+    expect(clipSummary(summary({ obsidianSaved: 2, ruleClosed: 3 }))).toBe(
+      "Saved 2, closed 3 by rule",
+    );
+    expect(
+      clipSummary(summary({ obsidianSaved: 2, failed: 1, failures: [neverDevourFailure(1)] })),
+    ).toBe("Saved 2, 1 kept by rule");
+    expect(
+      clipSummary(
+        summary({
+          obsidianSaved: 2,
+          ruleClosed: 1,
+          failed: 2,
+          failures: [
+            neverDevourFailure(1),
+            { tabId: 2, title: "t", url: "u", reason: "extract-failed" as const },
+          ],
+        }),
+      ),
+    ).toBe("Saved 2, closed 1 by rule, 1 kept by rule, 1 failed");
   });
 });

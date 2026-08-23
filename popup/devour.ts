@@ -8,7 +8,7 @@ import type {
 } from "../src/background.js";
 import { openOptionsUi } from "../src/open-options.js";
 import { CLIP_ORIGINS, DOWNLOADS_GONE, requestOrigins } from "../src/permissions.js";
-import { pickRule, type SiteRule } from "../src/site-rules.js";
+import { pickRule, ruleLabel, type SiteRule } from "../src/site-rules.js";
 import {
   clipNeedsPageAccess,
   clipsToFile,
@@ -23,6 +23,7 @@ import {
   hostOf,
   markdownForTabs,
   reasonLabel,
+  ruleMark,
   selectedTabsInUiOrder,
   sendMessage,
   type TabGroup,
@@ -256,6 +257,18 @@ function renderGroup(group: TabGroup): HTMLLIElement {
  */
 function renderMarks(tab: PopupTab, group: TabGroup): HTMLSpanElement | null {
   const marks: HTMLElement[] = [];
+
+  // Disposition pills come first: a rule about to keep, close, or reroute a
+  // tab has to be readable before Devour runs, not discovered in its report.
+  const rule = state.settings && tab.url ? pickRule(tab.url, state.settings.siteRules) : null;
+  if (rule && rule.disposition !== "devour") {
+    const mark = ruleMark(rule.disposition);
+    const pill = document.createElement("span");
+    pill.className = `rule-pill rule-${rule.disposition}`;
+    pill.textContent = mark.label;
+    pill.title = mark.title;
+    marks.push(pill);
+  }
 
   if (group.kind === "duplicate" && tab.id === group.keeperId) {
     const keep = document.createElement("span");
@@ -570,20 +583,32 @@ function renderInspectorPreview(tab: PopupTab, root: string): HTMLElement {
   head.append(fav, headText);
   wrap.append(head);
 
-  const rule = tab.url ? pickRule(tab.url) : null;
+  const rule = tab.url && state.settings ? pickRule(tab.url, state.settings.siteRules) : null;
   const folder = targetFolder(rule);
   const fileName = sanitizeFileName(tab.title || tab.url || "Untitled");
+  const disposition = rule?.disposition ?? "devour";
 
   const pathSection = document.createElement("section");
   pathSection.className = "inspector-section";
   const pathLabel = document.createElement("span");
   pathLabel.className = "inspector-section-label";
-  pathLabel.textContent = "Will save to";
+  pathLabel.textContent = disposition === "devour" ? "Will save to" : "On devour";
   const path = document.createElement("div");
   path.className = "inspector-path";
-  const rootEl = document.createElement("strong");
-  rootEl.textContent = root;
-  path.append(rootEl, ` / ${folder} / ${fileName}.md`);
+  if (disposition === "devour") {
+    const rootEl = document.createElement("strong");
+    rootEl.textContent = root;
+    path.append(rootEl, ` / ${folder} / ${fileName}.md`);
+  } else {
+    // A rule that keeps, closes, or reroutes the tab means the save path above
+    // would describe something that will not happen — say what will instead.
+    path.textContent =
+      disposition === "never-devour"
+        ? "Kept open — a site rule keeps this site out of Devour."
+        : disposition === "auto-close"
+          ? "Closed without saving — a site rule."
+          : "Saved to Zotero through its Connector — a site rule.";
+  }
   pathSection.append(pathLabel, path);
   wrap.append(pathSection);
 
@@ -606,7 +631,10 @@ function renderInspectorPreview(tab: PopupTab, root: string): HTMLElement {
   const dl = document.createElement("dl");
   dl.className = "inspector-meta";
   addDef(dl, "Host", hostOf(tab.url));
-  addDef(dl, "Rule", rule ? rule.id : "default");
+  addDef(dl, "Rule", rule ? ruleLabel(rule) : "default");
+  if (disposition !== "devour") {
+    addDef(dl, "Disposition", ruleMark(disposition).label);
+  }
   addDef(dl, "Folder", folder);
   metaSection.append(metaLabel, dl);
   wrap.append(metaSection);
@@ -823,6 +851,9 @@ async function clipSelected(): Promise<void> {
   }
   mergeClipFailures(tabIds, res.failures);
   await refresh();
+  // Rule-driven closes get the same undo the dedup button offers — a rule the
+  // user wrote is still a close they may want back.
+  if (res.ruleClosed > 0) showUndoToast(res.ruleClosed, res.ruleClosedRestorable);
   restore(clipSummary(res), res.failed === 0 ? 1400 : 2400);
 }
 
