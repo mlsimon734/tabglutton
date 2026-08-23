@@ -530,6 +530,61 @@ describe("tab-scoped tools", () => {
     expect(sent.map((s) => s.method)).toEqual(["tab_clip"]);
   });
 
+  // Issue #50: the popup routes papers to Zotero, so the bridge does too, and a
+  // Connector save that resolved is the browser's own confirmation. Gullet does
+  // not speak to Zotero and must not go looking in the vault for a note that was
+  // never written.
+  test("tab_clip closes a Zotero-routed clip without touching the vault", async () => {
+    let verified = false;
+    const { call, sent } = caller(
+      [zen],
+      (s) =>
+        s.method === "tab_clip"
+          ? {
+              tabId: 7,
+              title: "Attention Is All You Need",
+              url: "https://arxiv.org/abs/1706.03762",
+              destination: "zotero",
+              confirmedBy: "browser",
+              closed: false,
+            }
+          : { closed: 1, batchId: "b9" },
+      {
+        verifyClip: async () => {
+          verified = true;
+          return "missing";
+        },
+      },
+    );
+    const result = await call("tab_clip", { tabId: 7, close: true });
+    expect(result.isError).toBeUndefined();
+    expect(verified).toBe(false);
+    expect(payload(result)).toMatchObject({
+      destination: "zotero",
+      confirmedBy: "browser",
+      closed: true,
+      batchId: "b9",
+    });
+    expect(payload(result)).not.toHaveProperty("closeSkipped");
+    // Closed from here like every other destination, so the undo batch is the
+    // one `tabs_close` wrote.
+    expect(sent.map((s) => s.method)).toEqual(["tab_clip", "tabs_close"]);
+    expect(sent[0]).toMatchObject({ params: { tabId: 7, close: false } });
+  });
+
+  test("tab_clip reports a Zotero-routed clip that was not asked to close", async () => {
+    const { call, sent } = caller(
+      [zen],
+      () => ({ destination: "zotero", confirmedBy: "browser", closed: false }),
+      { verifyClip: async () => "landed" },
+    );
+    expect(payload(await call("tab_clip", { tabId: 7 }))).toMatchObject({
+      destination: "zotero",
+      confirmedBy: "browser",
+    });
+    expect(sent.map((s) => s.method)).toEqual(["tab_clip"]);
+  });
+
   // A result nothing can be made of must not silently swallow the close it was
   // asked for: `close: false` went out on the wire, so only this can explain
   // why the tab is still there.

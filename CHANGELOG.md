@@ -8,6 +8,13 @@ All notable changes to Tabglutton are documented here.
   run of papers finishes in roughly a third of the wall-clock. Everything the run reports is
   unchanged — same counts, same per-tab failures, same order — and the Obsidian handoff stays
   strictly serial, because it borrows the OS clipboard.
+- **The agent bridge now obeys **Route papers to Zotero**.** With that setting on, `tab_clip`
+  saved papers into Obsidian anyway, so an agent clearing a backlog quietly filed them in the
+  wrong place; it now runs the same routing the popup's Devour does, reports
+  `destination: "zotero"`, and closes the tab only once the Connector confirms the save. A
+  Connector that cannot take a routed tab fails that clip with `zotero-failed` and leaves the tab
+  open rather than falling back to Obsidian. Naming a `vault` in the call still overrides
+  everything, and the wire protocol is unchanged.
 
 ## [0.4.0](https://github.com/mlsimon734/tabglutton/compare/v0.3.1...v0.4.0) (2026-08-21)
 
