@@ -941,8 +941,8 @@ export interface FileClipResult extends TabClipFiling {
 /**
  * A tab the Zotero Connector took, because the user routes papers there and
  * this tab was one (`zoteroDestination` in background.ts — the same routing the
- * popup's Devour runs, so the two surfaces cannot disagree about where a paper
- * goes).
+ * popup's Devour runs, so the two surfaces cannot disagree about a verdict; they
+ * differ only in that the bridge may not wake a tab to obtain one).
  *
  * It carries no `file` and no `vault`: nothing here writes a note, and the
  * Connector's reply names no library item. `confirmedBy` is `"browser"` and

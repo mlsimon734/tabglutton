@@ -514,9 +514,19 @@ papers into Obsidian — silently, since nothing reported a destination the user
 chosen. That is the same split the file destination had, and it gets the same answer: the
 setting is the user's answer to "where do papers go", and the bridge obeys it. The routing
 function is _injected_ (`routesToZotero` in `BridgeMethodDeps`) rather than re-derived, so
-the two surfaces cannot drift and every Connector wire detail stays in `src/zotero.ts` —
-which is also what insulates this from the upstream API question the POC is still waiting
-on (`docs/ZOTERO_POC.md`).
+the verdict cannot drift and every Connector wire detail stays in `src/zotero.ts` — which is
+also what insulates this from the upstream API question the POC is still waiting on
+(`docs/ZOTERO_POC.md`).
+
+**The same function is not the same precondition, though, and that gap is real.** Devour
+wakes a tab before asking the Connector, precisely because asking a backlog tab early yields
+a translator-less `ready` that routes to Obsidian silently. The bridge cannot wake: that is
+`tabs_load`'s own gated act, and a read must never navigate as a side effect. So a discarded
+tab is refused outright (`tab-discarded`, with `tabs_load` as the remedy) rather than asked
+about — but a tab that is _loaded and still navigating_ is asked, and can be answered
+`ready` with no translator and filed as a note. `ZOTERO_DETECTION_ATTEMPTS` polling for two
+seconds makes that window narrow; it does not close it. Waking on the bridge's behalf would,
+and is the wrong trade.
 
 A Zotero clip is `destination: "zotero"` with `confirmedBy: "browser"`, no `file` and no
 `vault`. Nothing is extracted: the Connector owns the page and its translator state, so a
@@ -537,12 +547,16 @@ the agent can act on. The `vault` override still outranks everything: it is a de
 the caller stated outright.
 
 This did **not** move `BRIDGE_PROTO`. Nothing became mandatory on either end — an older
-extension never sends `"zotero"`, and a newer one meeting an older Gullet degrades the way
-the paragraph below describes rather than misreporting anything: the unknown destination
-falls to the Obsidian branch, which finds no vault and no file and answers `closed: false`
-with a `closeSkipped` that names the wrong destination. The tab stays open and the save is
-still reported. A protocol bump is a hard cut with no downgrade, and trading a stale
-sentence for cutting every older sidecar off entirely is the worse of the two.
+extension never sends `"zotero"`, and a newer one meeting an older Gullet degrades in the
+safe direction rather than misreporting anything. Which degradation depends on how old: a
+Gullet carrying the current verification branch puts the unrecognised destination on the
+Obsidian path, finds no vault and no file, and answers `closed: false` with a `closeSkipped`
+that names the wrong destination; one older than the file destination hits the guard in the
+paragraph below and returns the raw result with the close silently swallowed. Either way the
+tab stays open and the save is still reported. A protocol bump is a hard cut with no
+downgrade, and trading a stale sentence for cutting every older sidecar off entirely is the
+worse of the two. `gullet/tests/tools.test.ts` pins the branch this rests on, with a
+`destination: "future"` result that must be refused rather than waved through.
 
 ▸ **A Gullet older than the extension swallows a file clip's close.** Its guard is
 `if (!result || !vault || !file) return raw`, and a file-destination result carries no

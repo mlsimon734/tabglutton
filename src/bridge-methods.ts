@@ -112,7 +112,7 @@ export interface BridgeMethodDeps {
   /**
    * Ask the Zotero Connector whether this tab is one it should take — the very
    * same question the popup's Devour asks, injected rather than re-derived so
-   * the two surfaces cannot drift and every Connector wire detail stays in
+   * the verdict cannot drift and every Connector wire detail stays in
    * `src/zotero.ts`, where an upstream change to the API has one place to land.
    *
    * Only the Connector's verdict; whether the user routes papers at all is the
@@ -158,6 +158,17 @@ const NO_INJECTION_TARGET_ERROR = "missing host permission for the tab";
  */
 const NO_INJECTION_TARGET_HINT =
   "Firefox reports this whenever no frame accepted the injection: the page may have been navigating, or it may be one the engine keeps closed to extensions (its own add-on, support, and account sites). The host grant is held, so a second failure means this page cannot be read.";
+
+/**
+ * Appended when the Connector could not be asked at all. Routing is on, so this
+ * fails every bridge clip the same way until it is fixed, and none of its causes
+ * are visible from the error the engine hands back ("Could not establish
+ * connection" for an absent Connector reads like a transient miss). The remedies
+ * are all in the user's hands, which is what makes them worth naming: the agent
+ * cannot act on any of them, but it can say which one to check.
+ */
+const ZOTERO_UNREACHABLE_HINT =
+  "Tabglutton could not reach the Zotero Connector. Ask the user to check that the Connector is installed and enabled, that the Connector ID in Tabglutton's settings matches it, and that Tabglutton's own extension ID is listed in the Connector's externalAPI.allowedExtensions preference. The tab was left open.";
 
 /** Pure so the engine-string gate can be pinned without a browser harness. */
 export function isNoInjectionTargetError(message: string | undefined): boolean {
@@ -608,11 +619,6 @@ export class BridgeMethodRunner {
   }
 
   /**
-   * Reads through the same Defuddle clipper the popup uses. Discarded tabs
-   * cannot host a content script and are reported with a distinct code so the
-   * agent can say "needs manual load" instead of retrying.
-   */
-  /**
    * The tab a read or a clip can actually act on: an id that still resolves, an
    * http(s) page, and a document that is loaded. Separate from `readTab` because
    * Zotero routing has to clear the same three before it asks the Connector
@@ -637,6 +643,11 @@ export class BridgeMethodRunner {
     return tab;
   }
 
+  /**
+   * Reads through the same Defuddle clipper the popup uses. Discarded tabs
+   * cannot host a content script and are reported with a distinct code so the
+   * agent can say "needs manual load" instead of retrying.
+   */
   private async readTab(tabId: number): Promise<ClipPayload> {
     await this.loadedTab(tabId);
     let result = await this.deps.extract(tabId);
@@ -715,9 +726,15 @@ export class BridgeMethodRunner {
     // NO_INJECTION_TARGET_HINT's retry advice for a problem a retry cannot fix.
     const vault = destination === "obsidian" ? (params.vault ?? settings.obsidianVault.trim()) : "";
     if (destination === "obsidian" && !vault) {
+      // Named against what the user has actually configured: with routing on
+      // they do have a working destination, just not one this tab qualified for,
+      // and the popup's own message says so rather than reading as "nothing is
+      // set up".
       fail(
         "vault-missing",
-        "No Obsidian vault is configured in Tabglutton's settings, and clips are not set to save as files either.",
+        settings.zoteroRoutingEnabled
+          ? "This tab was not an academic Zotero item, no Obsidian vault is configured in Tabglutton's settings, and clips are not set to save as files either."
+          : "No Obsidian vault is configured in Tabglutton's settings, and clips are not set to save as files either.",
       );
     }
 
@@ -774,6 +791,14 @@ export class BridgeMethodRunner {
    * permission, exactly as in Devour's phase 1. The result is `confirmedBy:
    * "browser"` because a Connector save that resolved is the closest anything in
    * the browser gets to proof, and the popup already closes a routed tab on it.
+   *
+   * Same routing function as the popup, but **not** the same precondition, and
+   * the difference is a real one: Devour wakes a tab before asking, and this
+   * cannot — waking is `tabs_load`'s own gated act. A discarded tab is therefore
+   * refused outright rather than asked about, but a tab that is loaded and still
+   * navigating is asked, and the Connector can answer `ready` with no translator
+   * for it. That verdict is "not a paper", so such a tab files as a note. The
+   * detection poll makes the window narrow rather than absent.
    */
   private async zoteroClip(tabId: number, settings: Settings): Promise<ZoteroClipResult | null> {
     if (!settings.zoteroRoutingEnabled) return null;
@@ -789,7 +814,7 @@ export class BridgeMethodRunner {
       // Never a fallthrough to Obsidian. The user asked for papers to go to
       // Zotero, and "the Connector could not say whether this is one" is not
       // permission to file it somewhere else — the popup fails the tab here too.
-      fail("zotero-failed", errorMessage(err));
+      fail("zotero-failed", `${errorMessage(err)} ${ZOTERO_UNREACHABLE_HINT}`);
     }
     if (!routed) return null;
 
@@ -802,7 +827,7 @@ export class BridgeMethodRunner {
     return {
       tabId,
       title: tab.title ?? "",
-      url: tabUrl(tab) ?? "",
+      url: tab.url ?? "",
       destination: "zotero",
       confirmedBy: "browser",
       closed: false,

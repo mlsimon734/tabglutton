@@ -183,7 +183,7 @@ const bridgeRunner = new BridgeMethodRunner({
     // A Connector that could not answer is reported as such, never flattened
     // into "not a paper" — that `false` would file a paper into Obsidian.
     if (destination.kind === "failed") throw new Error(destination.detail);
-    return true;
+    return destination.kind === "zotero";
   },
   saveToZotero: (tabId) => saveTabToZotero(settings.zoteroConnectorId, tabId),
 });

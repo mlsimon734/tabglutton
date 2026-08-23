@@ -572,6 +572,23 @@ describe("tab-scoped tools", () => {
     expect(sent[0]).toMatchObject({ params: { tabId: 7, close: false } });
   });
 
+  // The compatibility argument for not bumping BRIDGE_PROTO rests on this: a
+  // destination this Gullet has never heard of must land on the Obsidian path,
+  // where a close nothing can justify is refused, rather than being waved
+  // through the way "zotero" is.
+  test("tab_clip refuses to close a destination it does not recognise", async () => {
+    const { call, sent } = caller(
+      [zen],
+      () => ({ destination: "future", confirmedBy: "browser", closed: false }),
+      { verifyClip: async () => "landed" },
+    );
+    const result = await call("tab_clip", { tabId: 7, close: true });
+    expect(result.isError).toBeUndefined();
+    expect(payload(result)).toMatchObject({ destination: "future", closed: false });
+    expect(JSON.stringify(payload(result))).toContain("closeSkipped");
+    expect(sent.map((s) => s.method)).toEqual(["tab_clip"]);
+  });
+
   test("tab_clip reports a Zotero-routed clip that was not asked to close", async () => {
     const { call, sent } = caller(
       [zen],
