@@ -9,8 +9,9 @@ For Firefox based browsers like [Zen Browser](https://zen-browser.app/) and Chro
 
 [![ci](https://github.com/mlsimon734/tabglutton/actions/workflows/ci.yml/badge.svg)](https://github.com/mlsimon734/tabglutton/actions/workflows/ci.yml)
 [![license](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![firefox](https://img.shields.io/badge/Firefox-MV3-FF7139?logo=firefoxbrowser&logoColor=white)](#install)
-[![chrome](https://img.shields.io/badge/Chrome-120%2B-4285F4?logo=googlechrome&logoColor=white)](#install)
+[![firefox add-ons](https://img.shields.io/amo/v/tabglutton?logo=firefoxbrowser&logoColor=white&label=add-ons.mozilla)](https://addons.mozilla.org/firefox/addon/tabglutton/)
+[![chrome web store](https://img.shields.io/chrome-web-store/v/dlploljcggbdcjcaiigmoagonmehglhi?logo=googlechrome&logoColor=white&label=chrome%20web%20store)](https://chromewebstore.google.com/detail/dlploljcggbdcjcaiigmoagonmehglhi)
+[![npm](https://img.shields.io/npm/v/tabglutton-gullet?logo=npm&logoColor=white&label=gullet)](https://www.npmjs.com/package/tabglutton-gullet)
 [![zen](https://img.shields.io/badge/Zen%20Browser-supported-F76F53)](#scope)
 [![bun](https://img.shields.io/badge/built%20with-Bun-000000?logo=bun&logoColor=white)](https://bun.sh)
 [![mcp](https://img.shields.io/badge/MCP-server-8A63D2)](#agent-bridge)
@@ -111,7 +112,7 @@ and a long list of hard-won browser quirks are in [`docs/BRIDGE.md`](docs/BRIDGE
 ## Install
 
 **Firefox and Zen** — [on addons.mozilla.org](https://addons.mozilla.org/firefox/addon/tabglutton/).
-Chrome has not been submitted yet; build it from source below.
+**Chrome and Chromium** — [on the Chrome Web Store](https://chromewebstore.google.com/detail/dlploljcggbdcjcaiigmoagonmehglhi).
 
 Two ways to run it from source:
 
