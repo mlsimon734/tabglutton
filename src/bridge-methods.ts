@@ -99,8 +99,8 @@ export interface BridgeExtractResult {
    * clip (`src/clip-guard.ts`); `ok` is false and the refused text hangs off the
    * verdict, not off `payload`. Its own field rather than an `error` prefix,
    * because `readTab` has to branch on it before it starts diagnosing a failure
-   * that did not happen. Mirrors `ClipCurrentResponse` in `background.ts`; the
-   * `extract` dep assignment there is what holds the two shapes together.
+   * that did not happen. Mirrors `ClipCurrentResponse` in `background.ts`, whose
+   * comment records where a divergence between the two actually fails.
    */
   guarded?: ThinClipVerdict & { payload: ClipPayload };
 }

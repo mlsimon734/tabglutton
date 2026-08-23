@@ -159,8 +159,13 @@ export interface ClipCurrentResponse {
    *
    * The refused text hangs off the verdict rather than staying on `payload`, so
    * `ok` and `payload` keep agreeing everywhere and the only way to reach a junk
-   * extraction is to name the verdict. `BridgeExtractResult` mirrors this, and
-   * the `extract` dep assignment is what typechecks the two against each other.
+   * extraction is to name the verdict. `BridgeExtractResult` mirrors this shape.
+   * Diverging them fails the build, though not from one spot: the `extract` dep
+   * assignment below catches anything the bridge requires that this does not
+   * supply, and the reverse fails at `guardExtraction`'s own literal or at
+   * `thinRead`. Measured, all four ways. An optional field added to one side
+   * alone does compile — harmless while nothing sets or reads it, and the reason
+   * the claim here is "diverging fails the build" rather than a named enforcer.
    */
   guarded?: ThinClipVerdict & { payload: ClipPayload };
 }
