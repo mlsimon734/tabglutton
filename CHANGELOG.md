@@ -2,6 +2,17 @@
 
 All notable changes to Tabglutton are documented here.
 
+## [0.4.1](https://github.com/mlsimon734/tabglutton/compare/v0.4.0...v0.4.1) (unreleased)
+
+- **A clip that extracts almost nothing now keeps its tab instead of filing junk and closing
+  it.** Waking a backlog is the traffic pattern most likely to draw a bot check, and a
+  challenge served at the parked URL has no translator, so it fell past the Zotero route and
+  Defuddle's extraction of "Just a moment…" counted as a successful clip. Anything under 512
+  characters of extracted text is refused: the tab is kept, the popup's failure row reads
+  "too little content" with the character count and what to do about it, and the bridge
+  answers a new `thin-content` error code. Where a known interstitial signature matches too,
+  the message says so outright. ([#49](https://github.com/mlsimon734/tabglutton/issues/49))
+
 ## [0.4.0](https://github.com/mlsimon734/tabglutton/compare/v0.3.1...v0.4.0) (2026-08-21)
 
 Two threads. Devour no longer requires Obsidian — a clip can land as a plain markdown file

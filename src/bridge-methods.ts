@@ -8,6 +8,7 @@
 // before it happens.
 
 import { clipContentHash } from "./clip-hash.js";
+import type { ClipGuardReason } from "./clip-guard.js";
 import { clipDownloadPath, saveClipFile, type SavedClipFile } from "./clip-file.js";
 import { markdownForClip, OBSIDIAN_HANDOFF_GAP_MS, resolveClipRequest } from "./clip-format.js";
 import type { ClipPayload } from "./clip-format.js";
@@ -93,6 +94,13 @@ export interface BridgeExtractResult {
   ok: boolean;
   payload?: ClipPayload;
   error?: string;
+  /**
+   * The extraction itself succeeded and was refused for being too thin to be a
+   * clip (`src/clip-guard.ts`). Its own field rather than an `error` prefix,
+   * because `readTab` has to branch on it before it starts diagnosing a failure
+   * that did not happen.
+   */
+  guarded?: ClipGuardReason;
 }
 
 export interface BridgeMethodDeps {
@@ -609,6 +617,13 @@ export class BridgeMethodRunner {
       );
     }
     let result = await this.deps.extract(tabId);
+    // Ahead of everything below, because none of it applies: the injection ran
+    // and the page answered, so site access is plainly held and there is no
+    // second document arriving to make a retry worth its 250ms. Both of those
+    // checks would name a problem this page does not have and hand the agent a
+    // remedy that cannot fix it. Reported before `tabClip` reaches its close, so
+    // the tab stays open — the disposition #49 asks for.
+    if (result.guarded) fail(result.guarded, result.error ?? "Too little content to clip.");
     if (!result.ok || !result.payload) {
       // Asked only once extraction has already failed, so a read costs no extra
       // IPC in the normal case. Site access is optional on Chrome and only a

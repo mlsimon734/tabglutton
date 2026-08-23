@@ -8,6 +8,7 @@ import { BridgeClient, type BridgeStatus } from "./bridge-client.js";
 import { BridgeMethodRunner, isHttpUrl } from "./bridge-methods.js";
 import { getBrowserInfoOnce } from "./browser-info.js";
 import { clipDownloadPath, saveClipFile, type SavedClipFile } from "./clip-file.js";
+import { thinClipVerdict, type ClipGuardReason } from "./clip-guard.js";
 import {
   markdownForClip,
   OBSIDIAN_HANDOFF_GAP_MS,
@@ -71,6 +72,8 @@ export interface BridgeStatusChangedMessage {
 
 export type ClipFailureReason =
   | "extract-failed"
+  /** The page was read fine and had almost nothing on it — see `clip-guard.ts`. */
+  | ClipGuardReason
   | "trigger-failed"
   | "vault-missing"
   | "zotero-failed"
@@ -145,6 +148,14 @@ export interface ClipCurrentResponse {
   ok: boolean;
   payload?: ClipPayload;
   error?: string;
+  /**
+   * Set when the guard refused an extraction that had in fact succeeded, so a
+   * caller can tell it from an extraction that failed. The bridge needs the
+   * distinction: its `readTab` answers a failure by asking whether site access
+   * is held, and reporting a missing grant for a page it just read would name
+   * the wrong problem and hand over a remedy that fixes nothing.
+   */
+  guarded?: ClipGuardReason;
 }
 
 interface ClipCurrentResultMessage extends ClipCurrentResponse {
@@ -491,6 +502,22 @@ interface ClipTabOptions {
   wake: boolean;
 }
 
+/**
+ * The one place a successful extraction can be refused, and it is here rather
+ * than in either caller because both of them reach a page through `clipTab`:
+ * Devour's phase 1 and the bridge runner's `extract` dep. A guard per
+ * destination would be three guards, and the destination is not what is wrong.
+ *
+ * The payload is dropped along with the verdict — it is the junk note, and
+ * handing it back invites a caller to file it anyway.
+ */
+function guardExtraction(res: ClipCurrentResponse): ClipCurrentResponse {
+  if (!res.ok || !res.payload) return res;
+  const verdict = thinClipVerdict(res.payload);
+  if (!verdict) return res;
+  return { ok: false, error: verdict.message, guarded: verdict.reason };
+}
+
 async function clipTab(
   tabId?: number,
   { wake }: ClipTabOptions = { wake: true },
@@ -521,7 +548,7 @@ async function clipTab(
       target: { tabId: tab.id },
       files: ["src/clip-current.js"],
     });
-    return await resultPromise;
+    return guardExtraction(await resultPromise);
   } catch (err) {
     const pending = pendingClips.get(requestId);
     if (pending) {
@@ -842,7 +869,11 @@ async function clipSelectedTabs(tabIds: number[]): Promise<ClipSelectedTabsRespo
       }
       const res = extract.res;
       if (!res.ok || !res.payload) {
-        fail("extract-failed", res.error);
+        // A guarded extraction is reported under its own reason so the failure
+        // row says what happened and its Retry button is worth pressing after
+        // the user has cleared the challenge. Nothing is closed either way —
+        // this is the same `continue` an extract failure has always taken.
+        fail(res.guarded ?? "extract-failed", res.error);
         console.warn("[tabglutton] clip failed for tab", tabId, res.error);
         continue;
       }

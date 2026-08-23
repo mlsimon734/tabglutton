@@ -229,6 +229,15 @@ export type BridgeErrorCode =
   | "not-found"
   | "tab-discarded"
   | "extract-failed"
+  /**
+   * The page was read, and carried too little to be a clip — most often a bot
+   * check served at the address the tab was parked at (`src/clip-guard.ts`).
+   * Distinct from "extract-failed" because the remedy is a person clearing the
+   * challenge, not anything the agent can retry into. Purely additive: codes
+   * cross the wire as opaque strings that Gullet forwards rather than switches
+   * on, so an older sidecar prints this one unchanged and BRIDGE_PROTO holds.
+   */
+  | "thin-content"
   | "vault-missing"
   | "unsupported"
   /** The capability exists but the user has not switched it on. Distinct from
