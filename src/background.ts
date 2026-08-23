@@ -734,7 +734,14 @@ function clipBlocked(blocked: ClipBlockedReason): ClipSelectedTabsResponse {
   return { failed: 0, obsidianSaved: 0, fileSaved: 0, zoteroSaved: 0, blocked, failures: [] };
 }
 
-async function clipSelectedTabs(tabIds: number[]): Promise<ClipSelectedTabsResponse> {
+async function clipSelectedTabs(requestedTabIds: number[]): Promise<ClipSelectedTabsResponse> {
+  // Deduped once, before anything routes, counts or acts. Phase 1's map already
+  // collapses a repeated id to one entry, so a duplicate would be routed once
+  // and then *reported* twice by the loop below — one save counted as two, and a
+  // second `tabs.remove` against a tab that is already gone. `total` would be
+  // wrong by the same amount. `parseTabsCloseParams` dedupes its input for the
+  // same reason.
+  const tabIds = [...new Set(requestedTabIds)];
   const vault = settings.obsidianVault.trim();
   if (!hasClipDestination(settings)) return clipBlocked("no-destination");
   // `downloads` is optional and revocable from the browser's own add-on UI, so
@@ -799,10 +806,6 @@ async function clipSelectedTabs(tabIds: number[]): Promise<ClipSelectedTabsRespo
   // order, same progress ticks.
   const zoteroSaves = new Map<number, Promise<void>>();
   for (const tabId of tabIds) {
-    // Phase 1 already collapses a repeated id to one `prepared` entry, so this
-    // keeps phase 2 agreeing with it — and keeps a second dispatch from
-    // orphaning the first tab's promise in the map.
-    if (zoteroSaves.has(tabId)) continue;
     if (prepared.get(tabId)?.destination.kind !== "zotero") continue;
     const save = saveTabToZotero(settings.zoteroConnectorId, tabId);
     // The loop below is the real handler; this only keeps a save that rejects
@@ -840,9 +843,12 @@ async function clipSelectedTabs(tabIds: number[]): Promise<ClipSelectedTabsRespo
         continue;
       }
 
-      if (destination.kind === "zotero") {
-        const save = zoteroSaves.get(tabId);
-        if (!save) continue;
+      // The dispatch above holds exactly the Zotero-bound tabs, so its entry is
+      // what selects this branch — no second predicate to fall out of step with
+      // it. Awaited here rather than there, which is what keeps the counts and
+      // the failure order reading exactly as a serial run's.
+      const save = zoteroSaves.get(tabId);
+      if (save) {
         try {
           await save;
         } catch (err) {
