@@ -2,6 +2,16 @@
 
 All notable changes to Tabglutton are documented here.
 
+## [0.4.1](https://github.com/mlsimon734/tabglutton/compare/v0.4.0...v0.4.1) (unreleased)
+
+- **Gullet's clip verification stays inside the vault.** The note path `tab_clip` reports comes
+  off the browser connection, and it was joined onto the vault directory unchecked — so a
+  `../`-laden path had Gullet list, stat and read files elsewhere on disk and report a verdict on
+  them, a weak existence-and-hash oracle for anything holding that connection
+  (`SECURITY-REVIEW.md` §7). A path that resolves outside the vault now answers `unknown` before
+  anything is read, the same soft contract every other "cannot check" in that module follows.
+  No in-vault clip verdicts differently.
+
 ## [0.4.0](https://github.com/mlsimon734/tabglutton/compare/v0.3.1...v0.4.0) (2026-08-21)
 
 Two threads. Devour no longer requires Obsidian — a clip can land as a plain markdown file

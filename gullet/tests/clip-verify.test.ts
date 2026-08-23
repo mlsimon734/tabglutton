@@ -31,6 +31,34 @@ describe("clipNotePath", () => {
       "/vaults/test/Clippings/Note.md",
     );
   });
+
+  // Interior `..` that normalizes back inside is an ordinary path, not an escape.
+  test("normalizes a path that stays inside the vault", () => {
+    expect(clipNotePath("/vaults/test", "Clippings/Drafts/../Papers/Note")).toBe(
+      "/vaults/test/Clippings/Papers/Note.md",
+    );
+  });
+
+  // `file` comes off the wire; a plain join followed it anywhere on disk.
+  test("refuses a path that climbs out of the vault", () => {
+    expect(clipNotePath("/vaults/test", "../../../../Users/someone/.ssh/id_ed25519")).toBeNull();
+    expect(clipNotePath("/vaults/test", "Clippings/../../elsewhere/Note")).toBeNull();
+  });
+
+  test("refuses an absolute path, which resolve takes whole", () => {
+    expect(clipNotePath("/vaults/test", "/etc/hosts")).toBeNull();
+  });
+
+  // The prefix footgun: a sibling directory whose name starts with the vault's
+  // is not inside the vault, and a bare startsWith would have said it was.
+  test("refuses a sibling that merely shares the vault's prefix", () => {
+    expect(clipNotePath("/vaults/test", "../test-evil/Note")).toBeNull();
+  });
+
+  // The escape does not get in through the branch that leaves `.md` alone.
+  test("refuses an escape whose name already carries the extension", () => {
+    expect(clipNotePath("/vaults/test", "../test.md")).toBeNull();
+  });
 });
 
 const SINCE = 1_000_000;
@@ -158,6 +186,57 @@ describe("createClipVerifier", () => {
   test("unknown when the registry does not name that vault", async () => {
     const verify = createClipVerifier(vaults, { ...fakeClock(), ...vaultWith({}) });
     expect(await verify("Some Other Vault", "Clippings/Note", { since: SINCE })).toBe("unknown");
+  });
+
+  // `file` is the extension's word for where the note went, and the extension is
+  // reachable by anything holding the browser connection. A reported path that
+  // leaves the vault is answered `unknown` — and nothing out there is looked at,
+  // which is the half that keeps the verdict from being an existence oracle.
+  test("unknown when the reported path escapes the vault, without looking", async () => {
+    let looked = 0;
+    const verify = createClipVerifier(vaults, {
+      ...fakeClock(),
+      readDir: async () => {
+        looked += 1;
+        return ["id_ed25519.md"];
+      },
+      modifiedAt: async () => SINCE + 50,
+    });
+    expect(
+      await verify("test", "../../../../Users/someone/.ssh/id_ed25519", { since: SINCE }),
+    ).toBe("unknown");
+    expect(looked).toBe(0);
+  });
+
+  test("unknown when the reported path is absolute", async () => {
+    const verify = createClipVerifier(vaults, {
+      ...fakeClock(),
+      readDir: async () => ["hosts.md"],
+      modifiedAt: async () => SINCE + 50,
+    });
+    expect(await verify("test", "/etc/hosts", { since: SINCE })).toBe("unknown");
+  });
+
+  test("unknown when the escape lands in a sibling sharing the vault's prefix", async () => {
+    const verify = createClipVerifier(vaults, {
+      ...fakeClock(),
+      readDir: async () => ["Note.md"],
+      modifiedAt: async () => SINCE + 50,
+    });
+    expect(await verify("test", "../test-evil/Note", { since: SINCE })).toBe("unknown");
+  });
+
+  // Containment must cost a legitimate deep path nothing.
+  test("landed for a nested note whose path normalizes back inside the vault", async () => {
+    const verify = createClipVerifier(vaults, {
+      ...fakeClock(),
+      readDir: async (dir): Promise<DirListing> =>
+        dir === "/vaults/test/Clippings/Papers" ? ["Note.md"] : "missing",
+      modifiedAt: async () => SINCE + 50,
+    });
+    expect(await verify("test", "Clippings/Drafts/../Papers/Note", { since: SINCE })).toBe(
+      "landed",
+    );
   });
 
   // A folder that exists but cannot be listed is "cannot check", not "not written".
