@@ -2,6 +2,20 @@
 
 All notable changes to Tabglutton are documented here.
 
+## [0.4.1](https://github.com/mlsimon734/tabglutton/compare/v0.4.0...v0.4.1) (unreleased)
+
+- **Tabglutton remembers what it has clipped.** Every successful clip — Devour, the bridge's
+  `tab_clip`, Obsidian, a markdown file, or a Zotero save — is recorded under the same
+  normalized URL dedup uses, so a page filed from a newsletter link is still recognised when
+  it turns up from a group chat. The Devour cockpit marks those rows and can filter the list
+  down to either half, and `tabs_list` carries a `clipped` field so an agent stops paying to
+  re-read pages already filed. The mark says **clipped**, never "in your vault": a `launched`
+  clip means the handoff was made, and only `verified` means something that can see the
+  filesystem saw the note — the browser watching a download complete, or Gullet finding the
+  note in the vault, which it now tells the extension about. Neither is a claim about what is
+  on disk now; notes get moved and deleted. The memory holds 5000 pages, dropping the
+  least recently clipped first.
+
 ## [0.4.0](https://github.com/mlsimon734/tabglutton/compare/v0.3.1...v0.4.0) (2026-08-21)
 
 Two threads. Devour no longer requires Obsidian — a clip can land as a plain markdown file
