@@ -72,6 +72,18 @@ describe("renderTabs()", () => {
     expect(view.tabs[0]).not.toHaveProperty("index");
   });
 
+  test("passes the clip mark through, and only when there is one", () => {
+    const view = renderTabs([
+      makeTab({ id: 1, url: "https://a.test/", clipped: "launched" }),
+      makeTab({ id: 2, url: "https://b.test/", clipped: "verified" }),
+      makeTab({ id: 3, url: "https://c.test/" }),
+    ]);
+    // Not collapsed to a boolean: "the handoff was made" and "a note was seen
+    // on disk" are different claims and the agent gets to see which it has.
+    expect(view.tabs.map((t) => t.clipped)).toEqual(["launched", "verified", undefined]);
+    expect(view.tabs[2]).not.toHaveProperty("clipped");
+  });
+
   test("keeps windowId per tab once a listing spans two windows", () => {
     const view = renderTabs([
       makeTab({ id: 1, url: "https://a.test/", windowId: 7 }),

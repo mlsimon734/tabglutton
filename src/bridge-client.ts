@@ -18,14 +18,14 @@ import {
   BRIDGE_PROTO,
   classifyBridgeProbe,
   deriveProof,
-  isBridgeMethod,
+  isBridgeWireMethod,
   parseMessage,
   proofsMatch,
   randomNonce,
   orderedBridgePortCandidates,
   toBridgeError,
   BridgeRequestError,
-  type BridgeMethod,
+  type BridgeWireMethod,
   type ClientMessage,
   type HelloMessage,
   type ResponseMessage,
@@ -188,8 +188,8 @@ export type BridgeStatus =
 
 export interface BridgeClientDeps {
   getSettings: () => Settings;
-  /** Only ever called with a method that passed `isBridgeMethod`. */
-  run: (method: BridgeMethod, params: unknown) => Promise<unknown>;
+  /** Only ever called with a method that passed `isBridgeWireMethod`. */
+  run: (method: BridgeWireMethod, params: unknown) => Promise<unknown>;
   onStatusChange: (status: BridgeStatus, port?: number) => void;
 }
 
@@ -783,7 +783,7 @@ export class BridgeClient {
   }
 
   private async serve(id: string, method: unknown, params: unknown): Promise<ResponseMessage> {
-    if (!isBridgeMethod(method)) {
+    if (!isBridgeWireMethod(method)) {
       return {
         type: "response",
         id,

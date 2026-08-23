@@ -395,7 +395,7 @@ export interface HelloErrorMessage {
 export interface RequestMessage {
   type: "request";
   id: string;
-  method: BridgeMethod;
+  method: BridgeWireMethod;
   params: unknown;
 }
 
@@ -528,6 +528,74 @@ export function isBridgeMethod(value: unknown): value is BridgeMethod {
 }
 
 /**
+ * Methods the sidecar issues on its own behalf, which are deliberately **not**
+ * agent tools.
+ *
+ * `BRIDGE_METHODS` doubles as Gullet's MCP routing table (`route` in
+ * gullet/src/tools.ts admits exactly the names it holds), so anything added
+ * there becomes callable by a model. `clip_confirm` must not be: it writes into
+ * the user's clip memory, and the one thing that gives the `verified` state its
+ * meaning is that only a filesystem check can produce it. An agent able to
+ * assert it could mark a page as provably filed by saying so.
+ *
+ * A separate list keeps that distinction structural rather than a guard someone
+ * later reads as redundant, and leaves `route`'s "the method list is the tool
+ * list" invariant literally true.
+ */
+export const BRIDGE_SIDECAR_METHODS = ["clip_confirm"] as const;
+
+export type BridgeSidecarMethod = (typeof BRIDGE_SIDECAR_METHODS)[number];
+
+/** Every method that may cross the wire, whoever is entitled to send it. */
+export type BridgeWireMethod = BridgeMethod | BridgeSidecarMethod;
+
+export function isBridgeWireMethod(value: unknown): value is BridgeWireMethod {
+  return (
+    isBridgeMethod(value) ||
+    (typeof value === "string" && (BRIDGE_SIDECAR_METHODS as readonly string[]).includes(value))
+  );
+}
+
+/**
+ * How well a page's filing is known, for a page the extension remembers filing.
+ *
+ * - `launched` — the handoff was made without error. That is all it is. A
+ *   refused `obsidian://` launch is indistinguishable from a taken one from
+ *   inside the browser (docs/ENGINEERING.md §Clip verification), so this is a
+ *   record of intent, and the label for it is "clipped" — never "in your vault".
+ * - `verified` — something that can see the filesystem saw the note. Two parties
+ *   can say so, and both are already trusted for exactly this: the browser, for
+ *   a download it watched reach `state: "complete"`, and Gullet, whose vault
+ *   check is what `confirmedBy: "gullet"` means.
+ *
+ * Neither state says anything about **now**. A note can be moved or deleted the
+ * minute after it is written, and nothing watches for that.
+ */
+export type ClipMark = "launched" | "verified";
+
+/**
+ * Tell the extension a clip it recorded as `launched` was found on disk.
+ *
+ * The verdict exists in Gullet and nowhere else — the browser cannot see a
+ * vault — and before this it was spent on the close decision and then thrown
+ * away, leaving the extension permanently unable to distinguish its two states
+ * for the destination where the distinction matters most.
+ *
+ * Identified by the clipped page's URL rather than by the note path: the
+ * extension keys its memory by normalized URL, and the path is a fact about a
+ * file that `obsidian://new`'s no-overwrite numbering may already have changed.
+ */
+export interface ClipConfirmParams {
+  url: string;
+}
+
+export function parseClipConfirmParams(raw: unknown): ClipConfirmParams {
+  const url = asRecord(raw)?.url;
+  if (typeof url !== "string" || !url.trim()) badRequest("url must be a non-empty string");
+  return { url };
+}
+
+/**
  * One tab as an agent sees it. Every field that is false or unknown is
  * **omitted**, not sent — this object is repeated once per tab into a model's
  * context, and on a real backlog the boilerplate outweighed the signal:
@@ -549,6 +617,17 @@ export interface BridgeTab {
   index: number;
   /** Firefox only. On Zen this approximates "belongs to another workspace". */
   hidden?: boolean;
+  /**
+   * Present only when this page has been clipped before, from any tab and in any
+   * earlier session — the extension keys its clip memory by normalized URL, so a
+   * newsletter link and a chat link to one article share a mark. Absent means
+   * "not remembered", which is not the same as "never filed": the memory is
+   * capped, and a page filed before Tabglutton learned to remember has no entry.
+   *
+   * Read it as a reason to skip a `tab_read`, not as a licence to close: it says
+   * a note was written, never that one is on disk right now. See {@link ClipMark}.
+   */
+  clipped?: ClipMark;
 }
 
 /**

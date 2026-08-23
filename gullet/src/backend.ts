@@ -13,7 +13,7 @@ import {
   errorMessage,
   BridgeRequestError,
   type BridgeError,
-  type BridgeMethod,
+  type BridgeWireMethod,
 } from "../../src/bridge-protocol.js";
 import { delay } from "../../src/serialize.js";
 import type { TokenResolver } from "./config.js";
@@ -26,7 +26,7 @@ import { GULLET_VERSION } from "./version.js";
 
 export interface BridgeBackend {
   connections(): Promise<ConnectionSummary[]>;
-  request(connectionId: string, method: BridgeMethod, params: unknown): Promise<unknown>;
+  request(connectionId: string, method: BridgeWireMethod, params: unknown): Promise<unknown>;
   /** Why nothing can be served right now, or null. Re-read on every call. */
   fault(): BridgeError | null;
   /** Candidate ports held by another Tabglutton hub. Diagnosis, not routing. */
@@ -454,7 +454,7 @@ export class Supervisor implements BridgeBackend {
     return this.hub.connectionsWithin(this.options.connectWaitMs ?? BRIDGE_CONNECT_WAIT_MS);
   }
 
-  async request(connectionId: string, method: BridgeMethod, params: unknown): Promise<unknown> {
+  async request(connectionId: string, method: BridgeWireMethod, params: unknown): Promise<unknown> {
     await this.waitForSettling();
     if (this.peer) return this.peer.request(connectionId, method, params);
     if (this.hub) return this.hub.request(connectionId, method, params);

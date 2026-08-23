@@ -3,7 +3,7 @@
 // with Gullet, which is the only caller: see below for why this runs once at the
 // end rather than in the extension's pass.
 
-import type { BridgeTab } from "../../src/bridge-protocol.js";
+import type { BridgeTab, ClipMark } from "../../src/bridge-protocol.js";
 import { isTrackingParam } from "../../src/normalize.js";
 
 /**
@@ -57,6 +57,8 @@ export interface RenderedTab {
   active?: boolean;
   hidden?: boolean;
   windowId?: number;
+  /** `"launched"` or `"verified"` on a page the extension remembers filing. */
+  clipped?: ClipMark;
 }
 
 export interface RenderedTabs {
@@ -128,6 +130,10 @@ export function renderTabs(
     if (tab.pinned) out.pinned = true;
     if (tab.active) out.active = true;
     if (tab.hidden) out.hidden = true;
+    // Passed through rather than reduced to a boolean: "the handoff was made"
+    // and "a note was seen on disk" are different claims, and an agent deciding
+    // whether to re-read a page is entitled to know which one it has.
+    if (tab.clipped) out.clipped = tab.clipped;
     if (shared === undefined && tab.windowId !== undefined) out.windowId = tab.windowId;
     return out;
   });

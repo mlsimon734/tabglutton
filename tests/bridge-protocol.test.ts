@@ -11,7 +11,10 @@ import {
   generateToken,
   filterTabs,
   groupTabsByDomain,
+  BRIDGE_METHODS,
   isBridgeMethod,
+  isBridgeWireMethod,
+  parseClipConfirmParams,
   matchesTabQuery,
   bridgePortCandidates,
   orderedBridgePortCandidates,
@@ -188,6 +191,33 @@ describe("isBridgeMethod()", () => {
   test("rejects non-strings", () => {
     expect(isBridgeMethod(null)).toBe(false);
     expect(isBridgeMethod(42)).toBe(false);
+  });
+});
+
+describe("the sidecar-only method list", () => {
+  // The whole point of keeping clip_confirm out of BRIDGE_METHODS: that list is
+  // Gullet's MCP routing table, and an agent able to call this could assert a
+  // page was verified on disk without anything having looked.
+  test("clip_confirm crosses the wire but is not an agent tool", () => {
+    expect(isBridgeMethod("clip_confirm")).toBe(false);
+    expect(isBridgeWireMethod("clip_confirm")).toBe(true);
+  });
+
+  test("every agent tool is still a wire method", () => {
+    for (const m of BRIDGE_METHODS) expect(isBridgeWireMethod(m)).toBe(true);
+    expect(isBridgeWireMethod("navigate")).toBe(false);
+    expect(isBridgeWireMethod(42)).toBe(false);
+  });
+});
+
+describe("parseClipConfirmParams()", () => {
+  test("requires a non-empty url", () => {
+    expect(parseClipConfirmParams({ url: "https://example.com/a" })).toEqual({
+      url: "https://example.com/a",
+    });
+    for (const bad of [{}, { url: "" }, { url: "   " }, { url: 7 }, null]) {
+      expect(() => parseClipConfirmParams(bad)).toThrow();
+    }
   });
 });
 
