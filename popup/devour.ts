@@ -1,4 +1,5 @@
 import type {
+  ApplyGroupingResponse,
   ClipFailure,
   ClipSelectedTabsResponse,
   ClosedTabRecord,
@@ -6,6 +7,7 @@ import type {
   GetScopedTabsResponse,
   PopupTab,
 } from "../src/background.js";
+import { planGrouping, plannedTabCount, type GroupingPlan } from "../src/grouping.js";
 import { openOptionsUi } from "../src/open-options.js";
 import { CLIP_ORIGINS, DOWNLOADS_GONE, requestOrigins } from "../src/permissions.js";
 import { pickRule, ruleLabel, type SiteRule } from "../src/site-rules.js";
@@ -44,6 +46,8 @@ interface CockpitState {
   devourFailures: ClipFailure[];
   focusedTabId: number | null;
   stickyOrder: string[] | null;
+  /** The grouping plan on preview. Apply sends exactly this; Cancel drops it. */
+  groupPlan: GroupingPlan | null;
 }
 
 interface ToastState {
@@ -81,6 +85,13 @@ const devourFailuresCountEl = document.getElementById("devour-failures-count") a
 const devourFailuresListEl = document.getElementById("devour-failures-list") as HTMLUListElement;
 const devourRetryAllBtn = document.getElementById("devour-retry-all") as HTMLButtonElement;
 const devourDismissBtn = document.getElementById("devour-dismiss") as HTMLButtonElement;
+const groupTabsBtn = document.getElementById("group-tabs") as HTMLButtonElement;
+const groupPreviewEl = document.getElementById("group-preview") as HTMLElement;
+const groupPreviewCountEl = document.getElementById("group-preview-count") as HTMLSpanElement;
+const groupPreviewListEl = document.getElementById("group-preview-list") as HTMLUListElement;
+const groupPreviewNoteEl = document.getElementById("group-preview-note") as HTMLParagraphElement;
+const groupApplyBtn = document.getElementById("group-apply") as HTMLButtonElement;
+const groupCancelBtn = document.getElementById("group-cancel") as HTMLButtonElement;
 
 const state: CockpitState = {
   scopedTabs: [],
@@ -93,6 +104,7 @@ const state: CockpitState = {
   devourFailures: [],
   focusedTabId: null,
   stickyOrder: null,
+  groupPlan: null,
 };
 
 function renderWarning(): void {
@@ -442,6 +454,117 @@ function renderDevourFailures(): void {
   devourRetryAllBtn.disabled = state.clipping;
   devourDismissBtn.disabled = state.clipping;
   devourFailuresListEl.replaceChildren(...failures.map(renderFailureRow));
+}
+
+/* ---------- rule grouping ---------- */
+
+/**
+ * The preview is the whole contract with the user: silently reordering a few
+ * hundred tabs is alarming even though it is non-destructive, so nothing is
+ * grouped until this panel has shown exactly what will move — and Apply sends
+ * the previewed plan itself, not a fresh computation that could have drifted.
+ */
+function previewGrouping(): void {
+  if (!state.settings) return;
+  state.groupPlan = planGrouping(
+    state.scopedTabs,
+    state.settings.siteRules,
+    state.settings.groupingSkipList,
+  );
+  renderGroupPreview();
+}
+
+function discardGroupPreview(): void {
+  state.groupPlan = null;
+  renderGroupPreview();
+}
+
+function windowLabelsNeeded(plan: GroupingPlan): boolean {
+  return new Set(plan.groups.map((g) => g.windowId)).size > 1;
+}
+
+function renderGroupPreview(): void {
+  const plan = state.groupPlan;
+  if (!plan) {
+    groupPreviewEl.hidden = true;
+    groupPreviewListEl.replaceChildren();
+    return;
+  }
+  groupPreviewEl.hidden = false;
+
+  const moved = plannedTabCount(plan);
+  groupPreviewCountEl.hidden = moved === 0;
+  groupPreviewCountEl.textContent = String(moved);
+  groupApplyBtn.disabled = moved === 0;
+
+  const multiWindow = windowLabelsNeeded(plan);
+  const rows = plan.groups.map((g) => {
+    const li = document.createElement("li");
+    li.className = "group-preview-row";
+    const swatch = document.createElement("span");
+    swatch.className = `group-swatch swatch-${g.color}`;
+    const name = document.createElement("span");
+    name.className = "group-preview-name";
+    name.textContent = g.name;
+    const count = document.createElement("span");
+    count.className = "group-preview-tabs";
+    count.textContent =
+      `${g.tabIds.length} ${g.tabIds.length === 1 ? "tab" : "tabs"}` +
+      (multiWindow ? ` · window ${g.windowId}` : "");
+    li.append(swatch, name, count);
+    return li;
+  });
+  groupPreviewListEl.replaceChildren(...rows);
+
+  const notes: string[] = [];
+  if (moved === 0) {
+    notes.push(
+      "Nothing to group — no rule with a group matches this scope. Give a rule a group in Settings.",
+    );
+  }
+  if (plan.pinnedExcluded > 0) {
+    notes.push(
+      `${plan.pinnedExcluded} pinned ${plan.pinnedExcluded === 1 ? "tab" : "tabs"} excluded — grouping would unpin them.`,
+    );
+  }
+  if (plan.skippedBySkipList > 0) {
+    notes.push(`${plan.skippedBySkipList} parked by the skip list.`);
+  }
+  if (plan.unmatched > 0 && moved > 0) {
+    notes.push(
+      `${plan.unmatched} unmatched ${plan.unmatched === 1 ? "tab stays" : "tabs stay"} put.`,
+    );
+  }
+  groupPreviewNoteEl.textContent = notes.join(" ");
+  groupPreviewNoteEl.hidden = notes.length === 0;
+}
+
+async function applyGroupPreview(): Promise<void> {
+  const plan = state.groupPlan;
+  if (!plan || plannedTabCount(plan) === 0) return;
+  groupApplyBtn.disabled = true;
+  const res = await sendMessage<ApplyGroupingResponse>({
+    type: "apply-grouping",
+    groups: plan.groups,
+  });
+  if (!res) {
+    groupPreviewNoteEl.textContent = "Grouping failed — the background page did not answer.";
+    groupApplyBtn.disabled = false;
+    return;
+  }
+  if (res.unsupported) {
+    // A stated fact, in the panel that asked: nothing moved.
+    groupPreviewNoteEl.textContent = res.unsupported;
+    groupApplyBtn.disabled = false;
+    return;
+  }
+  discardGroupPreview();
+  const original = groupTabsBtn.textContent;
+  groupTabsBtn.textContent = `Grouped ${res.grouped}`;
+  setTimeout(() => {
+    groupTabsBtn.textContent = original;
+  }, 1600);
+  await refresh();
 }
 
 /* ---------- inspector ---------- */
@@ -1048,6 +1171,9 @@ document.addEventListener("keydown", (e) => {
 });
 
 dedupBtn.addEventListener("click", () => void runDedup());
+groupTabsBtn.addEventListener("click", () => previewGrouping());
+groupApplyBtn.addEventListener("click", () => void applyGroupPreview());
+groupCancelBtn.addEventListener("click", () => discardGroupPreview());
 optionsBtn.addEventListener("click", () => void openOptionsUi());
 filterInput.addEventListener("input", () => {
   state.filter = filterInput.value;

@@ -18,6 +18,7 @@ import {
 import { DOWNLOADS_GONE, downloadsGrant } from "./permissions.js";
 import { getFilePlatformOnce } from "./platform.js";
 import { delay } from "./serialize.js";
+import type { PlannedGroup } from "./grouping.js";
 import { pickRule, ruleLabel, type SiteRule } from "./site-rules.js";
 import { groupDuplicates, pickKeeper, type Tab } from "./dedup.js";
 import {
@@ -46,6 +47,7 @@ export type ReopenTabsMessage = {
 };
 export type OpenCockpitMessage = { type: "open-cockpit" };
 export type GetBridgeStatusMessage = { type: "get-bridge-status" };
+export type ApplyGroupingMessage = { type: "apply-grouping"; groups: PlannedGroup[] };
 export type IncomingMessage =
   | GetScopedTabsMessage
   | ClipSelectedTabsMessage
@@ -55,7 +57,20 @@ export type IncomingMessage =
   | FocusTabMessage
   | ReopenTabsMessage
   | OpenCockpitMessage
-  | GetBridgeStatusMessage;
+  | GetBridgeStatusMessage
+  | ApplyGroupingMessage;
+
+export interface ApplyGroupingResponse {
+  /** Tabs actually placed into a group. */
+  grouped: number;
+  /** Browser groups created or added to. */
+  groupsTouched: number;
+  /**
+   * A stated fact when this engine cannot group at all — `tabs.group` absent,
+   * or `tabGroups` missing despite the manifest permission. Nothing was moved.
+   */
+  unsupported?: string;
+}
 
 export interface GetBridgeStatusResponse {
   status: BridgeStatus;
@@ -1099,6 +1114,8 @@ browser.runtime.onMessage.addListener(async (rawMsg: unknown): Promise<unknown> 
       }
       return { closed: ids.length };
     }
+    case "apply-grouping":
+      return applyGrouping(Array.isArray(msg.groups) ? msg.groups : []);
     case "focus-tab": {
       const tab = await browser.tabs.get(msg.tabId);
       if (tab.id !== undefined) {
@@ -1144,6 +1161,92 @@ browser.runtime.onMessage.addListener(async (rawMsg: unknown): Promise<unknown> 
   }
   return undefined;
 });
+
+/**
+ * Materialize a grouping plan the cockpit previewed. The plan is the contract:
+ * only the ids it names are touched, and ids that stopped resolving since the
+ * preview are skipped rather than retried — Chrome renumbers a tab on discard,
+ * and grouping a guess would move something the preview never showed.
+ *
+ * Typed through narrow local casts because `tabs.group` (Firefox 138) and
+ * `tabGroups` (139, behind the manifest permission) postdate the ambient
+ * types, and their absence at runtime has to be a stated fact either way.
+ */
+async function applyGrouping(groups: PlannedGroup[]): Promise<ApplyGroupingResponse> {
+  const tabsApi = browser.tabs as typeof browser.tabs & {
+    group?: (options: {
+      tabIds: number[];
+      groupId?: number;
+      createProperties?: { windowId?: number };
+    }) => Promise<number>;
+  };
+  const tabGroups = (
+    browser as typeof browser & {
+      tabGroups?: {
+        query: (info: { windowId?: number; title?: string }) => Promise<{ id: number }[]>;
+        update: (groupId: number, props: { title?: string; color?: string }) => Promise<unknown>;
+      };
+    }
+  ).tabGroups;
+  if (typeof tabsApi.group !== "function" || !tabGroups) {
+    return {
+      grouped: 0,
+      groupsTouched: 0,
+      unsupported:
+        typeof tabsApi.group !== "function"
+          ? "This browser has no tabs.group API (Firefox 138+ / Chrome 88+), so nothing was moved."
+          : "The tabGroups API is missing despite the manifest permission, so nothing was moved.",
+    };
+  }
+
+  let grouped = 0;
+  let groupsTouched = 0;
+  for (const plan of groups) {
+    const wanted = Array.isArray(plan.tabIds) ? plan.tabIds.filter(Number.isInteger) : [];
+    const live: number[] = [];
+    for (const id of wanted) {
+      try {
+        await browser.tabs.get(id);
+        live.push(id);
+      } catch {
+        // Closed or renumbered since the preview; skipped, never guessed at.
+      }
+    }
+    if (!live.length) continue;
+
+    // Add to a same-named group in that window rather than minting a twin.
+    let existingGroupId: number | undefined;
+    try {
+      const existing = await tabGroups.query({ windowId: plan.windowId, title: plan.name });
+      existingGroupId = existing[0]?.id;
+    } catch (err) {
+      console.warn("[tabglutton] tabGroups.query failed for", plan.name, err);
+    }
+
+    try {
+      const groupId =
+        existingGroupId !== undefined
+          ? await tabsApi.group({ tabIds: live, groupId: existingGroupId })
+          : await tabsApi.group({
+              tabIds: live,
+              ...(plan.windowId >= 0 ? { createProperties: { windowId: plan.windowId } } : {}),
+            });
+      grouped += live.length;
+      groupsTouched += 1;
+      try {
+        await tabGroups.update(groupId, { title: plan.name, color: plan.color });
+      } catch (err) {
+        // The tabs are grouped; only the label/colour write failed. Grouping
+        // stands — reporting a whole group as failed over a cosmetic write
+        // would overstate it.
+        console.warn("[tabglutton] tabGroups.update failed for", plan.name, err);
+      }
+    } catch (err) {
+      console.warn("[tabglutton] tabs.group failed for", plan.name, err);
+    }
+  }
+  return { grouped, groupsTouched };
+}
 
 const COCKPIT_URL = browser.runtime.getURL("popup/devour.html");
 

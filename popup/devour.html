@@ -92,6 +92,23 @@
         <ul id="devour-failures-list" class="devour-failures-list"></ul>
       </section>
 
+      <!-- Nothing is moved that this panel did not show: Apply sends exactly
+           the plan rendered here, and closing the panel discards it. -->
+      <section id="group-preview" class="group-preview" hidden aria-live="polite">
+        <header class="group-preview-header">
+          <span class="group-preview-title">
+            Group preview
+            <span id="group-preview-count" class="count-badge" hidden>0</span>
+          </span>
+          <div class="group-preview-actions">
+            <button id="group-apply" type="button" class="primary">Apply</button>
+            <button id="group-cancel" type="button" class="quiet">Cancel</button>
+          </div>
+        </header>
+        <ul id="group-preview-list" class="group-preview-list"></ul>
+        <p id="group-preview-note" class="group-preview-note"></p>
+      </section>
+
       <footer class="action-bar">
         <div class="action-cluster">
           <button
@@ -108,6 +125,13 @@
           <button id="dedup" type="button" disabled title="Close duplicate tabs">
             Dedup
             <span id="dedup-count" class="count-badge" hidden>0</span>
+          </button>
+          <button
+            id="group-tabs"
+            type="button"
+            title="Preview the tab groups your site rules would write into the tab strip"
+          >
+            Group
           </button>
           <span class="action-divider" aria-hidden="true"></span>
           <button id="close-selected" type="button" class="danger" disabled>Close</button>

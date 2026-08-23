@@ -15,7 +15,15 @@
       "strict_min_version": "142.0"
     }
   },
-  "permissions": ["tabs", "storage", "scripting", "activeTab", "clipboardWrite", "alarms"],
+  "permissions": [
+    "tabs",
+    "storage",
+    "scripting",
+    "activeTab",
+    "clipboardWrite",
+    "alarms",
+    "tabGroups"
+  ],
   "optional_permissions": ["downloads"],
   "host_permissions": ["*://*/*"],
   "content_security_policy": {
