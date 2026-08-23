@@ -17,7 +17,7 @@ import {
 } from "./clip-format.js";
 import { DOWNLOADS_GONE, downloadsGrant } from "./permissions.js";
 import { getFilePlatformOnce } from "./platform.js";
-import { delay } from "./serialize.js";
+import { createTaskPool, delay } from "./serialize.js";
 import { pickRule } from "./site-rules.js";
 import { groupDuplicates, pickKeeper, type Tab } from "./dedup.js";
 import {
@@ -627,6 +627,19 @@ const ZOTERO_DETECTION_ATTEMPTS = 8;
 const ZOTERO_DETECTION_RETRY_MS = 250;
 
 /**
+ * How many Connector saves may be in flight at once.
+ *
+ * A ceiling, not a queue, and the ceiling *is* the mitigation. Serializing these
+ * guarded against two papers raising the Connector's item selector at the same
+ * time, which routed tabs almost never do — `ACADEMIC_ITEM_TYPES` in zotero.ts
+ * excludes `multiple`, so a search-results page never routes here in the first
+ * place. What is left is a rare case whose blast radius this bounds, plus the
+ * request rate a source site sees. Both argue for a small number rather than an
+ * unbounded `Promise.all` over a backlog of several hundred papers.
+ */
+const ZOTERO_SAVE_CONCURRENCY = 3;
+
+/**
  * Decides where one tab goes, and owns the wake for the whole run — the
  * extraction below is called with `wake: false`.
  *
@@ -784,10 +797,28 @@ async function clipSelectedTabs(tabIds: number[]): Promise<ClipSelectedTabsRespo
     ),
   );
 
-  // Phase 2: dispatch in selection order. Connector saves are serialized so
-  // progress/selection UI from two papers cannot race. Obsidian remains serial
-  // because clipboard mode uses the global OS clipboard; the 200ms gap also
-  // keeps its URI handler reliable.
+  // Phase 2: report in selection order. Connector saves are the one part of it
+  // that overlaps — dispatched here, up to ZOTERO_SAVE_CONCURRENCY at a time, so
+  // one is already in flight while the loop below is still filing earlier tabs.
+  // Everything the loop does itself stays serial: Obsidian because clipboard
+  // mode uses the global OS clipboard (and the 200ms gap keeps its URI handler
+  // reliable), and each close because the results are reported in order.
+  //
+  // Started in selection order and awaited in it too, so a save finishing early
+  // changes nothing an agent or the popup can see: same counts, same failure
+  // order, same progress ticks.
+  const zoteroPool = createTaskPool(ZOTERO_SAVE_CONCURRENCY);
+  const zoteroSaves = new Map<number, Promise<void>>();
+  for (const tabId of tabIds) {
+    if (zoteroSaves.has(tabId)) continue;
+    if (prepared.get(tabId)?.destination.kind !== "zotero") continue;
+    const save = zoteroPool(() => saveTabToZotero(settings.zoteroConnectorId, tabId));
+    // The loop below is the real handler; this only keeps a save that rejects
+    // before its turn from surfacing as an unhandled rejection in the console.
+    save.catch(() => {});
+    zoteroSaves.set(tabId, save);
+  }
+
   const total = tabIds.length;
   const broadcastProgress = (completed: number): void => {
     const msg: ClipProgressMessage = { type: "clip-progress", completed, total };
@@ -818,8 +849,10 @@ async function clipSelectedTabs(tabIds: number[]): Promise<ClipSelectedTabsRespo
       }
 
       if (destination.kind === "zotero") {
+        const save = zoteroSaves.get(tabId);
+        if (!save) continue;
         try {
-          await saveTabToZotero(settings.zoteroConnectorId, tabId);
+          await save;
         } catch (err) {
           fail("zotero-failed", errorMessage(err));
           console.warn("[tabglutton] Zotero save failed for tab", tabId, err);

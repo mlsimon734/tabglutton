@@ -2,6 +2,13 @@
 
 All notable changes to Tabglutton are documented here.
 
+## [0.4.1](https://github.com/mlsimon734/tabglutton/compare/v0.4.0...v0.4.1) (unreleased)
+
+- Devour now dispatches up to three Zotero Connector saves at once instead of one at a time, so a
+  run of papers finishes in roughly a third of the wall-clock. Everything the run reports is
+  unchanged — same counts, same per-tab failures, same order — and the Obsidian handoff stays
+  strictly serial, because it borrows the OS clipboard.
+
 ## [0.4.0](https://github.com/mlsimon734/tabglutton/compare/v0.3.1...v0.4.0) (2026-08-21)
 
 Two threads. Devour no longer requires Obsidian — a clip can land as a plain markdown file
