@@ -1,15 +1,19 @@
 diff --git a/src/browserExt/background.js b/src/browserExt/background.js
-index 3644e28..8488018 100644
+index 915767a..c2e2c65 100644
 --- a/src/browserExt/background.js
 +++ b/src/browserExt/background.js
-@@ -1096,29 +1096,36 @@ Zotero.Connector_Browser = new function() {
- 		}
+@@ -1139,32 +1139,39 @@ Zotero.Connector_Browser = new function() {
+ 		return true;
  	}
- 	
+ 
 -	async function _browserAction(tab) {
 +	async function _browserAction(tab, options={}) {
- 		const shouldContinue = await _checkPermissions(tab);
+ 		const shouldContinue = await Zotero.HostPermissions.checkChromiumActionPermissions(tab);
  		if (!shouldContinue) {
+-			return;
++			return false;
+ 		}
+ 		if (!await _ensureScriptsInjected(tab)) {
 -			return;
 +			return false;
  		}
@@ -45,7 +49,7 @@ index 3644e28..8488018 100644
  					tab,
  					tabInfo.frameId,
  					{
-@@ -1128,7 +1135,7 @@ Zotero.Connector_Browser = new function() {
+@@ -1174,7 +1181,7 @@ Zotero.Connector_Browser = new function() {
  			} else {
  				let withSnapshot = Zotero.Connector.isOnline ? Zotero.Connector.prefs.automaticSnapshots :
  					Zotero.Prefs.get('automaticSnapshots');
@@ -54,7 +58,7 @@ index 3644e28..8488018 100644
  			}
  		}
  	}
-@@ -1221,6 +1228,81 @@ Zotero.Connector_Browser = new function() {
+@@ -1269,6 +1276,86 @@ Zotero.Connector_Browser = new function() {
  			return fn.apply(this, arguments);
  		}
  	}
@@ -77,11 +81,16 @@ index 3644e28..8488018 100644
 +
 +	async function _handleExternalMessage(request, sender) {
 +		if (!request || typeof request !== 'object' || !request.action) return;
-+		// Web pages do not have sender.id. This is intentionally only the minimum
-+		// boundary for a local proof of concept; a production API still needs the
-+		// authorization model discussed upstream.
-+		if (!sender.id) {
-+			return {ok: false, status: 'unauthorized', error: 'Only browser extensions may call this API.'};
++		// Web pages have no sender.id, and an extension has to be listed in the
++		// externalAPI.allowedExtensions preference, which is empty by default. The API
++		// is therefore off until the user opts a specific extension into it.
++		let allowedExtensions = Zotero.Prefs.get('externalAPI.allowedExtensions');
++		if (!sender.id || !Array.isArray(allowedExtensions) || !allowedExtensions.includes(sender.id)) {
++			return {
++				ok: false,
++				status: 'unauthorized',
++				error: 'This caller is not listed in the externalAPI.allowedExtensions preference.'
++			};
 +		}
 +		if (request.version !== EXTERNAL_API_VERSION) {
 +			return {ok: false, status: 'unsupported-version', error: 'Unsupported external API version.'};
@@ -137,10 +146,10 @@ index 3644e28..8488018 100644
  	async function onNavigation(details, historyChange=false) {
  		// Ignore developer tools, item selector
 diff --git a/src/common/inject/pageSaving.js b/src/common/inject/pageSaving.js
-index f3174aa..01586d1 100644
+index e78631f..c92f867 100644
 --- a/src/common/inject/pageSaving.js
 +++ b/src/common/inject/pageSaving.js
-@@ -599,6 +599,9 @@ let PageSaving = {
+@@ -605,6 +605,9 @@ let PageSaving = {
  			else {
  				Zotero.Messaging.sendMessage("progressWindow.done", [false]);
  			}
@@ -150,3 +159,15 @@ index f3174aa..01586d1 100644
  		}
  	},
  
+diff --git a/src/common/zotero.js b/src/common/zotero.js
+index 5385142..c16587a 100644
+--- a/src/common/zotero.js
++++ b/src/common/zotero.js
+@@ -349,6 +349,7 @@ Zotero.Prefs = new function() {
+ 		"interceptKnownFileTypes": true,
+ 		"allowedCSLExtensionHosts": ["^https://raw\\.githubusercontent\\.com/", "^https://gitee\\.com/.+/raw/"],
+ 		"allowedInterceptHosts": [],
++		"externalAPI.allowedExtensions": [],
+ 		"firstUse": true,
+ 		"firstSaveToServer": true,
+ 		"reportTranslationFailure": true,
