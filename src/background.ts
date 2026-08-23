@@ -156,8 +156,13 @@ export interface ClipCurrentResponse {
    * name the wrong problem and hand over a remedy that fixes nothing — and
    * `tab_read`, which files and closes nothing, wants the verdict as a label
    * rather than as a refusal.
+   *
+   * The refused text hangs off the verdict rather than staying on `payload`, so
+   * `ok` and `payload` keep agreeing everywhere and the only way to reach a junk
+   * extraction is to name the verdict. `BridgeExtractResult` mirrors this, and
+   * the `extract` dep assignment is what typechecks the two against each other.
    */
-  guarded?: ThinClipVerdict;
+  guarded?: ThinClipVerdict & { payload: ClipPayload };
 }
 
 interface ClipCurrentResultMessage extends ClipCurrentResponse {
@@ -510,19 +515,20 @@ interface ClipTabOptions {
  * Devour's phase 1 and the bridge runner's `extract` dep. A guard per
  * destination would be three guards, and the destination is not what is wrong.
  *
- * **`ok` goes false and the payload stays.** False is what makes forgetting the
- * guard fail closed — every caller that writes already branches on `ok`, so a
- * new one cannot file a junk note by not knowing about `guarded`. Keeping the
- * payload beside the refusal is for `tab_read`, the one caller that neither
- * files nor closes: #49 is a junk note and a lost tab, a read risks neither, and
- * refusing one would cost an agent every legitimately short page with no way
- * through in order to withhold text it can judge for itself. It opts in by name.
+ * **The refused text moves onto the verdict, and `payload` goes away with `ok`.**
+ * Two guardrails rather than one: a caller that writes branches on `ok` and
+ * stops, and a caller that ignores `ok` anyway finds nothing to file, because
+ * reaching the junk text now means naming `guarded` and having read why it is
+ * there. `tab_read` is the one caller that does — it files nothing and closes
+ * nothing, #49 risks neither, and refusing it would cost an agent every
+ * legitimately short page with no way through, to withhold text it can judge for
+ * itself. Opting in by name is exactly the property this shape buys.
  */
 function guardExtraction(res: ClipCurrentResponse): ClipCurrentResponse {
   if (!res.ok || !res.payload) return res;
   const verdict = thinClipVerdict(res.payload);
   if (!verdict) return res;
-  return { ...res, ok: false, error: verdict.message, guarded: verdict };
+  return { ok: false, error: verdict.message, guarded: { ...verdict, payload: res.payload } };
 }
 
 async function clipTab(

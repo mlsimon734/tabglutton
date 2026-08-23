@@ -96,11 +96,13 @@ export interface BridgeExtractResult {
   error?: string;
   /**
    * The extraction itself succeeded and was refused for being too thin to be a
-   * clip (`src/clip-guard.ts`); `ok` is false and `payload` is still here. Its
-   * own field rather than an `error` prefix, because `readTab` has to branch on
-   * it before it starts diagnosing a failure that did not happen.
+   * clip (`src/clip-guard.ts`); `ok` is false and the refused text hangs off the
+   * verdict, not off `payload`. Its own field rather than an `error` prefix,
+   * because `readTab` has to branch on it before it starts diagnosing a failure
+   * that did not happen. Mirrors `ClipCurrentResponse` in `background.ts`; the
+   * `extract` dep assignment there is what holds the two shapes together.
    */
-  guarded?: ThinClipVerdict;
+  guarded?: ThinClipVerdict & { payload: ClipPayload };
 }
 
 export interface BridgeMethodDeps {
@@ -608,15 +610,11 @@ export class BridgeMethodRunner {
    * the text and the label instead.
    */
   private thinRead(
-    guarded: ThinClipVerdict,
-    payload: ClipPayload | undefined,
+    guarded: ThinClipVerdict & { payload: ClipPayload },
     refuseThin: boolean,
   ): { payload: ClipPayload; guarded: ThinClipVerdict } {
     if (refuseThin) fail(guarded.reason, guarded.message);
-    // `guardExtraction` only ever sets a verdict on an extraction that produced
-    // one, so this is the type's shape rather than a case that happens.
-    if (!payload) fail("extract-failed", guarded.message);
-    return { payload, guarded };
+    return { payload: guarded.payload, guarded };
   }
 
   /**
@@ -648,7 +646,7 @@ export class BridgeMethodRunner {
     // checks would name a problem this page does not have and hand the agent a
     // remedy that cannot fix it. Reached before `tabClip` gets to its close, so
     // a refused clip leaves the tab open — the disposition #49 asks for.
-    if (result.guarded) return this.thinRead(result.guarded, result.payload, refuseThin);
+    if (result.guarded) return this.thinRead(result.guarded, refuseThin);
     if (!result.ok || !result.payload) {
       // Asked only once extraction has already failed, so a read costs no extra
       // IPC in the normal case. Site access is optional on Chrome and only a
@@ -672,7 +670,7 @@ export class BridgeMethodRunner {
         // left to fall through, where it would earn "extract-failed" plus a hint
         // insisting the page can never be read — both wrong, and the hint
         // contradicts the message it would be glued to.
-        if (result.guarded) return this.thinRead(result.guarded, result.payload, refuseThin);
+        if (result.guarded) return this.thinRead(result.guarded, refuseThin);
         if (result.ok && result.payload) return { payload: result.payload };
         fail(
           "extract-failed",
