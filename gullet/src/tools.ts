@@ -413,7 +413,7 @@ async function clipAndVerify(
       };
     }
     upgrade = { confirmedBy: await verifyObsidianClip(verify, result, vault, file, startedAt) };
-    if (upgrade.confirmedBy === "gullet") await confirmClipMemory(ctx, connectionId, result);
+    if (upgrade.confirmedBy === "gullet") confirmClipMemory(ctx, connectionId, result);
   }
 
   if (!wantsClose) return { ...result, ...upgrade };
@@ -451,24 +451,27 @@ async function clipAndVerify(
  * handoff from a landed one for the destination where that gap is the whole
  * problem.
  *
- * Failure is ignored on purpose, and the commonest one is an extension older
- * than the method, which answers `bad-request`. Nothing downstream depends on
- * it: the page is already remembered as `launched` and the close has its own
- * evidence. It is awaited rather than left dangling only so the ordering against
- * that close is deterministic; the hop is loopback.
+ * Sent but deliberately **not waited for**, and it never rejects. The note is
+ * already on disk and the close that follows has its own evidence, so nothing
+ * downstream depends on the answer — while waiting for one would put a request
+ * with `BRIDGE_REQUEST_TIMEOUT_MS` on it in front of the close, and a browser
+ * that has stopped reading its socket (the shape diagnosed in #27) would then
+ * hold a verified clip's tab open for another 45 seconds. The request still
+ * goes out first, because `request` is called before the close is; only its
+ * reply is unawaited.
+ *
+ * The commonest failure is an extension older than the method, which answers
+ * `bad-request`. That costs precision — the page keeps the `launched` it already
+ * has — and never correctness.
  */
-async function confirmClipMemory(
+function confirmClipMemory(
   ctx: ToolContext,
   connectionId: string,
   result: Record<string, unknown>,
-): Promise<void> {
+): void {
   const url = typeof result.url === "string" ? result.url : "";
   if (!url) return;
-  try {
-    await ctx.request(connectionId, "clip_confirm", { url });
-  } catch {
-    // See above: an unrecorded confirmation costs precision, never correctness.
-  }
+  void ctx.request(connectionId, "clip_confirm", { url }).catch(() => {});
 }
 
 /**

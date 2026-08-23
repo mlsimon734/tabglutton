@@ -31,17 +31,28 @@ export type ClipTarget = ClipDestination | "zotero";
 export interface ClipMemoryEntry {
   /** Epoch ms of the most recent clip of this page. What pruning sorts on. */
   at: number;
-  /**
-   * The **strongest** evidence any clip of this page has produced, not the most
-   * recent one's. A page verified on disk in March that is re-clipped today
-   * stays `verified`: the note that was seen is no less real for a later handoff
-   * being unobservable, and the whole point of the distinction is to mark what
-   * was once provable. It is also what lets `clip_confirm` arrive after the
-   * `launched` write its own clip made and raise it.
-   */
-  state: ClipMark;
-  /** Most recent destination. Reported in the UI, never acted on. */
+  /** Where that most recent clip went. Reported in the UI, never acted on. */
   destination: ClipTarget;
+  /**
+   * Epoch ms of the last time something that can see the filesystem actually
+   * saw a note for this page — absent until one has.
+   *
+   * A timestamp rather than a `verified` flag, because the state has to survive
+   * a later clip that could not confirm anything (a page verified in March and
+   * re-clipped from the popup today is still a page whose note was seen) and
+   * because it must then not be *described* as that later clip. Bound to `at`
+   * and `destination`, "verified" would claim a disk sighting on a day nothing
+   * looked, at a destination nothing checked. Keeping the evidence in its own
+   * field is also what makes the state unforgettable by construction: nothing
+   * can un-see a note, so there is no ordering in which `clip_confirm` and the
+   * `launched` write its own clip made can disagree.
+   */
+  verifiedAt?: number;
+}
+
+/** How well this page's filing is known. Derived, never stored — see `verifiedAt`. */
+export function clipMarkFor(entry: ClipMemoryEntry): ClipMark {
+  return entry.verifiedAt === undefined ? "launched" : "verified";
 }
 
 /** Normalized URL → what is known about filing it. */
@@ -62,17 +73,20 @@ export type ClipMemory = Record<string, ClipMemoryEntry>;
 export const CLIP_MEMORY_MAX_ENTRIES = 5000;
 
 /**
- * The key a URL is remembered under, or null when it has none. Blank and
- * unparseable URLs are the null case: a tab mid-navigation has no address yet
- * (see `tabUrl` in bridge-methods.ts) and must not be filed under one.
+ * The key a URL is remembered under, or null when it has none.
+ *
+ * Only a real page is remembered. `normalizeUrl` passes a non-http URL through
+ * **unchanged**, so without this gate a tab mid-navigation would key under the
+ * literal `about:blank` Gecko reports for it (see `tabUrl` in
+ * bridge-methods.ts) — and one entry there would mark every loading tab as
+ * already clipped, in the popup and in `tabs_list` alike. Nothing can currently
+ * reach that key (both clip paths are behind their own `isHttpUrl` gates), which
+ * is exactly why the guard belongs here rather than in the callers' good
+ * intentions.
  */
 export function clipMemoryKey(url: string | undefined, opts: NormalizeOpts): string | null {
+  if (!url?.startsWith("http://") && !url?.startsWith("https://")) return null;
   return normalizeUrl(url, opts);
-}
-
-/** `verified` outranks `launched`; see `ClipMemoryEntry.state`. */
-function strongest(current: ClipMark | undefined, next: ClipMark): ClipMark {
-  return current === "verified" || next === "verified" ? "verified" : "launched";
 }
 
 export interface ClipRecord {
@@ -98,13 +112,16 @@ export function rememberClip(
 ): ClipMemory {
   const key = clipMemoryKey(record.url, opts);
   if (key === null) return memory;
+  // A sighting is never taken back, so the old one stands whenever this clip
+  // produced none of its own.
+  const verifiedAt = record.state === "verified" ? now : memory[key]?.verifiedAt;
   return pruneClipMemory(
     {
       ...memory,
       [key]: {
         at: now,
-        state: strongest(memory[key]?.state, record.state),
         destination: record.destination,
+        ...(verifiedAt === undefined ? {} : { verifiedAt }),
       },
     },
     max,
@@ -142,8 +159,11 @@ function isClipMemoryEntry(value: unknown): value is ClipMemoryEntry {
   if (!value || typeof value !== "object") return false;
   const entry = value as Partial<ClipMemoryEntry>;
   return (
-    typeof entry.at === "number" &&
-    (entry.state === "launched" || entry.state === "verified") &&
+    // Finite, not merely a number: a stored NaN would make `pruneClipMemory`'s
+    // comparator answer NaN and leave the eviction order unspecified, so a junk
+    // entry could outlive a live one — and render as "Invalid Date".
+    Number.isFinite(entry.at) &&
+    (entry.verifiedAt === undefined || Number.isFinite(entry.verifiedAt)) &&
     (entry.destination === "obsidian" ||
       entry.destination === "file" ||
       entry.destination === "zotero")

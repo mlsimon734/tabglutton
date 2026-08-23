@@ -39,6 +39,7 @@ import {
   type UndoCloseResult,
 } from "./bridge-protocol.js";
 import {
+  clipMarkFor,
   loadClipMemory,
   lookupClip,
   recordClip,
@@ -224,7 +225,7 @@ function toBridgeTab(
   // Chrome has no `tab.hidden` at all, so there it is never a signal either way.
   if (!IS_CHROME && tab.hidden === true) bridgeTab.hidden = true;
   const clipped = lookupClip(memory, url, opts);
-  if (clipped) bridgeTab.clipped = clipped.state;
+  if (clipped) bridgeTab.clipped = clipMarkFor(clipped);
   return bridgeTab;
 }
 
@@ -508,7 +509,7 @@ export class BridgeMethodRunner {
    */
   private async clipConfirm(raw: unknown): Promise<{ recorded: true }> {
     const { url } = parseClipConfirmParams(raw);
-    await this.remember(url, "verified", "obsidian");
+    await this.noteClip(url, "verified", "obsidian");
     return { recorded: true };
   }
 
@@ -787,7 +788,7 @@ export class BridgeMethodRunner {
     // Launched, never verified: this is the destination whose handoff cannot be
     // observed from here. Gullet raises it with `clip_confirm` if the note
     // turns up in the vault.
-    await this.remember(payload.url, "launched", "obsidian");
+    await this.noteClip(payload.url, "launched", "obsidian");
 
     return {
       tabId,
@@ -807,7 +808,7 @@ export class BridgeMethodRunner {
    * own failures, and a filed note must not be reported as a failed clip
    * because remembering it did not work.
    */
-  private async remember(url: string, state: ClipMark, destination: ClipTarget): Promise<void> {
+  private async noteClip(url: string, state: ClipMark, destination: ClipTarget): Promise<void> {
     await recordClip({ url, state, destination }, normalizeOptsFrom(this.deps.getSettings()));
   }
 
@@ -868,7 +869,7 @@ export class BridgeMethodRunner {
     // in the extension can produce. An erased record proves nothing, so that
     // case is remembered as `launched` — the file may well be there, and this is
     // exactly the distinction the two states exist to keep.
-    await this.remember(payload.url, saved.confirmed ? "verified" : "launched", "file");
+    await this.noteClip(payload.url, saved.confirmed ? "verified" : "launched", "file");
 
     return {
       tabId,

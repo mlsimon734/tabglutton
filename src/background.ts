@@ -24,6 +24,7 @@ import {
   type ClipPayload,
   type ObsidianClipRequest,
 } from "./clip-format.js";
+import type { NormalizeOpts } from "./normalize.js";
 import { DOWNLOADS_GONE, downloadsGrant } from "./permissions.js";
 import { getFilePlatformOnce } from "./platform.js";
 import { delay } from "./serialize.js";
@@ -367,7 +368,7 @@ function safeFavIconUrl(raw: string | undefined): string | undefined {
   }
 }
 
-function tabToPopupTab(t: Tab, memory: ClipMemory): PopupTab {
+function tabToPopupTab(t: Tab, memory: ClipMemory, opts: NormalizeOpts): PopupTab {
   const tab: PopupTab = {
     id: t.id ?? -1,
     title: t.title,
@@ -379,7 +380,7 @@ function tabToPopupTab(t: Tab, memory: ClipMemory): PopupTab {
     windowId: t.windowId,
     index: t.index,
   };
-  const clipped = lookupClip(memory, t.url, normalizeOptsFrom(settings));
+  const clipped = lookupClip(memory, t.url, opts);
   if (clipped) tab.clipped = clipped;
   return tab;
 }
@@ -758,7 +759,7 @@ async function downloadFailureDetail(err: unknown): Promise<string> {
  * Never throws (see `recordClip`) — the page is already filed by the time this
  * runs, and a memory write that fails must not turn it into a reported failure.
  */
-async function rememberClip(
+async function noteClip(
   url: string | undefined,
   state: ClipMark,
   destination: ClipTarget,
@@ -863,7 +864,7 @@ async function clipSelectedTabs(tabIds: number[]): Promise<ClipSelectedTabsRespo
         }
         // The Connector accepted the item, which is its report of a handoff and
         // not a file this extension ever sees — `launched`, like Obsidian.
-        await rememberClip(meta.url, "launched", "zotero");
+        await noteClip(meta.url, "launched", "zotero");
         try {
           await browser.tabs.remove(tabId);
         } catch (err) {
@@ -923,7 +924,7 @@ async function clipSelectedTabs(tabIds: number[]): Promise<ClipSelectedTabsRespo
         // `verified`: reaching here means saveClipFile watched the download
         // reach `state: "complete"`, which is the same evidence that licenses
         // the close below. The unconfirmed branch above never gets this far.
-        await rememberClip(res.payload.url || meta.url, "verified", "file");
+        await noteClip(res.payload.url || meta.url, "verified", "file");
         // No OBSIDIAN_HANDOFF_GAP_MS here: that gap paces an external app
         // reading the OS clipboard, and this destination touches neither.
         // saveClipFile has now seen the file land, so the close is safe.
@@ -981,7 +982,7 @@ async function clipSelectedTabs(tabIds: number[]): Promise<ClipSelectedTabsRespo
 
       // `launched` and nothing stronger: the popup has no sidecar to ask, and a
       // refused obsidian:// launch is indistinguishable from a taken one.
-      await rememberClip(res.payload.url || meta.url, "launched", "obsidian");
+      await noteClip(res.payload.url || meta.url, "launched", "obsidian");
 
       await delay(OBSIDIAN_HANDOFF_GAP_MS);
       try {
@@ -1011,11 +1012,12 @@ browser.runtime.onMessage.addListener(async (rawMsg: unknown): Promise<unknown> 
       return finishClipResult(msg);
     case "get-scoped-tabs": {
       const tabs = (await queryScopedTabs()).filter(tabInScope);
-      // One read for the whole listing, not one per tab.
+      // Both read once for the whole listing, not once per tab.
       const memory = await loadClipMemory();
+      const opts = normalizeOptsFrom(settings);
       const response: GetScopedTabsResponse = {
         tabs: tabs
-          .map((t) => tabToPopupTab(t, memory))
+          .map((t) => tabToPopupTab(t, memory, opts))
           .sort((a, b) => (a.windowId ?? 0) - (b.windowId ?? 0) || a.index - b.index),
         settings,
       };

@@ -6,6 +6,7 @@ import type {
   GetScopedTabsResponse,
   PopupTab,
 } from "../src/background.js";
+import { clipMarkFor } from "../src/clip-memory.js";
 import { openOptionsUi } from "../src/open-options.js";
 import { CLIP_ORIGINS, DOWNLOADS_GONE, requestOrigins } from "../src/permissions.js";
 import { pickRule, type SiteRule } from "../src/site-rules.js";
@@ -298,7 +299,7 @@ function renderMarks(tab: PopupTab, group: TabGroup): HTMLSpanElement | null {
 
   if (tab.clipped) {
     const clipped = document.createElement("span");
-    clipped.className = `clip-pill ${tab.clipped.state}`;
+    clipped.className = `clip-pill ${clipMarkFor(tab.clipped)}`;
     clipped.textContent = clipMarkLabel(tab.clipped);
     clipped.title = clipMarkTitle(tab.clipped);
     marks.push(clipped);

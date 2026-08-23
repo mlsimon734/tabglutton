@@ -1,5 +1,5 @@
 import type { ClipFailureReason, ClipSelectedTabsResponse, PopupTab } from "../src/background.js";
-import type { ClipMemoryEntry, ClipTarget } from "../src/clip-memory.js";
+import { clipMarkFor, type ClipMemoryEntry, type ClipTarget } from "../src/clip-memory.js";
 import { groupDuplicates, pickKeeper } from "../src/dedup.js";
 import { normalizeOptsFrom, type Settings } from "../src/storage.js";
 
@@ -143,20 +143,45 @@ function clipTargetLabel(destination: ClipTarget): string {
  * anything more, and `clipMarkTitle` spells out what it means.
  */
 export function clipMarkLabel(entry: ClipMemoryEntry): string {
-  return entry.state === "verified" ? "clipped ✓" : "clipped";
+  return clipMarkFor(entry) === "verified" ? "clipped ✓" : "clipped";
 }
 
-/** The hover text behind the pill, where the honest version has room to live. */
-export function clipMarkTitle(entry: ClipMemoryEntry, now: number = Date.now()): string {
-  const when = new Date(entry.at).toLocaleDateString(undefined, {
-    year: new Date(entry.at).getFullYear() === new Date(now).getFullYear() ? undefined : "numeric",
+/**
+ * Built once rather than per row: a cockpit list runs to hundreds of rows, and
+ * `toLocaleDateString` with an options bag rebuilds the formatter on each call.
+ * The year is always shown — a conditional one would save four characters and
+ * cost a second formatter.
+ */
+let dateFormat: Intl.DateTimeFormat | null = null;
+function formatDay(at: number): string {
+  dateFormat ??= new Intl.DateTimeFormat(undefined, {
+    year: "numeric",
     month: "short",
     day: "numeric",
   });
-  const where = clipTargetLabel(entry.destination);
-  return entry.state === "verified"
-    ? `Clipped to ${where} on ${when}, and the note was seen on disk then. It may have been moved or deleted since.`
-    : `Clipped to ${where} on ${when}. The handoff was launched — nothing could confirm the note reached disk, and it may have been moved or deleted since.`;
+  return dateFormat.format(new Date(at));
+}
+
+/**
+ * The hover text behind the pill, where the honest version has room to live.
+ *
+ * The two facts are reported separately on purpose. `at` and `destination`
+ * describe the **most recent** clip, while `verifiedAt` is when a note was last
+ * actually seen — and those can be different clips to different destinations.
+ * Folding them into one sentence let a sticky `verified` claim a disk sighting
+ * on the day of a handoff nothing observed.
+ */
+export function clipMarkTitle(entry: ClipMemoryEntry): string {
+  const clipped = `Clipped to ${clipTargetLabel(entry.destination)} on ${formatDay(entry.at)}.`;
+  const since = "It may have been moved or deleted since.";
+  if (entry.verifiedAt === undefined) {
+    return `${clipped} The handoff was launched — nothing could confirm the note reached disk, and it may have been moved or deleted since.`;
+  }
+  const seen =
+    entry.verifiedAt === entry.at
+      ? "The note was seen on disk then."
+      : `A note for this page was seen on disk on ${formatDay(entry.verifiedAt)}.`;
+  return `${clipped} ${seen} ${since}`;
 }
 
 export function visibleGroups(

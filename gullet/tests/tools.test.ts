@@ -368,6 +368,18 @@ describe("tab-scoped tools", () => {
     expect(sent[1]?.params).toEqual({ url: "https://example.com/a" });
   });
 
+  // The guarantee is that `route` gates on isBridgeMethod, which knows only the
+  // agent tools — pinning the type guards alone would not catch a future
+  // "unification" of the two lists, and a model able to call this could mark a
+  // page as provably filed by saying so.
+  test("an agent cannot call clip_confirm", async () => {
+    const { call, sent } = caller([zen], () => ({}));
+    const result = await call("clip_confirm", { url: "https://example.com/a" });
+    expect(result.isError).toBe(true);
+    expect(JSON.stringify(payload(result))).toContain("Unknown tool clip_confirm");
+    expect(sent).toEqual([]);
+  });
+
   test("an unconfirmable clip is never reported to the extension as verified", async () => {
     const { call, sent } = caller(
       [zen],

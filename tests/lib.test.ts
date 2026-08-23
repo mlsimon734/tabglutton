@@ -224,7 +224,7 @@ describe("clipSummary", () => {
 
 describe("the clip filter", () => {
   const clipped = (id: number, host: string): PopupTab =>
-    tab(id, host, { clipped: { at: 1, state: "launched", destination: "obsidian" } });
+    tab(id, host, { clipped: { at: 1, destination: "obsidian" } });
 
   test("narrows to remembered pages, or to the ones with no record", () => {
     const tabs = [clipped(1, "a.com"), tab(2, "b.com")];
@@ -244,7 +244,7 @@ describe("the clip filter", () => {
   // close. A set with one clipped copy would otherwise split in half.
   test("shows a duplicate set whole when one copy matches", () => {
     const tabs = [
-      copy(1, "https://a.com/x", { clipped: { at: 1, state: "verified", destination: "file" } }),
+      copy(1, "https://a.com/x", { clipped: { at: 1, destination: "file", verifiedAt: 1 } }),
       copy(2, "https://a.com/x"),
     ];
     const groups = visibleGroups(tabs, "", settings, null, "clipped");
@@ -261,10 +261,11 @@ describe("the clip filter", () => {
 });
 
 describe("the clip mark", () => {
+  const CLIPPED_AT = Date.parse("2026-03-12T10:00:00Z");
   const entry = (state: "launched" | "verified"): ClipMemoryEntry => ({
-    at: Date.parse("2026-03-12T10:00:00Z"),
-    state,
+    at: CLIPPED_AT,
     destination: "obsidian",
+    ...(state === "verified" ? { verifiedAt: CLIPPED_AT } : {}),
   });
 
   // The whole naming constraint in one assertion: the extension can say a page
@@ -281,6 +282,20 @@ describe("the clip mark", () => {
     expect(clipMarkLabel(entry("launched"))).not.toBe(clipMarkLabel(entry("verified")));
     expect(clipMarkTitle(entry("launched"))).toInclude("nothing could confirm");
     expect(clipMarkTitle(entry("verified"))).toInclude("seen on disk");
+  });
+
+  // The failure this shape exists to prevent: a page verified as a file in
+  // March, re-clipped to Obsidian today, must not report that an Obsidian note
+  // was seen today. Nothing looked today, and nothing ever looked in Obsidian.
+  test("never attributes an old sighting to a newer clip", () => {
+    const title = clipMarkTitle({
+      at: Date.parse("2026-08-20T10:00:00Z"),
+      destination: "obsidian",
+      verifiedAt: Date.parse("2026-03-12T10:00:00Z"),
+    });
+    expect(title).toInclude("Clipped to Obsidian on Aug 20, 2026");
+    expect(title).toInclude("seen on disk on Mar 12, 2026");
+    expect(title).not.toInclude("seen on disk then");
   });
 
   // Neither state is a claim about disk *now*: notes get moved and deleted.
