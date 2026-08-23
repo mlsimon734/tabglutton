@@ -173,15 +173,17 @@ function formatDay(at: number): string {
  */
 export function clipMarkTitle(entry: ClipMemoryEntry): string {
   const clipped = `Clipped to ${clipTargetLabel(entry.destination)} on ${formatDay(entry.at)}.`;
+  const evidence =
+    entry.verifiedAt === undefined
+      ? "The handoff was launched — nothing could confirm the note reached disk."
+      : entry.verifiedAt === entry.at
+        ? "The note was seen on disk then."
+        : `A note for this page was seen on disk on ${formatDay(entry.verifiedAt)}.`;
+  // One sentence reached by every branch rather than a copy per branch. It is
+  // the disclaimer that keeps even a verified mark from reading as a claim
+  // about now, so a reworded copy on one path is a claim quietly overstated.
   const since = "It may have been moved or deleted since.";
-  if (entry.verifiedAt === undefined) {
-    return `${clipped} The handoff was launched — nothing could confirm the note reached disk, and it may have been moved or deleted since.`;
-  }
-  const seen =
-    entry.verifiedAt === entry.at
-      ? "The note was seen on disk then."
-      : `A note for this page was seen on disk on ${formatDay(entry.verifiedAt)}.`;
-  return `${clipped} ${seen} ${since}`;
+  return `${clipped} ${evidence} ${since}`;
 }
 
 export function visibleGroups(
