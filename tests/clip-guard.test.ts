@@ -48,9 +48,11 @@ describe("thinClipVerdict", () => {
   });
 
   /**
-   * The documented cost of the threshold: a real page this short is refused, and
-   * the refusal keeps the tab and says the page may not have finished loading
-   * rather than accusing it of being a challenge. #49 accepts the manual retry.
+   * The documented cost of the threshold: a real page this short is refused,
+   * the tab is kept, and — because the guard cannot tell this page from a
+   * challenge — the message offers a next step for either reading rather than
+   * promising that a retry works. It would not: a page that is simply this
+   * short fails the retry identically. #49 accepts the manual save.
    */
   test("refuses a genuinely short real page, without calling it a bot check", () => {
     const verdict = thinClipVerdict({
@@ -60,7 +62,24 @@ describe("thinClipVerdict", () => {
     expect(verdict?.reason).toBe("thin-content");
     expect(verdict?.challengeSuspect).toBe(false);
     expect(verdict?.message).not.toContain("bot check or CAPTCHA");
-    expect(verdict?.message).toContain("may not have finished loading");
+    expect(verdict?.message).toContain("save it by hand");
+  });
+
+  /**
+   * A Wikipedia stub, 308 characters, is refused. Kept as a worked example of
+   * where the floor actually bites, so anyone weighing a change to it is
+   * weighing a page rather than a number.
+   */
+  test("refuses a short encyclopedia stub — the floor's real cost, in one page", () => {
+    const stub =
+      "Bibliothecary is a disused term for a librarian, current in English from the sixteenth " +
+      "century until the nineteenth, when it was displaced by the shorter form. It survives in " +
+      "French as bibliothecaire and in several other Romance languages. The Oxford English " +
+      "Dictionary records its last common usage in 1873.";
+    expect(clipTextLength(stub)).toBeLessThan(MIN_CLIP_CONTENT_CHARS);
+    expect(thinClipVerdict({ title: "Bibliothecary", markdown: stub })?.challengeSuspect).toBe(
+      false,
+    );
   });
 
   /**

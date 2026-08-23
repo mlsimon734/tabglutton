@@ -76,6 +76,14 @@ const CHALLENGE_SIGNATURES: readonly RegExp[] = [
  * be argued out of a verdict by a page's own hrefs. Everything dropped is
  * replaced by a space rather than deleted, so stripping a marker inside a word
  * cannot shorten the text it was sitting in.
+ *
+ * Angle-bracket tags go the same way, and that one is a trade rather than a
+ * free win: raw HTML surviving Defuddle's markdown conversion would inflate a
+ * challenge page towards the floor, while a page whose content really is HTML —
+ * a short tutorial that is mostly code samples — is undercounted and may be
+ * refused for it (measured: one such sample counts 184 against a raw 390). Both
+ * errors are taken deliberately in the direction that refuses, which is the one
+ * #49 accepts.
  */
 export function clipTextLength(markdown: string): number {
   return markdown
@@ -97,6 +105,12 @@ export interface ThinClipVerdict {
   message: string;
 }
 
+/**
+ * Without a signature the guard genuinely does not know which page it refused,
+ * so the message must not promise that retrying works: a page that is simply
+ * this short fails a retry identically, and telling someone to try again is the
+ * one remedy that cannot help them. Both readings get their own next step.
+ */
 function thinClipMessage(chars: number, challengeSuspect: boolean): string {
   const measured =
     `Only ${chars} characters of content could be extracted ` +
@@ -105,8 +119,9 @@ function thinClipMessage(chars: number, challengeSuspect: boolean): string {
     ? `This looks like a bot check or CAPTCHA rather than the page that was parked here. ` +
         `${measured} Nothing was saved and the tab was kept — open it, clear the challenge, ` +
         `and clip again.`
-    : `${measured} Nothing was saved and the tab was kept — the page may be a bot check, or ` +
-        `may not have finished loading. Open it and clip again.`;
+    : `${measured} Nothing was saved and the tab was kept. If the page is a bot check or had ` +
+        `not finished loading, open it and clip again; if it really is this short, save it by ` +
+        `hand.`;
 }
 
 /** `null` when the extraction carries enough to be worth a note. */
