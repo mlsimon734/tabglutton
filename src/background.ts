@@ -178,7 +178,6 @@ const bridgeRunner = new BridgeMethodRunner({
   // No wake: waking is `tabs_load`'s own gated act, and `zoteroDestination`
   // never navigates — `destinationForTab` is where the popup's wake lives.
   routesToZotero: async (tabId) => {
-    if (!settings.zoteroRoutingEnabled) return false;
     const destination = await zoteroDestination(tabId);
     if (destination === null) return false;
     // A Connector that could not answer is reported as such, never flattened

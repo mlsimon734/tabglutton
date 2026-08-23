@@ -110,13 +110,17 @@ export interface BridgeMethodDeps {
   openObsidianUrl: (url: string) => Promise<void>;
   copyToClipboardViaTab: (tabId: number, text: string) => Promise<boolean>;
   /**
-   * Is this a tab the Zotero Connector should take? The very same routing the
-   * popup's Devour runs, injected rather than re-derived so the two surfaces
-   * cannot drift — and so every Connector wire detail stays in `src/zotero.ts`,
-   * where an upstream change to the API has one place to land.
+   * Ask the Zotero Connector whether this tab is one it should take — the very
+   * same question the popup's Devour asks, injected rather than re-derived so
+   * the two surfaces cannot drift and every Connector wire detail stays in
+   * `src/zotero.ts`, where an upstream change to the API has one place to land.
    *
-   * Rejects when the Connector could not answer at all. Never a `false`: the
-   * caller must not read "I could not ask" as "this is not a paper".
+   * Only the Connector's verdict; whether the user routes papers at all is the
+   * caller's to check, because that answer also decides whether the tab is
+   * touched in the first place.
+   *
+   * Rejects when the Connector could not answer. Never a `false`: the caller
+   * must not read "I could not ask" as "this is not a paper".
    */
   routesToZotero: (tabId: number) => Promise<boolean>;
   /** Save a routed tab through the Connector. Resolves only on a confirmed save. */
