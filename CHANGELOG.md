@@ -8,10 +8,12 @@ All notable changes to Tabglutton are documented here.
   it.** Waking a backlog is the traffic pattern most likely to draw a bot check, and a
   challenge served at the parked URL has no translator, so it fell past the Zotero route and
   Defuddle's extraction of "Just a moment…" counted as a successful clip. Anything under 512
-  characters of extracted text is refused: the tab is kept, the popup's failure row reads
-  "too little content" with the character count and what to do about it, and the bridge
-  answers a new `thin-content` error code. Where a known interstitial signature matches too,
-  the message says so outright. ([#49](https://github.com/mlsimon734/tabglutton/issues/49))
+  characters of extracted text is refused: the tab is kept, and the popup's failure row reads
+  "too little content" with the character count and what to do about it. Where a known
+  interstitial signature matches too, the message says so outright. For agents, `tab_clip`
+  refuses the page with a new `thin-content` error while `tab_read` — which files and closes
+  nothing — still returns the text, with a `thin` note saying how little there was and
+  whether it looks like a challenge. ([#49](https://github.com/mlsimon734/tabglutton/issues/49))
 
 ## [0.4.0](https://github.com/mlsimon734/tabglutton/compare/v0.3.1...v0.4.0) (2026-08-21)
 

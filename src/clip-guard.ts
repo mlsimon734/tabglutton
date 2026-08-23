@@ -75,9 +75,10 @@ const CHALLENGE_SIGNATURES: readonly RegExp[] = [
  *
  * Link and image targets are excluded because they are markup, not content: one
  * tracking URL can outweigh a whole interstitial's prose, and the guard must not
- * be argued out of a verdict by a page's own hrefs. Everything dropped is
- * replaced by a space rather than deleted, so stripping a marker inside a word
- * cannot shorten the text it was sitting in.
+ * be argued out of a verdict by a page's own hrefs. Those two are deleted rather
+ * than spaced, because the text around a link is adjacent in the render; the tag
+ * and marker strips below leave a space instead, so removing a marker from
+ * inside a word cannot shorten the word it was sitting in.
  *
  * Angle-bracket tags go the same way, and that one is a trade rather than a
  * free win: raw HTML surviving Defuddle's markdown conversion would inflate a

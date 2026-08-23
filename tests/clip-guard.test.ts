@@ -37,14 +37,31 @@ describe("thinClipVerdict", () => {
     expect(verdict?.message).toContain("the tab was kept");
   });
 
+  /**
+   * The floor is justified by a 2x margin over the longest challenge page we
+   * know of, and its doc comment says that margin should not be spent. Pin it,
+   * or a later change to `clipTextLength` could inflate an interstitial towards
+   * 512 with the whole suite still green.
+   */
+  test("the known interstitial stays well clear of the floor", () => {
+    expect(clipTextLength(CLOUDFLARE_INTERSTITIAL.markdown)).toBeLessThan(
+      MIN_CLIP_CONTENT_CHARS / 2,
+    );
+  });
+
   test("passes a normal article", () => {
     expect(thinClipVerdict({ title: "A winter in the stacks", markdown: article() })).toBeNull();
   });
 
-  test("passes an article that only just clears the floor", () => {
-    const markdown = article(MIN_CLIP_CONTENT_CHARS);
-    expect(clipTextLength(markdown)).toBe(MIN_CLIP_CONTENT_CHARS);
-    expect(thinClipVerdict({ title: "Exactly enough", markdown })).toBeNull();
+  /** Both sides of the boundary, so a `>=` flipped to `>` cannot pass. */
+  test("passes at exactly the floor and refuses one character under it", () => {
+    const atFloor = article(MIN_CLIP_CONTENT_CHARS);
+    expect(clipTextLength(atFloor)).toBe(MIN_CLIP_CONTENT_CHARS);
+    expect(thinClipVerdict({ title: "Exactly enough", markdown: atFloor })).toBeNull();
+
+    const under = article(MIN_CLIP_CONTENT_CHARS - 1);
+    expect(clipTextLength(under)).toBe(MIN_CLIP_CONTENT_CHARS - 1);
+    expect(thinClipVerdict({ title: "One short", markdown: under })?.reason).toBe("thin-content");
   });
 
   /**

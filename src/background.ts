@@ -8,7 +8,7 @@ import { BridgeClient, type BridgeStatus } from "./bridge-client.js";
 import { BridgeMethodRunner, isHttpUrl } from "./bridge-methods.js";
 import { getBrowserInfoOnce } from "./browser-info.js";
 import { clipDownloadPath, saveClipFile, type SavedClipFile } from "./clip-file.js";
-import { thinClipVerdict, type ClipGuardReason } from "./clip-guard.js";
+import { thinClipVerdict, type ClipGuardReason, type ThinClipVerdict } from "./clip-guard.js";
 import {
   markdownForClip,
   OBSIDIAN_HANDOFF_GAP_MS,
@@ -151,11 +151,13 @@ export interface ClipCurrentResponse {
   /**
    * Set when the guard refused an extraction that had in fact succeeded, so a
    * caller can tell it from an extraction that failed. The bridge needs the
-   * distinction: its `readTab` answers a failure by asking whether site access
-   * is held, and reporting a missing grant for a page it just read would name
-   * the wrong problem and hand over a remedy that fixes nothing.
+   * distinction twice over: `readTab` answers a failure by asking whether site
+   * access is held, and reporting a missing grant for a page it just read would
+   * name the wrong problem and hand over a remedy that fixes nothing — and
+   * `tab_read`, which files and closes nothing, wants the verdict as a label
+   * rather than as a refusal.
    */
-  guarded?: ClipGuardReason;
+  guarded?: ThinClipVerdict;
 }
 
 interface ClipCurrentResultMessage extends ClipCurrentResponse {
@@ -508,14 +510,19 @@ interface ClipTabOptions {
  * Devour's phase 1 and the bridge runner's `extract` dep. A guard per
  * destination would be three guards, and the destination is not what is wrong.
  *
- * The payload is dropped along with the verdict — it is the junk note, and
- * handing it back invites a caller to file it anyway.
+ * **`ok` goes false and the payload stays.** False is what makes forgetting the
+ * guard fail closed — every caller that writes already branches on `ok`, so a
+ * new one cannot file a junk note by not knowing about `guarded`. Keeping the
+ * payload beside the refusal is for `tab_read`, the one caller that neither
+ * files nor closes: #49 is a junk note and a lost tab, a read risks neither, and
+ * refusing one would cost an agent every legitimately short page with no way
+ * through in order to withhold text it can judge for itself. It opts in by name.
  */
 function guardExtraction(res: ClipCurrentResponse): ClipCurrentResponse {
   if (!res.ok || !res.payload) return res;
   const verdict = thinClipVerdict(res.payload);
   if (!verdict) return res;
-  return { ok: false, error: verdict.message, guarded: verdict.reason };
+  return { ...res, ok: false, error: verdict.message, guarded: verdict };
 }
 
 async function clipTab(
@@ -873,7 +880,7 @@ async function clipSelectedTabs(tabIds: number[]): Promise<ClipSelectedTabsRespo
         // row says what happened and its Retry button is worth pressing after
         // the user has cleared the challenge. Nothing is closed either way —
         // this is the same `continue` an extract failure has always taken.
-        fail(res.guarded ?? "extract-failed", res.error);
+        fail(res.guarded?.reason ?? "extract-failed", res.error);
         console.warn("[tabglutton] clip failed for tab", tabId, res.error);
         continue;
       }

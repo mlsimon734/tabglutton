@@ -811,6 +811,19 @@ export interface TabReadParams {
   tabId: number;
 }
 
+/**
+ * Said of a read whose page carried too little to be a clip. A label, not a
+ * refusal — `tab_read` files and closes nothing, so it hands the agent the text
+ * along with the reason to distrust it. `tab_clip`, which would file and close,
+ * refuses the same page with the `thin-content` error instead.
+ */
+export interface ThinReadNote {
+  /** Characters of visible text, by the extension's own count. */
+  chars: number;
+  /** A known bot-check signature matched as well. */
+  challengeSuspect: boolean;
+}
+
 export interface TabReadResult {
   tabId: number;
   title: string;
@@ -821,6 +834,8 @@ export interface TabReadResult {
   site: string;
   wordCount: number;
   markdown: string;
+  /** Only when the page was too thin to clip. Additive: absent is the norm. */
+  thin?: ThinReadNote;
 }
 
 export interface TabClipParams {
