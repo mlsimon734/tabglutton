@@ -32,7 +32,7 @@ Every claim below is marked **[ran]** (I executed something and report what it p
 | 4   | Unauthenticated local process could write ~480 MB/s into `hub.log`             | **real — fixed**   | Medium                    |
 | 5   | `./.env` outranks the global token file, so a cloned repo silently wins        | **real — fixed**   | Low                       |
 | 6   | Prompt-injection posture is stated below its real strength in the docs         | **real — fixed**   | Low                       |
-| 7   | `clip-verify` follows an unvalidated `file` out of the vault via `join()`      | **real**           | Low                       |
+| 7   | `clip-verify` follows an unvalidated `file` out of the vault via `join()`      | **real — fixed**   | Low                       |
 | 8   | Token in argv / logs / crash dumps                                             | not-real           | —                         |
 | 9   | Proof comparison timing, replay, nonce reuse                                   | not-real           | —                         |
 | 10  | Web page reaching the loopback port (CSRF/CORS)                                | not-real           | —                         |
@@ -454,7 +454,7 @@ result an agent reads, which is a product decision rather than a defect fix.
 
 ---
 
-## 7. `clip-verify` follows an unvalidated `file` out of the vault — **real, Low**
+## 7. `clip-verify` follows an unvalidated `file` out of the vault — **real, Low — fixed**
 
 `clipNotePath(vaultPath, file)` is `join(vaultPath, file)` with no containment check
 (`gullet/src/clip-verify.ts:217`). `file` comes off the wire from the browser connection.
@@ -468,11 +468,54 @@ agent, never content — so it is a weak existence-and-hash oracle, and the atta
 reach it already has the whole tool surface. Recording it because it is one `resolve()` away
 from being impossible, and because a future caller might return more than a verdict.
 
-**Not fixed** — deliberately. The right containment answer changes what an escaping path
-_verdicts as_, and the file's soft contract ("inability to check is never a failure") makes
-that a design call rather than a defect. My recommendation: resolve and require the result to
-stay under `vaultPath`, and answer `unknown` when it does not, consistent with every other
-"cannot check" in that module.
+**Left open at review time** — deliberately, because the right containment answer changes what
+an escaping path _verdicts as_, and the file's soft contract ("inability to check is never a
+failure") made that a design call rather than a defect. Recommendation was: resolve and require
+the result to stay under `vaultPath`, answering `unknown` when it does not.
+
+**Fixed** ([#46](https://github.com/mlsimon734/tabglutton/issues/46)), as recommended.
+`clipNotePath` now `resolve`s both halves and returns `null` unless the result sits under the
+vault path _plus a separator_ — so the sibling `/vaults/test-evil` is not "under"
+`/vaults/test`, which the bare `startsWith` this invites would have accepted. `resolve` rather
+than `join` is load-bearing in its own right: an **absolute** `file` is the same escape by
+another route, and where `join` would have buried it inside the vault, `resolve` takes it whole
+and the containment check then refuses it. The verifier answers `unknown` on `null` **before
+its first read**, so an escaping path is not merely un-verdicted but unlooked-at — the half
+that keeps the answer from being an existence oracle. Containment is lexical, per the
+recommendation: a symlink inside the vault still points wherever the user pointed it, which is
+their arrangement rather than something off the wire. Seven tests in
+`gullet/tests/clip-verify.test.ts` cover the `../` climb, an absolute path, the prefix-sharing
+sibling, and an escape whose name already ends `.md`; **[ran]** all seven fail against the
+old `join` and pass against the fix, and the in-vault cases (including a path whose interior
+`..` normalizes back inside) verdict exactly as before.
+
+**[ran]** against a real filesystem too, not only the suite's injected one — a temp vault, a
+real file outside it, and a `vault-evil` sibling, driven through `defaultReadDir` /
+`defaultModifiedAt` with no injection. That is what shows the oracle rather than arguing it:
+
+| `file` reported                        | on disk         | before    | after     |
+| -------------------------------------- | --------------- | --------- | --------- |
+| `Clippings/Real` (in vault)            | `Real.md`       | `landed`  | `landed`  |
+| `Clippings/Absent` (in vault)          | —               | `missing` | `missing` |
+| `../secrets/id_ed25519`                | `id_ed25519.md` | `landed`  | `unknown` |
+| `../secrets/absent`                    | —               | `missing` | `unknown` |
+| `../vault-evil/Note`                   | `Note.md`       | `landed`  | `unknown` |
+| `/tmp/…/secrets/id_ed25519` (absolute) | `id_ed25519.md` | `missing` | `unknown` |
+
+Rows 3 and 4 are the finding in two lines: the verdict told existence apart outside the vault.
+Afterwards all four escapes are one indistinguishable `unknown` and the two in-vault rows are
+untouched. Row 6 is also why the fix resolves rather than joins — `join` buried the absolute
+path back inside the vault, so it answered `missing` for the wrong reason.
+
+**State the oracle at its measured strength, since that is this file's own standard.** The `on
+disk` column is load-bearing: `.md` is appended to whatever `file` names, so only a
+`<name>.md` (or Obsidian's `<name> N.md`) is ever stat'd or read, and a plaintext key with no
+extension answered `missing` before the fix, indistinguishable from nothing being there. What
+the pre-fix verdict actually distinguished was (a) whether a **note by that name** exists
+anywhere on disk and (b) via `unknown` versus `missing`, whether an unreadable **directory** is
+there — `/private/var/root` answered `unknown` where `/private/var/definitely-not-here`
+answered `missing`, with no note involved at all. Content never left in any case. Narrower than
+"reads your `.ssh` key", broader than "notes only", and still worth closing.
 
 Not a finding, but adjacent, **[ran]** on `src/clip-format.ts`: on the **mac** branch
 `sanitizeFileName` strips `/` and `:` but not `\`, so a title of `..\..\Windows\...` produces

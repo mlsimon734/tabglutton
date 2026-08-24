@@ -16,7 +16,7 @@
     "test": "bun test",
     "format": "bunx oxfmt .",
     "format:check": "bunx oxfmt --check .",
-    "lint:js": "bunx oxlint .",
+    "lint:js": "bunx oxlint --format=default .",
     "lint:ext": "bun run build:firefox && bunx web-ext lint --source-dir=dist-firefox",
     "lint": "bun run lint:js && bun run lint:ext",
     "check": "bun run typecheck && bun run format:check && bun run lint && bun run test",
@@ -45,9 +45,9 @@
   "devDependencies": {
     "@types/firefox-webext-browser": "^143.0.0",
     "@types/webextension-polyfill": "^0.12.5",
-    "bun-types": "latest",
+    "bun-types": "^1.4.0",
     "commit-and-tag-version": "^13.0.0",
-    "oxfmt": "latest",
+    "oxfmt": "^0.64.0",
     "oxlint": "^1",
     "typescript": "^7.0.0",
     "web-ext": "^10.0.0"

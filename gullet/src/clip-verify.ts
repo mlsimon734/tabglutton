@@ -13,7 +13,7 @@
 // browser's optimism.
 
 import { readdir, readFile, stat } from "node:fs/promises";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, join, resolve, sep } from "node:path";
 import type { ObsidianVaultPaths } from "./obsidian-vaults.js";
 
 /**
@@ -213,10 +213,31 @@ export function isClipNoteName(entry: string, base: string): boolean {
  * `file` is the vault-relative note path the extension reported, without an
  * extension — Obsidian appends `.md`. A name that already carries one is left
  * alone rather than becoming `note.md.md`.
+ *
+ * It arrives off the wire, so the result is required to stay under the vault
+ * and `null` says it does not. A plain `join` followed a `../`-laden path out of
+ * the vault, and Gullet then listed that directory and stat'd and read any
+ * `<name>.md` in it, reporting a verdict on what it found. Measured at its real
+ * strength, that is an oracle for two things and not for a third: whether a note
+ * by that name exists anywhere on disk, and — in `unknown` versus `missing` —
+ * whether an unreadable directory is there at all; a file with no `.md` was never
+ * reached, and no content ever leaves (`SECURITY-REVIEW.md` §7). `resolve` rather
+ * than `join` because an *absolute* `file` is the same escape by another route —
+ * join would have buried it inside the vault, resolve takes it whole and the
+ * containment check then refuses it.
+ *
+ * Two things this is not. The comparison is against the vault path plus a
+ * trailing separator, so `/vaults/test-evil` is not "under" `/vaults/test` — the
+ * prefix match a bare `startsWith` would have accepted. And containment is
+ * purely lexical: a symlink inside the vault still points wherever the user
+ * pointed it, which is their own arrangement rather than something off the wire.
  */
-export function clipNotePath(vaultPath: string, file: string): string {
+export function clipNotePath(vaultPath: string, file: string): string | null {
   const relative = file.endsWith(".md") ? file : `${file}.md`;
-  return join(vaultPath, relative);
+  const root = resolve(vaultPath);
+  const target = resolve(root, relative);
+  const prefix = root.endsWith(sep) ? root : root + sep;
+  return target.startsWith(prefix) ? target : null;
 }
 
 /**
@@ -282,6 +303,10 @@ export function createClipVerifier(
     if (!vaultPath) return "unknown";
 
     const target = clipNotePath(vaultPath, file);
+    // A path that leaves the vault is one more thing we cannot check: nothing
+    // out there is a note this clip could have written, and the soft contract
+    // says so with `unknown` rather than with a failure — before any read.
+    if (target === null) return "unknown";
     const dir = dirname(target);
     const base = basename(target).slice(0, -3);
     const fresh = since - CLIP_MTIME_SLACK_MS;
