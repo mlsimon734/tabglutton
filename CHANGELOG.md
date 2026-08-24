@@ -4,6 +4,23 @@ All notable changes to Tabglutton are documented here.
 
 ## [0.4.1](https://github.com/mlsimon734/tabglutton/compare/v0.4.0...v0.4.1) (unreleased)
 
+- **Gullet's clip verification stays inside the vault.** The note path `tab_clip` reports comes
+  off the browser connection, and it was joined onto the vault directory unchecked — so a
+  `../`-laden path had Gullet list a directory elsewhere on disk, stat and read any note by that
+  name in it, and report a verdict on what it found: a weak existence oracle for anything holding
+  that connection (`SECURITY-REVIEW.md` §7). A path that resolves outside the vault now answers `unknown` before
+  anything is read, the same soft contract every other "cannot check" in that module follows.
+  No in-vault clip verdicts differently.
+- **A clip that extracts almost nothing now keeps its tab instead of filing junk and closing
+  it.** Waking a backlog is the traffic pattern most likely to draw a bot check, and a
+  challenge served at the parked URL has no translator, so it fell past the Zotero route and
+  Defuddle's extraction of "Just a moment…" counted as a successful clip. Anything under 512
+  characters of extracted text is refused: the tab is kept, and the popup's failure row reads
+  "too little content" with the character count and what to do about it. Where a known
+  interstitial signature matches too, the message says so outright. For agents, `tab_clip`
+  refuses the page with a new `thin-content` error while `tab_read` — which files and closes
+  nothing — still returns the text, with a `thin` note saying how little there was and
+  whether it looks like a challenge. ([#49](https://github.com/mlsimon734/tabglutton/issues/49))
 - Devour now dispatches up to three Zotero Connector saves at once instead of one at a time. That
   is the save step only — waking each tab and asking the Connector to identify it are unchanged
   and usually dominate a backlog run — and the speedup is reasoned from the serial timings rather
@@ -17,6 +34,44 @@ All notable changes to Tabglutton are documented here.
   Connector that cannot take a routed tab fails that clip with `zotero-failed` and leaves the tab
   open rather than falling back to Obsidian. Naming a `vault` in the call still overrides
   everything, and the wire protocol is unchanged.
+- **A "Copy diagnostics" button on the options page**, under a new Troubleshooting heading.
+  One click puts a paste-ready block on the clipboard: extension version and build target,
+  engine and its full version, platform, tab and duplicate counts, the scope and clip
+  destination, which of the three optional permissions are actually held, the bridge's state,
+  and the last ten bridge failures with the ones that repeated collapsed into a count. It
+  carries no bridge token, no page addresses and no tab titles — the block is assembled from
+  a fixed set of counts and enum values rather than from a settings object, so there is
+  nothing in it to redact. The bridge error log is session-scoped, which on Chrome means it
+  is empty after the service worker has idled out.
+- Site rules are user-editable on the options page — add, edit, remove, and reorder them;
+  the old built-in GitHub/Social entries are now just the seed, and first match (top to
+  bottom) wins. Patterns run through the same URL canonicalizer as Dedup and can pin a
+  path (`reddit.com/r/rust`), not just a host.
+- A rule can carry a disposition beyond a subfolder: never devour (the tab is kept open and
+  reported, never clipped — the agent bridge respects this too), close without saving (with
+  the same undo toast a dedup close gets), or always send to Zotero (skipping the
+  Connector's detection, whether or not detection-based routing is on).
+- Rule dispositions are visible before they act: matching tabs carry a pill in the popup
+  and the Devour cockpit, and the cockpit inspector names the rule, its disposition, and
+  the folder it files into.
+- A rule can also carry a tab-group name and colour, and the cockpit's new Group button
+  writes that grouping into the browser's own tab strip — preview first, always: nothing
+  moves that the preview did not show. Unmatched tabs are left alone (no fallback
+  clustering), pinned tabs are excluded because grouping silently unpins them, a skip
+  list parks sites that must never be reordered, and grouping never moves a tab between
+  windows. Needs the new `tabGroups` permission, which browsers do not surface in the
+  install prompt.
+- **Tabglutton remembers what it has clipped.** Every successful clip — Devour, the bridge's
+  `tab_clip`, Obsidian, a markdown file, or a Zotero save — is recorded under the same
+  normalized URL dedup uses, so a page filed from a newsletter link is still recognised when
+  it turns up from a group chat. The Devour cockpit marks those rows and can filter the list
+  down to either half, and `tabs_list` carries a `clipped` field so an agent stops paying to
+  re-read pages already filed. The mark says **clipped**, never "in your vault": a `launched`
+  clip means the handoff was made, and only `verified` means something that can see the
+  filesystem saw the note — the browser watching a download complete, or Gullet finding the
+  note in the vault, which it now tells the extension about. Neither is a claim about what is
+  on disk now; notes get moved and deleted. The memory holds 5000 pages, dropping the
+  least recently clipped first.
 
 ## [0.4.0](https://github.com/mlsimon734/tabglutton/compare/v0.3.1...v0.4.0) (2026-08-21)
 
