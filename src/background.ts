@@ -8,6 +8,7 @@ import { BridgeClient, type BridgeStatus } from "./bridge-client.js";
 import { BridgeMethodRunner, isHttpUrl } from "./bridge-methods.js";
 import { getBrowserInfoOnce } from "./browser-info.js";
 import { clipDownloadPath, saveClipFile, type SavedClipFile } from "./clip-file.js";
+import { thinClipVerdict, type ClipGuardReason, type ThinClipVerdict } from "./clip-guard.js";
 import {
   markdownForClip,
   OBSIDIAN_HANDOFF_GAP_MS,
@@ -71,6 +72,8 @@ export interface BridgeStatusChangedMessage {
 
 export type ClipFailureReason =
   | "extract-failed"
+  /** The page was read fine and had almost nothing on it — see `clip-guard.ts`. */
+  | ClipGuardReason
   | "trigger-failed"
   | "vault-missing"
   | "zotero-failed"
@@ -145,6 +148,26 @@ export interface ClipCurrentResponse {
   ok: boolean;
   payload?: ClipPayload;
   error?: string;
+  /**
+   * Set when the guard refused an extraction that had in fact succeeded, so a
+   * caller can tell it from an extraction that failed. The bridge needs the
+   * distinction twice over: `readTab` answers a failure by asking whether site
+   * access is held, and reporting a missing grant for a page it just read would
+   * name the wrong problem and hand over a remedy that fixes nothing — and
+   * `tab_read`, which files and closes nothing, wants the verdict as a label
+   * rather than as a refusal.
+   *
+   * The refused text hangs off the verdict rather than staying on `payload`, so
+   * `ok` and `payload` keep agreeing everywhere and the only way to reach a junk
+   * extraction is to name the verdict. `BridgeExtractResult` mirrors this shape.
+   * Diverging them fails the build, though not from one spot: the `extract` dep
+   * assignment below catches anything the bridge requires that this does not
+   * supply, and the reverse fails at `guardExtraction`'s own literal or at
+   * `thinRead`. Measured, all four ways. An optional field added to one side
+   * alone does compile — harmless while nothing sets or reads it, and the reason
+   * the claim here is "diverging fails the build" rather than a named enforcer.
+   */
+  guarded?: ThinClipVerdict & { payload: ClipPayload };
 }
 
 interface ClipCurrentResultMessage extends ClipCurrentResponse {
@@ -491,6 +514,28 @@ interface ClipTabOptions {
   wake: boolean;
 }
 
+/**
+ * The one place a successful extraction can be refused, and it is here rather
+ * than in either caller because both of them reach a page through `clipTab`:
+ * Devour's phase 1 and the bridge runner's `extract` dep. A guard per
+ * destination would be three guards, and the destination is not what is wrong.
+ *
+ * **The refused text moves onto the verdict, and `payload` goes away with `ok`.**
+ * Two guardrails rather than one: a caller that writes branches on `ok` and
+ * stops, and a caller that ignores `ok` anyway finds nothing to file, because
+ * reaching the junk text now means naming `guarded` and having read why it is
+ * there. `tab_read` is the one caller that does — it files nothing and closes
+ * nothing, #49 risks neither, and refusing it would cost an agent every
+ * legitimately short page with no way through, to withhold text it can judge for
+ * itself. Opting in by name is exactly the property this shape buys.
+ */
+function guardExtraction(res: ClipCurrentResponse): ClipCurrentResponse {
+  if (!res.ok || !res.payload) return res;
+  const verdict = thinClipVerdict(res.payload);
+  if (!verdict) return res;
+  return { ok: false, error: verdict.message, guarded: { ...verdict, payload: res.payload } };
+}
+
 async function clipTab(
   tabId?: number,
   { wake }: ClipTabOptions = { wake: true },
@@ -521,7 +566,7 @@ async function clipTab(
       target: { tabId: tab.id },
       files: ["src/clip-current.js"],
     });
-    return await resultPromise;
+    return guardExtraction(await resultPromise);
   } catch (err) {
     const pending = pendingClips.get(requestId);
     if (pending) {
@@ -873,7 +918,11 @@ async function clipSelectedTabs(requestedTabIds: number[]): Promise<ClipSelected
       }
       const res = extract.res;
       if (!res.ok || !res.payload) {
-        fail("extract-failed", res.error);
+        // A guarded extraction is reported under its own reason so the failure
+        // row says what happened and its Retry button is worth pressing after
+        // the user has cleared the challenge. Nothing is closed either way —
+        // this is the same `continue` an extract failure has always taken.
+        fail(res.guarded?.reason ?? "extract-failed", res.error);
         console.warn("[tabglutton] clip failed for tab", tabId, res.error);
         continue;
       }
