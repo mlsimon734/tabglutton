@@ -196,6 +196,19 @@ const bridgeRunner = new BridgeMethodRunner({
   load: ensureTabReady,
   openObsidianUrl,
   copyToClipboardViaTab,
+  // The bridge routes papers exactly as Devour does, through the same function,
+  // so the destination a user chose holds whichever surface the clip came from.
+  // No wake: waking is `tabs_load`'s own gated act, and `zoteroDestination`
+  // never navigates — `destinationForTab` is where the popup's wake lives.
+  routesToZotero: async (tabId) => {
+    const destination = await zoteroDestination(tabId);
+    if (destination === null) return false;
+    // A Connector that could not answer is reported as such, never flattened
+    // into "not a paper" — that `false` would file a paper into Obsidian.
+    if (destination.kind === "failed") throw new Error(destination.detail);
+    return destination.kind === "zotero";
+  },
+  saveToZotero: (tabId) => saveTabToZotero(settings.zoteroConnectorId, tabId),
 });
 
 const bridge = new BridgeClient({
