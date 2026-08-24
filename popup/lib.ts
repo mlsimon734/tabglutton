@@ -280,6 +280,8 @@ export function reasonLabel(reason: ClipFailureReason): string {
   switch (reason) {
     case "extract-failed":
       return "extract failed";
+    case "thin-content":
+      return "too little content";
     case "trigger-failed":
       return "open failed";
     case "vault-missing":

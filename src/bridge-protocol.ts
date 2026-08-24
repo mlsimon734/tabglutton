@@ -229,7 +229,18 @@ export type BridgeErrorCode =
   | "not-found"
   | "tab-discarded"
   | "extract-failed"
+  /**
+   * The page was read, and carried too little to be a clip — most often a bot
+   * check served at the address the tab was parked at (`src/clip-guard.ts`).
+   * Distinct from "extract-failed" because the remedy is a person clearing the
+   * challenge, not anything the agent can retry into. Purely additive: codes
+   * cross the wire as opaque strings that Gullet forwards rather than switches
+   * on, so an older sidecar prints this one unchanged and BRIDGE_PROTO holds.
+   */
+  | "thin-content"
   | "vault-missing"
+  /** A tab the user routes to Zotero, which the Connector could not take. */
+  | "zotero-failed"
   | "unsupported"
   /** The capability exists but the user has not switched it on. Distinct from
    * "unsupported" on purpose: this one has a fix the agent can tell them. */
@@ -881,6 +892,19 @@ export interface TabReadParams {
   tabId: number;
 }
 
+/**
+ * Said of a read whose page carried too little to be a clip. A label, not a
+ * refusal — `tab_read` files and closes nothing, so it hands the agent the text
+ * along with the reason to distrust it. `tab_clip`, which would file and close,
+ * refuses the same page with the `thin-content` error instead.
+ */
+export interface ThinReadNote {
+  /** Characters of visible text, by the extension's own count. */
+  chars: number;
+  /** A known bot-check signature matched as well. */
+  challengeSuspect: boolean;
+}
+
 export interface TabReadResult {
   tabId: number;
   title: string;
@@ -891,6 +915,8 @@ export interface TabReadResult {
   site: string;
   wordCount: number;
   markdown: string;
+  /** Only when the page was too thin to clip. Additive: absent is the norm. */
+  thin?: ThinReadNote;
 }
 
 export interface TabClipParams {
@@ -900,7 +926,9 @@ export interface TabClipParams {
   /**
    * File into this vault instead of the configured one, for this call only.
    * Nothing is persisted — the next clip goes back to settings. Naming a vault
-   * also names Obsidian as the destination, for a user whose setting is `file`.
+   * also names Obsidian as the destination, for a user whose setting is `file`,
+   * and it outranks Zotero routing for the same reason: a destination the
+   * caller asked for outright is not a destination to be routed away from.
    */
   vault?: string;
 }
@@ -914,6 +942,12 @@ export interface TabClipParams {
  * Declared here rather than in `storage.ts` because it now crosses the wire:
  * both halves of a clip's report — which destination filed it, and who is in a
  * position to confirm it — are the same distinction.
+ *
+ * Zotero is deliberately not a member. This is the *setting*, and the setting is
+ * a choice between the two note destinations; Zotero is a per-tab routing
+ * outcome that overrides whichever of them is configured (see
+ * `ZoteroClipResult`). Widening this type would put "Zotero" where the options
+ * page offers no such radio.
  */
 export type ClipDestination = "obsidian" | "file";
 
@@ -921,9 +955,14 @@ export type ClipDestination = "obsidian" | "file";
  * Who established that a clip is on disk. Nothing is closed over a clip nobody
  * could confirm, so this says whose word the close rests on.
  *
- * - `browser` — the file destination, and the download was **seen** to reach
- *   `state: "complete"`. The extension watched it land, which is the one thing
- *   it can never do for Obsidian.
+ * - `browser` — the extension watched the filing happen, which is the one thing
+ *   it can never do for Obsidian. Two destinations can say it: a file whose
+ *   download was **seen** to reach `state: "complete"`, and a Zotero save the
+ *   Connector answered `status: "saved"` for. The second is weaker in one
+ *   stated way — it is the Connector's word that its own save resolved, not an
+ *   inspection of the resulting library item, and nothing outside Zotero can
+ *   supply that — but it is the same evidence the popup's Devour closes a
+ *   routed tab on, and it is the strongest that path has.
  * - `gullet` — the Obsidian destination, verified against the vault on disk by
  *   the sidecar (see gullet/src/clip-verify.ts). The extension never reports
  *   this: an `obsidian://` handoff is unobservable from inside the browser.
@@ -947,7 +986,8 @@ interface TabClipFiling {
   /**
    * Where the note went. Vault-relative and extension-less for Obsidian (which
    * appends `.md`); the absolute path the browser reported writing, for a file.
-   * Only a file clip can lack it — see `FileClipResult`.
+   * A file clip can lack it (see `FileClipResult`) and a Zotero clip never has
+   * one — no note is written, and the Connector names no library item.
    */
   file?: string;
   /**
@@ -1001,7 +1041,24 @@ export interface FileClipResult extends TabClipFiling {
   file?: string;
 }
 
-export type TabClipResult = ObsidianClipResult | FileClipResult;
+/**
+ * A tab the Zotero Connector took, because the user routes papers there and
+ * this tab was one (`zoteroDestination` in background.ts — the same routing the
+ * popup's Devour runs, so the two surfaces cannot disagree about a verdict; they
+ * differ only in that the bridge may not wake a tab to obtain one).
+ *
+ * It carries no `file` and no `vault`: nothing here writes a note, and the
+ * Connector's reply names no library item. `confirmedBy` is `"browser"` and
+ * cannot be anything else — the save either resolved, which is what licenses
+ * the close, or the call failed with `zotero-failed` and no result at all.
+ * There is consequently nothing for Gullet to verify, and it does not try.
+ */
+export interface ZoteroClipResult extends TabClipFiling {
+  destination: "zotero";
+  confirmedBy: "browser";
+}
+
+export type TabClipResult = ObsidianClipResult | FileClipResult | ZoteroClipResult;
 
 export interface TabsCloseParams {
   tabIds: number[];

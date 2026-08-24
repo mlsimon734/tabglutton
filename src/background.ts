@@ -9,6 +9,8 @@ import { BridgeMethodRunner, isHttpUrl } from "./bridge-methods.js";
 import type { ClipMark } from "./bridge-protocol.js";
 import { getBrowserInfoOnce } from "./browser-info.js";
 import { clipDownloadPath, saveClipFile, type SavedClipFile } from "./clip-file.js";
+import { thinClipVerdict, type ClipGuardReason, type ThinClipVerdict } from "./clip-guard.js";
+import type { DiagnosticsBackgroundFacts } from "./diagnostics.js";
 import {
   loadClipMemory,
   lookupClip,
@@ -56,6 +58,7 @@ export type ReopenTabsMessage = {
 };
 export type OpenCockpitMessage = { type: "open-cockpit" };
 export type GetBridgeStatusMessage = { type: "get-bridge-status" };
+export type GetDiagnosticsMessage = { type: "get-diagnostics" };
 export type IncomingMessage =
   | GetScopedTabsMessage
   | ClipSelectedTabsMessage
@@ -65,7 +68,15 @@ export type IncomingMessage =
   | FocusTabMessage
   | ReopenTabsMessage
   | OpenCockpitMessage
-  | GetBridgeStatusMessage;
+  | GetBridgeStatusMessage
+  | GetDiagnosticsMessage;
+
+/**
+ * Everything the diagnostics block needs that only this page knows — the bridge
+ * client's state and its error log, and the tab counts. The options page adds
+ * the permission grants and renders; see `collectDiagnostics`.
+ */
+export type GetDiagnosticsResponse = DiagnosticsBackgroundFacts;
 
 export interface GetBridgeStatusResponse {
   status: BridgeStatus;
@@ -81,6 +92,8 @@ export interface BridgeStatusChangedMessage {
 
 export type ClipFailureReason =
   | "extract-failed"
+  /** The page was read fine and had almost nothing on it — see `clip-guard.ts`. */
+  | ClipGuardReason
   | "trigger-failed"
   | "vault-missing"
   | "zotero-failed"
@@ -166,6 +179,26 @@ export interface ClipCurrentResponse {
   ok: boolean;
   payload?: ClipPayload;
   error?: string;
+  /**
+   * Set when the guard refused an extraction that had in fact succeeded, so a
+   * caller can tell it from an extraction that failed. The bridge needs the
+   * distinction twice over: `readTab` answers a failure by asking whether site
+   * access is held, and reporting a missing grant for a page it just read would
+   * name the wrong problem and hand over a remedy that fixes nothing — and
+   * `tab_read`, which files and closes nothing, wants the verdict as a label
+   * rather than as a refusal.
+   *
+   * The refused text hangs off the verdict rather than staying on `payload`, so
+   * `ok` and `payload` keep agreeing everywhere and the only way to reach a junk
+   * extraction is to name the verdict. `BridgeExtractResult` mirrors this shape.
+   * Diverging them fails the build, though not from one spot: the `extract` dep
+   * assignment below catches anything the bridge requires that this does not
+   * supply, and the reverse fails at `guardExtraction`'s own literal or at
+   * `thinRead`. Measured, all four ways. An optional field added to one side
+   * alone does compile — harmless while nothing sets or reads it, and the reason
+   * the claim here is "diverging fails the build" rather than a named enforcer.
+   */
+  guarded?: ThinClipVerdict & { payload: ClipPayload };
 }
 
 interface ClipCurrentResultMessage extends ClipCurrentResponse {
@@ -174,6 +207,31 @@ interface ClipCurrentResultMessage extends ClipCurrentResponse {
 }
 
 let settings: Settings = defaults();
+/**
+ * The initial load, and the thing to await before reading `settings`.
+ *
+ * This page is an event page on Gecko and a service worker on Chrome, so a
+ * runtime message is frequently what *wakes* it — arriving while the load is
+ * still in flight, when `settings` is still the defaults. For most handlers
+ * that is a scope or a folder being briefly wrong; for the diagnostics block it
+ * would freeze "bridge off, no token, clips to obsidian" into a paste, at the
+ * exact moment someone is filing a report about an install that had been
+ * sitting idle.
+ *
+ * It owns the load rather than signalling one, so there is no path on which it
+ * never settles — a rejected `storage.local.get` would otherwise hang every
+ * awaiting handler forever, which is a worse answer than the stale one this
+ * exists to prevent. A failed load leaves the defaults standing, as before.
+ * Await *this*, never `init()` — the badge pass at the end of init costs
+ * seconds on a thousand-tab backlog.
+ */
+const settingsReady: Promise<void> = (async () => {
+  try {
+    settings = await loadSettings();
+  } catch (err) {
+    console.warn("[tabglutton] initial settings load failed; using defaults", err);
+  }
+})();
 // Only the connected/not-connected split reaches the badge, so that is all we
 // mirror; `bridge.status` stays the source of truth for anyone who asks.
 let bridgeConnected = false;
@@ -194,6 +252,19 @@ const bridgeRunner = new BridgeMethodRunner({
   load: ensureTabReady,
   openObsidianUrl,
   copyToClipboardViaTab,
+  // The bridge routes papers exactly as Devour does, through the same function,
+  // so the destination a user chose holds whichever surface the clip came from.
+  // No wake: waking is `tabs_load`'s own gated act, and `zoteroDestination`
+  // never navigates — `destinationForTab` is where the popup's wake lives.
+  routesToZotero: async (tabId) => {
+    const destination = await zoteroDestination(tabId);
+    if (destination === null) return false;
+    // A Connector that could not answer is reported as such, never flattened
+    // into "not a paper" — that `false` would file a paper into Obsidian.
+    if (destination.kind === "failed") throw new Error(destination.detail);
+    return destination.kind === "zotero";
+  },
+  saveToZotero: (tabId) => saveTabToZotero(settings.zoteroConnectorId, tabId),
 });
 
 const bridge = new BridgeClient({
@@ -515,6 +586,28 @@ interface ClipTabOptions {
   wake: boolean;
 }
 
+/**
+ * The one place a successful extraction can be refused, and it is here rather
+ * than in either caller because both of them reach a page through `clipTab`:
+ * Devour's phase 1 and the bridge runner's `extract` dep. A guard per
+ * destination would be three guards, and the destination is not what is wrong.
+ *
+ * **The refused text moves onto the verdict, and `payload` goes away with `ok`.**
+ * Two guardrails rather than one: a caller that writes branches on `ok` and
+ * stops, and a caller that ignores `ok` anyway finds nothing to file, because
+ * reaching the junk text now means naming `guarded` and having read why it is
+ * there. `tab_read` is the one caller that does — it files nothing and closes
+ * nothing, #49 risks neither, and refusing it would cost an agent every
+ * legitimately short page with no way through, to withhold text it can judge for
+ * itself. Opting in by name is exactly the property this shape buys.
+ */
+function guardExtraction(res: ClipCurrentResponse): ClipCurrentResponse {
+  if (!res.ok || !res.payload) return res;
+  const verdict = thinClipVerdict(res.payload);
+  if (!verdict) return res;
+  return { ok: false, error: verdict.message, guarded: { ...verdict, payload: res.payload } };
+}
+
 async function clipTab(
   tabId?: number,
   { wake }: ClipTabOptions = { wake: true },
@@ -545,7 +638,7 @@ async function clipTab(
       target: { tabId: tab.id },
       files: ["src/clip-current.js"],
     });
-    return await resultPromise;
+    return guardExtraction(await resultPromise);
   } catch (err) {
     const pending = pendingClips.get(requestId);
     if (pending) {
@@ -771,7 +864,14 @@ function clipBlocked(blocked: ClipBlockedReason): ClipSelectedTabsResponse {
   return { failed: 0, obsidianSaved: 0, fileSaved: 0, zoteroSaved: 0, blocked, failures: [] };
 }
 
-async function clipSelectedTabs(tabIds: number[]): Promise<ClipSelectedTabsResponse> {
+async function clipSelectedTabs(requestedTabIds: number[]): Promise<ClipSelectedTabsResponse> {
+  // Deduped once, before anything routes, counts or acts. Phase 1's map already
+  // collapses a repeated id to one entry, so a duplicate would be routed once
+  // and then *reported* twice by the loop below — one save counted as two, and a
+  // second `tabs.remove` against a tab that is already gone. `total` would be
+  // wrong by the same amount. `parseTabsCloseParams` dedupes its input for the
+  // same reason.
+  const tabIds = [...new Set(requestedTabIds)];
   const vault = settings.obsidianVault.trim();
   if (!hasClipDestination(settings)) return clipBlocked("no-destination");
   // `downloads` is optional and revocable from the browser's own add-on UI, so
@@ -821,10 +921,29 @@ async function clipSelectedTabs(tabIds: number[]): Promise<ClipSelectedTabsRespo
     ),
   );
 
-  // Phase 2: dispatch in selection order. Connector saves are serialized so
-  // progress/selection UI from two papers cannot race. Obsidian remains serial
-  // because clipboard mode uses the global OS clipboard; the 200ms gap also
-  // keeps its URI handler reliable.
+  // Phase 2: report in selection order. Connector saves are the one part of it
+  // that overlaps — all of them handed over here, so one is already in flight
+  // while the loop below is still filing earlier tabs. `saveTabToZotero` owns
+  // the ceiling (ZOTERO_SAVE_CONCURRENCY), because the Connector is shared with
+  // the bridge and a per-run pool here would only bound this run.
+  //
+  // Everything the loop does itself stays serial: Obsidian because clipboard
+  // mode uses the global OS clipboard (and the 200ms gap keeps its URI handler
+  // reliable), and each close because the results are reported in order.
+  //
+  // Started in selection order and awaited in it too, so a save finishing early
+  // changes nothing an agent or the popup can see: same counts, same failure
+  // order, same progress ticks.
+  const zoteroSaves = new Map<number, Promise<void>>();
+  for (const tabId of tabIds) {
+    if (prepared.get(tabId)?.destination.kind !== "zotero") continue;
+    const save = saveTabToZotero(settings.zoteroConnectorId, tabId);
+    // The loop below is the real handler; this only keeps a save that rejects
+    // before its turn from surfacing as an unhandled rejection in the console.
+    save.catch(() => {});
+    zoteroSaves.set(tabId, save);
+  }
+
   const total = tabIds.length;
   const broadcastProgress = (completed: number): void => {
     const msg: ClipProgressMessage = { type: "clip-progress", completed, total };
@@ -854,9 +973,14 @@ async function clipSelectedTabs(tabIds: number[]): Promise<ClipSelectedTabsRespo
         continue;
       }
 
-      if (destination.kind === "zotero") {
+      // The dispatch above holds exactly the Zotero-bound tabs, so its entry is
+      // what selects this branch — no second predicate to fall out of step with
+      // it. Awaited here rather than there, which is what keeps the counts and
+      // the failure order reading exactly as a serial run's.
+      const save = zoteroSaves.get(tabId);
+      if (save) {
         try {
-          await saveTabToZotero(settings.zoteroConnectorId, tabId);
+          await save;
         } catch (err) {
           fail("zotero-failed", errorMessage(err));
           console.warn("[tabglutton] Zotero save failed for tab", tabId, err);
@@ -882,7 +1006,11 @@ async function clipSelectedTabs(tabIds: number[]): Promise<ClipSelectedTabsRespo
       }
       const res = extract.res;
       if (!res.ok || !res.payload) {
-        fail("extract-failed", res.error);
+        // A guarded extraction is reported under its own reason so the failure
+        // row says what happened and its Retry button is worth pressing after
+        // the user has cleared the challenge. Nothing is closed either way —
+        // this is the same `continue` an extract failure has always taken.
+        fail(res.guarded?.reason ?? "extract-failed", res.error);
         console.warn("[tabglutton] clip failed for tab", tabId, res.error);
         continue;
       }
@@ -1098,9 +1226,107 @@ browser.runtime.onMessage.addListener(async (rawMsg: unknown): Promise<unknown> 
       };
       return response;
     }
+    case "get-diagnostics":
+      return collectDiagnostics();
   }
   return undefined;
 });
+
+/**
+ * The half of the diagnostics block this page owns.
+ *
+ * Deliberately assembled field by field out of `settings` rather than spread
+ * from it: `Settings` carries `bridgeToken`, a spread would carry it into a
+ * block whose whole purpose is to be pasted into a public issue, and a later
+ * field added to `Settings` would be published by a spread without anyone
+ * deciding to publish it. Same reason `loggableSettings` exists a few lines
+ * down. Nothing here reads a tab's URL or title either — `queryScopedTabs`
+ * returns whole tabs, and only their count leaves this function.
+ *
+ * The grants are not read here on purpose: `permissions.contains` is a
+ * WebExtension API call, every one of them resets Chrome's 30s MV3 idle timer,
+ * and the options page can ask the same question without touching this worker's
+ * clock at all.
+ */
+async function collectDiagnostics(): Promise<GetDiagnosticsResponse> {
+  // The message that asked for this may be what woke the page — see
+  // `settingsReady`. Reading `settings` before it resolves would report the
+  // defaults as though they were the user's configuration.
+  await settingsReady;
+  const inScope = (await queryScopedTabs()).filter(tabInScope);
+  const all = await browser.tabs.query({});
+  // Counted over the same list `tabsInScope` reports, so the two numbers in the
+  // block cannot disagree. That still matches the badge: `refreshBadge` groups
+  // the unfiltered scoped list, and the only tabs `tabInScope` drops beyond it
+  // have no URL, which `groupDuplicates` skips anyway.
+  const duplicates = groupDuplicates(inScope, normalizeOptsFrom(settings)).reduce(
+    (n, group) => n + (group.tabs.length - 1),
+    0,
+  );
+  return {
+    engine: await engineLabel(),
+    platform: await platformLabel(),
+    tabsInScope: inScope.length,
+    tabsTotal: all.length,
+    duplicates,
+    windows: new Set(all.map((tab) => tab.windowId)).size,
+    scope: settings.scope,
+    clipDestination: settings.clipDestination,
+    zoteroRouting: settings.zoteroRoutingEnabled,
+    bridge: {
+      enabled: settings.bridgeEnabled,
+      hasToken: settings.bridgeToken.length > 0,
+      portMode: settings.bridgePortMode,
+      fixedPort: settings.bridgePort,
+      status: bridge.status,
+      connectedPort: bridge.connectedPort,
+      allowTabLoad: settings.bridgeAllowTabLoad,
+      errors: bridge.recentErrors,
+    },
+  };
+}
+
+/** Chrome's client-hints surface, which the DOM lib does not declare. */
+interface UserAgentData {
+  getHighEntropyValues?: (hints: string[]) => Promise<{ uaFullVersion?: string }>;
+}
+
+/**
+ * Gecko answers with a name and version outright; Chrome has no
+ * `getBrowserInfo`, so the version comes from client hints, falling back to the
+ * user-agent string. The fallback is the poorer answer on purpose rather than
+ * by accident: Chrome's UA reduction freezes the last three parts, so it
+ * reports `151.0.0.0` for what is really `151.0.7922.174` — measured on 151 —
+ * and a build number is exactly what makes a bug report reproducible.
+ *
+ * Every branch can come up empty, and "unknown" is a better line in a report
+ * than a confidently wrong one.
+ */
+async function engineLabel(): Promise<string> {
+  if (!IS_CHROME) {
+    const info = await getBrowserInfoOnce();
+    if (info?.name) return info.version ? `${info.name} ${info.version}` : info.name;
+    return "Firefox (version unknown)";
+  }
+  const uaData = (navigator as Navigator & { userAgentData?: UserAgentData }).userAgentData;
+  try {
+    const full = (await uaData?.getHighEntropyValues?.(["uaFullVersion"]))?.uaFullVersion;
+    if (full) return `Chrome ${full}`;
+  } catch (err) {
+    console.warn("[tabglutton] client-hint version lookup failed", err);
+  }
+  const version = /Chrome\/([\d.]+)/.exec(navigator.userAgent)?.[1];
+  return version ? `Chrome ${version}` : "Chrome (version unknown)";
+}
+
+async function platformLabel(): Promise<string> {
+  try {
+    const { os, arch } = await browser.runtime.getPlatformInfo();
+    return `${os} ${arch}`;
+  } catch {
+    return "unknown";
+  }
+}
 
 const COCKPIT_URL = browser.runtime.getURL("popup/devour.html");
 
@@ -1140,7 +1366,7 @@ browser.runtime.onInstalled.addListener(async (details) => {
 });
 
 void (async function init() {
-  settings = await loadSettings();
+  await settingsReady;
   // Dial before the tab-heavy work below, not after. This is an event page: the
   // browser re-runs init on every wake, including the wakes the reconnect alarm
   // causes, so anything ahead of `start()` is paid again on every single
