@@ -8,12 +8,14 @@
 // before it happens.
 
 import { clipContentHash } from "./clip-hash.js";
+import type { ThinClipVerdict } from "./clip-guard.js";
 import { clipDownloadPath, saveClipFile, type SavedClipFile } from "./clip-file.js";
 import { markdownForClip, OBSIDIAN_HANDOFF_GAP_MS, resolveClipRequest } from "./clip-format.js";
 import type { ClipPayload } from "./clip-format.js";
 import {
   BridgeRequestError,
   errorMessage,
+  parseClipConfirmParams,
   parseTabClipParams,
   parseTabReadParams,
   parseTabsCloseParams,
@@ -23,11 +25,13 @@ import {
   parseUndoCloseParams,
   TABS_LOAD_DEADLINE_MS,
   type BridgeErrorCode,
-  type BridgeMethod,
   type BridgeTab,
+  type BridgeWireMethod,
+  type ClipMark,
   type ClosedTabEntry,
   type FileClipResult,
   type ObsidianClipResult,
+  type TabClipParams,
   type TabClipResult,
   type TabLoadOutcome,
   type TabReadResult,
@@ -35,11 +39,21 @@ import {
   type TabsListResult,
   type TabsLoadResult,
   type UndoCloseResult,
+  type ZoteroClipResult,
 } from "./bridge-protocol.js";
+import {
+  clipMarkFor,
+  loadClipMemory,
+  lookupClip,
+  recordClip,
+  type ClipMemory,
+  type ClipTarget,
+} from "./clip-memory.js";
+import type { NormalizeOpts } from "./normalize.js";
 import { getFilePlatformOnce } from "./platform.js";
 import { createTaskQueue, delay } from "./serialize.js";
 import { pickRule, ruleLabel, type SiteRule } from "./site-rules.js";
-import { clipDestinationFor, type Settings } from "./storage.js";
+import { clipDestinationFor, normalizeOptsFrom, type Settings } from "./storage.js";
 import { CLIP_ORIGINS, DOWNLOADS_REMEDY, downloadsGrant, hasOrigins } from "./permissions.js";
 import { IS_CHROME } from "./target.js";
 import {
@@ -93,6 +107,15 @@ export interface BridgeExtractResult {
   ok: boolean;
   payload?: ClipPayload;
   error?: string;
+  /**
+   * The extraction itself succeeded and was refused for being too thin to be a
+   * clip (`src/clip-guard.ts`); `ok` is false and the refused text hangs off the
+   * verdict, not off `payload`. Its own field rather than an `error` prefix,
+   * because `readTab` has to branch on it before it starts diagnosing a failure
+   * that did not happen. Mirrors `ClipCurrentResponse` in `background.ts`, whose
+   * comment records where a divergence between the two actually fails.
+   */
+  guarded?: ThinClipVerdict & { payload: ClipPayload };
 }
 
 export interface BridgeMethodDeps {
@@ -107,6 +130,22 @@ export interface BridgeMethodDeps {
   load: (tabId: number, timeoutMs: number) => Promise<void>;
   openObsidianUrl: (url: string) => Promise<void>;
   copyToClipboardViaTab: (tabId: number, text: string) => Promise<boolean>;
+  /**
+   * Ask the Zotero Connector whether this tab is one it should take — the very
+   * same question the popup's Devour asks, injected rather than re-derived so
+   * the verdict cannot drift and every Connector wire detail stays in
+   * `src/zotero.ts`, where an upstream change to the API has one place to land.
+   *
+   * Only the Connector's verdict; whether the user routes papers at all is the
+   * caller's to check, because that answer also decides whether the tab is
+   * touched in the first place.
+   *
+   * Rejects when the Connector could not answer. Never a `false`: the caller
+   * must not read "I could not ask" as "this is not a paper".
+   */
+  routesToZotero: (tabId: number) => Promise<boolean>;
+  /** Save a routed tab through the Connector. Resolves only on a confirmed save. */
+  saveToZotero: (tabId: number) => Promise<void>;
 }
 
 /**
@@ -140,6 +179,20 @@ const NO_INJECTION_TARGET_ERROR = "missing host permission for the tab";
  */
 const NO_INJECTION_TARGET_HINT =
   "Firefox reports this whenever no frame accepted the injection: the page may have been navigating, or it may be one the engine keeps closed to extensions (its own add-on, support, and account sites). The host grant is held, so a second failure means this page cannot be read.";
+
+/**
+ * Appended when routing could not get a verdict. Two different failures reach
+ * it and the wording has to hold for both: the Connector could not be reached
+ * at all (absent, disabled, wrong ID, or this extension not in its allowlist),
+ * or it was reached and answered `detecting` until the poll ran out — which is
+ * a property of the one tab, not of the install. Hence the conditional: the
+ * remedies are worth naming because none of them are visible from the engine's
+ * own message ("Could not establish connection" reads like a transient miss),
+ * and worth qualifying because telling someone to reinstall the Connector that
+ * just answered them is worse than saying nothing.
+ */
+const ZOTERO_UNREACHABLE_HINT =
+  "Tabglutton could not get a verdict from the Zotero Connector for this tab, so it was left open rather than filed somewhere the user did not choose. A tab that was still loading can do this on its own. If it happens for every tab, ask the user to check that the Connector is installed and enabled, that the Connector ID in Tabglutton's settings matches it, and that Tabglutton's own extension ID is listed in the Connector's externalAPI.allowedExtensions preference.";
 
 /** Pure so the engine-string gate can be pinned without a browser harness. */
 export function isNoInjectionTargetError(message: string | undefined): boolean {
@@ -183,7 +236,16 @@ export function isHttpUrl(url: string | undefined): boolean {
   return url?.startsWith("http://") === true || url?.startsWith("https://") === true;
 }
 
-function toBridgeTab(tab: browser.tabs.Tab): BridgeTab | null {
+/**
+ * `memory` and `opts` come from the caller rather than being read here: a
+ * listing maps up to a few thousand tabs and the memory is one `storage.local`
+ * read for all of them.
+ */
+function toBridgeTab(
+  tab: browser.tabs.Tab,
+  memory: ClipMemory,
+  opts: NormalizeOpts,
+): BridgeTab | null {
   const url = tabUrl(tab);
   if (tab.id === undefined || url === undefined) return null;
   const bridgeTab: BridgeTab = {
@@ -204,6 +266,8 @@ function toBridgeTab(tab: browser.tabs.Tab): BridgeTab | null {
   if (tab.active) bridgeTab.active = true;
   // Chrome has no `tab.hidden` at all, so there it is never a signal either way.
   if (!IS_CHROME && tab.hidden === true) bridgeTab.hidden = true;
+  const clipped = lookupClip(memory, url, opts);
+  if (clipped) bridgeTab.clipped = clipMarkFor(clipped);
   return bridgeTab;
 }
 
@@ -456,7 +520,7 @@ export class BridgeMethodRunner {
     this.deps = deps;
   }
 
-  async run(method: BridgeMethod, params: unknown): Promise<unknown> {
+  async run(method: BridgeWireMethod, params: unknown): Promise<unknown> {
     switch (method) {
       case "tabs_list":
         return this.tabsList(params);
@@ -470,7 +534,25 @@ export class BridgeMethodRunner {
         return this.tabsClose(params);
       case "undo_close":
         return this.undoClose(params);
+      case "clip_confirm":
+        return this.clipConfirm(params);
     }
+  }
+
+  /**
+   * Gullet found the note this extension could only report having launched.
+   * Raises that page's clip memory to `verified` — see `ClipConfirmParams` for
+   * why the sidecar is the only party that can say so, and
+   * `BRIDGE_SIDECAR_METHODS` for why no agent can.
+   *
+   * Obsidian by construction: it is sent only after a vault check, because the
+   * file destination is confirmed by the browser that watched the download and
+   * Gullet deliberately verifies nothing there.
+   */
+  private async clipConfirm(raw: unknown): Promise<{ recorded: true }> {
+    const { url } = parseClipConfirmParams(raw);
+    await this.noteClip(url, "verified", "obsidian");
+    return { recorded: true };
   }
 
   private async tabsList(raw: unknown): Promise<TabsListResult> {
@@ -479,7 +561,11 @@ export class BridgeMethodRunner {
       params.scope === "current-window"
         ? await browser.tabs.query({ currentWindow: true })
         : await queryAllTabs();
-    const mapped = tabs.map(toBridgeTab).filter((t): t is BridgeTab => t !== null);
+    const memory = await loadClipMemory();
+    const opts = normalizeOptsFrom(this.deps.getSettings());
+    const mapped = tabs
+      .map((tab) => toBridgeTab(tab, memory, opts))
+      .filter((t): t is BridgeTab => t !== null);
     // `groupBy` counts every match, so truncating here would corrupt the counts.
     // Gullet does the grouping, over every browser at once — and the full list
     // crossing loopback costs nothing, unlike the same list crossing into a
@@ -590,11 +676,14 @@ export class BridgeMethodRunner {
   }
 
   /**
-   * Reads through the same Defuddle clipper the popup uses. Discarded tabs
-   * cannot host a content script and are reported with a distinct code so the
-   * agent can say "needs manual load" instead of retrying.
+   * The tab a read or a clip can actually act on: an id that still resolves, an
+   * http(s) page, and a document that is loaded. Separate from `readTab` because
+   * Zotero routing has to clear the same three before it asks the Connector
+   * anything — the Connector's answer for a discarded tab is a two-second
+   * detection poll ending in "still detecting", where the honest reply is the
+   * one already written here.
    */
-  private async readTab(tabId: number): Promise<ClipPayload> {
+  private async loadedTab(tabId: number): Promise<browser.tabs.Tab> {
     const tab = await getTabOrFail(tabId);
     // Deliberately the committed `tab.url`, not the `tabUrl` fallback: a tab
     // still resolving its `pendingUrl` has no document to extract, and `wake` is
@@ -608,7 +697,45 @@ export class BridgeMethodRunner {
         `Tab ${tabId} is unloaded, so its content cannot be read. Wake it with tabs_load and read it again; if that reports the capability is off, the tab needs a manual load.`,
       );
     }
+    return tab;
+  }
+
+  /**
+   * What the thin-content guard means depends on who asked, so the caller says.
+   *
+   * `tab_clip` refuses: it would file a junk note and close the tab, which is
+   * #49 exactly. `tab_read` does not: it files nothing and closes nothing, so
+   * refusing would cost an agent every legitimately short page — a
+   * one-paragraph issue, a link post, a docs page that is mostly code — with no
+   * override, in order to withhold text the agent can judge for itself. It takes
+   * the text and the label instead.
+   */
+  private thinRead(
+    guarded: ThinClipVerdict & { payload: ClipPayload },
+    refuseThin: boolean,
+  ): { payload: ClipPayload; guarded: ThinClipVerdict } {
+    if (refuseThin) fail(guarded.reason, guarded.message);
+    return { payload: guarded.payload, guarded };
+  }
+
+  /**
+   * Reads through the same Defuddle clipper the popup uses. Discarded tabs
+   * cannot host a content script and are reported with a distinct code so the
+   * agent can say "needs manual load" instead of retrying.
+   */
+  private async readTab(
+    tabId: number,
+    { refuseThin }: { refuseThin: boolean },
+  ): Promise<{ payload: ClipPayload; guarded?: ThinClipVerdict }> {
+    await this.loadedTab(tabId);
     let result = await this.deps.extract(tabId);
+    // Ahead of everything below, because none of it applies: the injection ran
+    // and the page answered, so site access is plainly held and there is no
+    // second document arriving to make a retry worth its 250ms. Both of those
+    // checks would name a problem this page does not have and hand the agent a
+    // remedy that cannot fix it. Reached before `tabClip` gets to its close, so
+    // a refused clip leaves the tab open — the disposition #49 asks for.
+    if (result.guarded) return this.thinRead(result.guarded, refuseThin);
     if (!result.ok || !result.payload) {
       // Asked only once extraction has already failed, so a read costs no extra
       // IPC in the normal case. Site access is optional on Chrome and only a
@@ -626,7 +753,14 @@ export class BridgeMethodRunner {
       if (isNoInjectionTargetError(result.error)) {
         await delay(TRANSIENT_EXTRACT_RETRY_MS);
         result = await this.deps.extract(tabId);
-        if (result.ok && result.payload) return result.payload;
+        // The retry goes through the same guard, and this is the likeliest way
+        // to meet one: a challenge swapping documents is exactly what makes the
+        // first attempt report no injection target. Checked again rather than
+        // left to fall through, where it would earn "extract-failed" plus a hint
+        // insisting the page can never be read — both wrong, and the hint
+        // contradicts the message it would be glued to.
+        if (result.guarded) return this.thinRead(result.guarded, refuseThin);
+        if (result.ok && result.payload) return { payload: result.payload };
         fail(
           "extract-failed",
           `${result.error ?? "Extraction failed."} ${NO_INJECTION_TARGET_HINT}`,
@@ -635,12 +769,12 @@ export class BridgeMethodRunner {
 
       fail("extract-failed", result.error ?? "Extraction failed.");
     }
-    return result.payload;
+    return { payload: result.payload };
   }
 
   private async tabRead(raw: unknown): Promise<TabReadResult> {
     const { tabId } = parseTabReadParams(raw);
-    const payload = await this.readTab(tabId);
+    const { payload, guarded } = await this.readTab(tabId, { refuseThin: false });
     return {
       tabId,
       title: payload.title,
@@ -651,40 +785,32 @@ export class BridgeMethodRunner {
       site: payload.site,
       wordCount: payload.wordCount,
       markdown: payload.markdown,
+      ...(guarded
+        ? { thin: { chars: guarded.chars, challengeSuspect: guarded.challengeSuspect } }
+        : {}),
     };
   }
 
   /**
    * File a tab the way the popup's Devour would, into whichever destination the
-   * user chose. The two are not interchangeable in what they can promise: the
-   * download is confirmed on disk before this returns, while the `obsidian://`
-   * handoff is unobservable from here and is left for Gullet to confirm.
+   * user chose. The three are not interchangeable in what they can promise: a
+   * download is confirmed on disk and a Connector save is confirmed by Zotero
+   * before this returns, while the `obsidian://` handoff is unobservable from
+   * here and is left for Gullet to confirm.
    */
   private async tabClip(raw: unknown): Promise<TabClipResult> {
     const params = parseTabClipParams(raw);
     const settings = this.deps.getSettings();
-    const destination = clipDestinationFor(settings, params.vault);
-    // An override stands alone: it is the destination the caller named, so a
-    // vault the user has not configured is not a reason to refuse. Resolved
-    // *before* `readTab` — a clip with nowhere to go must not spend a Defuddle
-    // injection, and on a page the engine keeps closed to extensions the
-    // injection failure would arrive first and hand the agent
-    // NO_INJECTION_TARGET_HINT's retry advice for a problem a retry cannot fix.
-    const vault = destination === "obsidian" ? (params.vault ?? settings.obsidianVault.trim()) : "";
-    if (destination === "obsidian" && !vault) {
-      fail(
-        "vault-missing",
-        "No Obsidian vault is configured in Tabglutton's settings, and clips are not set to save as files either.",
-      );
-    }
 
     // A never-devour rule is the user's standing refusal, and it outranks the
     // agent's request the way it outranks the popup's Devour button — refused
-    // from tab metadata, before a Defuddle injection is spent on it. The other
-    // dispositions do not reroute an explicit tab_clip: the agent asked for a
-    // clip, and a rule silently closing the tab or re-aiming the note instead
-    // would be the tool acting on its own. A metadata read that throws is left
-    // for readTab below, which owns the missing-tab error and its hint.
+    // from tab metadata, before a Connector round trip or a Defuddle injection
+    // is spent on it. Ahead of Zotero routing deliberately: a routed save still
+    // files and closes the tab, which is exactly what the rule forbids. The
+    // other dispositions do not reroute an explicit tab_clip: the agent asked
+    // for a clip, and a rule silently closing the tab or re-aiming the note
+    // instead would be the tool acting on its own. A metadata read that throws
+    // is left for readTab below, which owns the missing-tab error and its hint.
     let metaUrl = "";
     try {
       metaUrl = tabUrl(await browser.tabs.get(params.tabId)) ?? "";
@@ -700,7 +826,38 @@ export class BridgeMethodRunner {
       );
     }
 
-    const payload = await this.readTab(params.tabId);
+    // Zotero routing runs next, and runs the *same* routing the popup's Devour
+    // does. An agent clearing a backlog for a user who routes papers to Zotero
+    // must not quietly file them into Obsidian instead
+    // ([#50](https://github.com/mlsimon734/tabglutton/issues/50)) — a
+    // destination the user chose is the user's, whichever surface the clip came
+    // from. The one thing that outranks it is an explicit `vault`, which is a
+    // destination the caller asked for outright rather than a setting.
+    const routed = params.vault ? null : await this.zoteroClip(params.tabId, settings);
+    if (routed) return this.closeAfterClip(params, routed);
+
+    const destination = clipDestinationFor(settings, params.vault);
+    // An override stands alone: it is the destination the caller named, so a
+    // vault the user has not configured is not a reason to refuse. Resolved
+    // *before* `readTab` — a clip with nowhere to go must not spend a Defuddle
+    // injection, and on a page the engine keeps closed to extensions the
+    // injection failure would arrive first and hand the agent
+    // NO_INJECTION_TARGET_HINT's retry advice for a problem a retry cannot fix.
+    const vault = destination === "obsidian" ? (params.vault ?? settings.obsidianVault.trim()) : "";
+    if (destination === "obsidian" && !vault) {
+      // Named against what the user has actually configured: with routing on
+      // they do have a working destination, just not one this tab qualified for,
+      // and the popup's own message says so rather than reading as "nothing is
+      // set up".
+      fail(
+        "vault-missing",
+        settings.zoteroRoutingEnabled
+          ? "This tab was not an academic Zotero item, no Obsidian vault is configured in Tabglutton's settings, and clips are not set to save as files either."
+          : "No Obsidian vault is configured in Tabglutton's settings, and clips are not set to save as files either.",
+      );
+    }
+
+    const { payload } = await this.readTab(params.tabId, { refuseThin: true });
     const rule = pickRule(payload.url, settings.siteRules);
     const content = markdownForClip(payload);
 
@@ -708,10 +865,21 @@ export class BridgeMethodRunner {
       destination === "file"
         ? await this.fileClip(params.tabId, payload, rule, content, settings)
         : await this.obsidianClip(params.tabId, payload, rule, content, settings, vault);
+    return this.closeAfterClip(params, filed);
+  }
+
+  /**
+   * Honour `close` once the tab has been filed somewhere. Shared by all three
+   * destinations, because the reason a close may not fail the call is the same
+   * for each: the item is already saved, so a close that does not happen is a
+   * partial success and a thrown `tab_clip` would only provoke a duplicate.
+   */
+  private async closeAfterClip<T extends TabClipResult>(
+    params: TabClipParams,
+    filed: T,
+  ): Promise<T> {
     if (!params.close) return filed;
 
-    // Nothing past here fails the call: the note is already filed, so a close
-    // that does not happen is a partial success, not a failure.
     const batchId = await this.recordForClose(params.tabId);
     if (batchId === null) return filed;
 
@@ -730,6 +898,59 @@ export class BridgeMethodRunner {
       }
     }
     return { ...filed, closed: true, batchId };
+  }
+
+  /**
+   * The Zotero destination: hand the tab to the Connector, which owns the page
+   * and its translator state. `null` when the tab is not one Zotero should take
+   * — routing off, or a page the Connector does not read as scholarly — and the
+   * caller falls through to the note destinations.
+   *
+   * Nothing is extracted: a paper needs neither Defuddle nor Tabglutton's host
+   * permission, exactly as in Devour's phase 1. The result is `confirmedBy:
+   * "browser"` because a Connector save that resolved is the closest anything in
+   * the browser gets to proof, and the popup already closes a routed tab on it.
+   *
+   * Same routing function as the popup, but **not** the same precondition, and
+   * the difference is a real one: Devour wakes a tab before asking, and this
+   * cannot — waking is `tabs_load`'s own gated act. A discarded tab is therefore
+   * refused outright rather than asked about, but a tab that is loaded and still
+   * navigating is asked, and the Connector can answer `ready` with no translator
+   * for it. That verdict is "not a paper", so such a tab files as a note. The
+   * detection poll makes the window narrow rather than absent.
+   */
+  private async zoteroClip(tabId: number, settings: Settings): Promise<ZoteroClipResult | null> {
+    if (!settings.zoteroRoutingEnabled) return null;
+    // Ahead of the Connector, not after it: routing asks about a live document,
+    // and a discarded tab would otherwise spend the detection poll to arrive at
+    // an answer this already has a remedy for.
+    const tab = await this.loadedTab(tabId);
+
+    let routed: boolean;
+    try {
+      routed = await this.deps.routesToZotero(tabId);
+    } catch (err) {
+      // Never a fallthrough to Obsidian. The user asked for papers to go to
+      // Zotero, and "the Connector could not say whether this is one" is not
+      // permission to file it somewhere else — the popup fails the tab here too.
+      fail("zotero-failed", `${errorMessage(err)} ${ZOTERO_UNREACHABLE_HINT}`);
+    }
+    if (!routed) return null;
+
+    try {
+      await this.deps.saveToZotero(tabId);
+    } catch (err) {
+      fail("zotero-failed", errorMessage(err));
+    }
+
+    return {
+      tabId,
+      title: tab.title ?? "",
+      url: tab.url ?? "",
+      destination: "zotero",
+      confirmedBy: "browser",
+      closed: false,
+    };
   }
 
   /**
@@ -763,6 +984,11 @@ export class BridgeMethodRunner {
       return request.file;
     });
 
+    // Launched, never verified: this is the destination whose handoff cannot be
+    // observed from here. Gullet raises it with `clip_confirm` if the note
+    // turns up in the vault.
+    await this.noteClip(payload.url, "launched", "obsidian");
+
     return {
       tabId,
       title: payload.title,
@@ -774,6 +1000,15 @@ export class BridgeMethodRunner {
       confirmedBy: "nobody",
       closed: false,
     };
+  }
+
+  /**
+   * Note one clip in the clip memory. Never throws — `recordClip` swallows its
+   * own failures, and a filed note must not be reported as a failed clip
+   * because remembering it did not work.
+   */
+  private async noteClip(url: string, state: ClipMark, destination: ClipTarget): Promise<void> {
+    await recordClip({ url, state, destination }, normalizeOptsFrom(this.deps.getSettings()));
   }
 
   /**
@@ -827,6 +1062,13 @@ export class BridgeMethodRunner {
         `The clip could not be written to the download folder: ${errorMessage(err)}`,
       );
     }
+
+    // The browser watched this download reach `state: "complete"`, which is the
+    // same evidence `confirmedBy: "browser"` rests on and the strongest anything
+    // in the extension can produce. An erased record proves nothing, so that
+    // case is remembered as `launched` — the file may well be there, and this is
+    // exactly the distinction the two states exist to keep.
+    await this.noteClip(payload.url, saved.confirmed ? "verified" : "launched", "file");
 
     return {
       tabId,

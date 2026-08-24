@@ -14,14 +14,22 @@ easy to say and worth being specific about.
 Everything Tabglutton stores lives in your browser's local extension storage
 (`browser.storage.local`) on your own machine. It is never synced or transmitted.
 
-| Data               | Why it exists                                                          |
-| ------------------ | ---------------------------------------------------------------------- |
-| Your settings      | Vault name, URL-normalization preferences, scope, clip mode            |
-| Agent bridge token | Authenticates the local bridge, if you enable it                       |
-| Undo log           | Title, URL, window and position of recently closed tabs, so Undo works |
+| Data               | Why it exists                                                            |
+| ------------------ | ------------------------------------------------------------------------ |
+| Your settings      | Vault name, URL-normalization preferences, scope, clip mode              |
+| Agent bridge token | Authenticates the local bridge, if you enable it                         |
+| Undo log           | Title, URL, window and position of recently closed tabs, so Undo works   |
+| Clip memory        | The address of each page you have clipped, so it can be marked next time |
 
 The undo log is what makes every close reversible. It holds only the metadata needed to
 reopen a tab — never page content — and it is trimmed as it ages.
+
+The clip memory is what lets a second pass over a backlog skip what you already filed. It
+holds a canonicalized form of the address, when it was clipped, where it went, and whether
+anything confirmed the note on disk — no titles, no page content. It keeps the 5000 most
+recently clipped pages and forgets the oldest beyond that, which at a steady handful of
+clips a day is a couple of years. There is no button to clear it short of uninstalling; if
+that matters to you, it is worth knowing before you rely on it.
 
 Uninstalling the extension removes all of it.
 
@@ -77,7 +85,7 @@ reads is governed by that agent's own privacy policy, not this one.
 | `<all_urls>` (`*://*/*`) | Inject the Defuddle extractor into whichever page you choose to clip. Tabglutton cannot know in advance which sites those are. |
 | `scripting`              | Run that extractor in the page you selected.                                                                                   |
 | `activeTab`              | Clip the current tab from the popup.                                                                                           |
-| `storage`                | Persist the settings and undo log described above.                                                                             |
+| `storage`                | Persist the settings, undo log and clip memory described above.                                                                |
 | `clipboardWrite`         | Hand a long note body to Obsidian, which a `obsidian://` URL cannot carry.                                                     |
 | `alarms`                 | Drive the agent bridge's reconnect timer. Unused when the bridge is off.                                                       |
 | `downloads` (optional)   | Write the clip as a markdown file, only if you pick that destination. Never requested otherwise, and revocable at any time.    |

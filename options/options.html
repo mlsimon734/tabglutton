@@ -495,6 +495,28 @@
         </div>
       </section>
 
+      <section>
+        <h2 class="section-title">Troubleshooting</h2>
+
+        <!-- The id is the scroll target for the CDP screenshot harness this
+             project requires for a visible-surface change, not a script hook. -->
+        <div class="setting block" id="diagnosticsBlock">
+          <div class="setting-text">
+            <strong>Copy diagnostics</strong>
+            <small>
+              Puts a short summary of this install on the clipboard — versions, tab counts, bridge
+              state and its recent errors — ready to paste into a bug report. It contains no page
+              addresses, no tab titles and never your bridge token.
+            </small>
+          </div>
+          <div class="setting-control">
+            <button type="button" id="diagnosticsCopy" class="mini-button self-start">
+              Copy diagnostics
+            </button>
+          </div>
+        </div>
+      </section>
+
       <p class="rerun-row">
         <a id="rerunOnboarding" href="#">Re-run setup walkthrough</a>
       </p>
