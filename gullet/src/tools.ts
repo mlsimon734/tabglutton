@@ -187,7 +187,7 @@ export const GULLET_TOOLS: readonly McpTool[] = [
     name: "tab_read",
     title: "Read a tab's content",
     description:
-      "Extract one open tab as clean markdown via Defuddle, with title, author, published date, description, site, and word count. Only works on loaded http(s) tabs: a discarded tab fails with tab-discarded and needs the user to open it manually. Does not navigate, click, or change the page.",
+      "Extract one open tab as clean markdown via Defuddle, with title, author, published date, description, site, and word count. Only works on loaded http(s) tabs: a discarded tab fails with tab-discarded and needs the user to open it manually. Does not navigate, click, or change the page.\n\nA `thin` field means the page carried too little to be worth filing — with `challengeSuspect: true` it matched a bot-check signature, so what you are reading is most likely a Cloudflare or CAPTCHA interstitial standing where the real page was, not the page itself. You still get the text; judge it rather than trusting it, and note that tab_clip refuses the same page outright.",
     inputSchema: {
       type: "object",
       properties: {
@@ -203,7 +203,7 @@ export const GULLET_TOOLS: readonly McpTool[] = [
     name: "tab_clip",
     title: "File a tab as a markdown note",
     description:
-      'Save a tab as a markdown note with frontmatter — exactly what the Tabglutton popup\'s Devour does, including per-site subfolders. Where it lands is the user\'s setting, not your choice: either their Obsidian vault or a markdown file in their download folder. The result says which under `destination` ("obsidian" or "file"), with `file` giving the note path — vault-relative for Obsidian, the absolute path on disk for a file — and `vault` naming the vault when there is one. Set close: true to close the tab afterwards; that close is undoable via the returned batchId. Filing alone changes nothing in the browser — the tool is annotated destructive because close: true removes the tab.\n\nNo tab is closed over a clip nobody could confirm, and `confirmedBy` says whose word it rests on:\n• `"browser"` — file destination, and the browser was seen to finish writing the file. Nothing checks it further because nothing is better placed to.\n• `"gullet"` — Obsidian destination, and a fresh note for this page was found in the vault. With a `contentHash` in the result that note is this exact clip\'s text, so it holds even against another agent session clipping the same URL at the same moment; without one it means only "a fresh note for this page landed just now".\n• `"nobody"` — nobody could check. For Obsidian that is an unreadable or unknown vault: the clip was still handed over, and the close, if asked for, still happened. For a file it means the browser had already erased the download\'s record, so there is no proof and no `file` path either — that tab is deliberately left open, with `closeSkipped` saying so. Check the download folder before re-clipping; the note may well be there.\n\nAn Obsidian clip that provably never reached the vault, or that found a note whose text is not the one handed over, is reported as an error with the tab left open.',
+      'Save a tab as a markdown note with frontmatter — exactly what the Tabglutton popup\'s Devour does, including per-site subfolders. Where it lands is the user\'s setting, not your choice: their Obsidian vault, a markdown file in their download folder, or — for a paper, see below — their Zotero library. The result says which under `destination`, with `file` giving the note path — vault-relative for Obsidian, the absolute path on disk for a file — and `vault` naming the vault when there is one. Set close: true to close the tab afterwards; that close is undoable via the returned batchId. Filing alone changes nothing in the browser — the tool is annotated destructive because close: true removes the tab.\n\nA user who has switched on **Route papers to Zotero** gets a third destination, and it is chosen per tab rather than per user: if the Zotero Connector reads the page as a scholarly item or a PDF, the tab is saved to their Zotero library instead of being written as a note, and the result says `destination: "zotero"` with no `file` and no `vault`. That is the same routing the popup does, so a backlog you clear lands where their own clicks would have put it. Passing `vault` turns it off for that one call. If the Connector cannot take a routed tab the call fails with `zotero-failed` and the tab is left open — it is never quietly filed into Obsidian instead.\n\nNo tab is closed over a clip nobody could confirm, and `confirmedBy` says whose word it rests on:\n• `"browser"` — the file destination with the browser seen to finish writing the file, or the Zotero destination with the Connector reporting the save done. Nothing checks either further because nothing is better placed to; for Zotero that means the Connector\'s own word that its save completed, not an inspection of the library item.\n• `"gullet"` — Obsidian destination, and a fresh note for this page was found in the vault. With a `contentHash` in the result that note is this exact clip\'s text, so it holds even against another agent session clipping the same URL at the same moment; without one it means only "a fresh note for this page landed just now".\n• `"nobody"` — nobody could check. For Obsidian that is an unreadable or unknown vault: the clip was still handed over, and the close, if asked for, still happened. For a file it means the browser had already erased the download\'s record, so there is no proof and no `file` path either — that tab is deliberately left open, with `closeSkipped` saying so. Check the download folder before re-clipping; the note may well be there.\n\nAn Obsidian clip that provably never reached the vault, or that found a note whose text is not the one handed over, is reported as an error with the tab left open.',
     inputSchema: {
       type: "object",
       properties: {
@@ -216,7 +216,7 @@ export const GULLET_TOOLS: readonly McpTool[] = [
         vault: {
           type: "string",
           description:
-            "File into this vault instead of the configured one, for this call only — nothing is saved. Naming a vault also picks Obsidian as the destination, for a user whose setting files clips as markdown files. Use ONLY when the user names a destination vault themselves; never choose one on your own, and never guess at a name. Pass the exact name from Obsidian's vault switcher, not a path. Gullet rejects names missing from Obsidian's local registry when it can read that registry; an unavailable or unrecognised registry stays a soft check and does not block the clip.",
+            "File into this vault instead of the configured one, for this call only — nothing is saved. Naming a vault also picks Obsidian as the destination, for a user whose setting files clips as markdown files or routes papers to Zotero. Use ONLY when the user names a destination vault themselves; never choose one on your own, and never guess at a name. Pass the exact name from Obsidian's vault switcher, not a path. Gullet rejects names missing from Obsidian's local registry when it can read that registry; an unavailable or unrecognised registry stays a soft check and does not block the clip.",
         },
       },
       required: ["tabId"],
@@ -336,8 +336,8 @@ async function route(
  * verification, because the destination is in the answer and not in the
  * question: the only way to learn it is to make the call, and by then a
  * forwarded `close: true` would already have closed an Obsidian tab unverified.
- * A file clip pays one extra round trip for that; an unverified close is not a
- * price worth paying to save it.
+ * A file or Zotero clip pays one extra round trip for that; an unverified close
+ * is not a price worth paying to save it.
  */
 async function clipAndVerify(
   ctx: ToolContext,
@@ -367,6 +367,13 @@ async function clipAndVerify(
   // Only ever an upgrade of what the extension already reported. A file clip
   // arrives `confirmedBy: "browser"` and keeps it; an Obsidian clip arrives
   // `"nobody"` and earns `"gullet"` here or keeps it.
+  //
+  // A Zotero clip reaches neither branch, and that is the whole of its handling.
+  // The Connector answered `status: "saved"` or the call failed outright, so the
+  // result is already the browser's own confirmation — and Gullet does not speak
+  // to Zotero, so it could not check from here even if the answer were weaker.
+  // Anything else unrecognised falls to the Obsidian branch on purpose: refusing
+  // a close it cannot justify is the safe way to meet a newer extension.
   let upgrade: { confirmedBy?: ClipConfirmedBy } = {};
   if (result.destination === "file") {
     // Nothing to verify: the extension is the only party positioned to watch a
@@ -392,7 +399,7 @@ async function clipAndVerify(
           : {}),
       };
     }
-  } else {
+  } else if (result.destination !== "zotero") {
     const vault = typeof result.vault === "string" ? result.vault : "";
     // Neither half of the vault check has anything to work with. Refusing the
     // close is the only safe reading, and saying so beats a silent no-op: a

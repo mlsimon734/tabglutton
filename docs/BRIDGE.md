@@ -462,14 +462,14 @@ extension and Gullet so the contract is typechecked from one definition.
 
 ## Tool surface (v2)
 
-| MCP tool     | Backing APIs                                                                          | Notes                                                                                                                                                                                                                                                                                                        |
-| ------------ | ------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `tabs_list`  | `tabs.query`                                                                          | id, title, url, `windowId` (hoisted when shared), and — only when true — `lastAccessed`, `discarded`, `pinned`, `active`, `hidden`. Filtered with `query`, ordered with `sort`, capped by `limit`, or collapsed to counts with `groupBy: "domain"`. **On Zen, covers the active workspace only.** See below. |
-| `tabs_load`  | `tabs.reload` + `tabs.onUpdated`                                                      | Wakes discarded tabs so they can be read. Batched (≤20), three at a time, under a 30s deadline; per-tab `ready`/`pending`/`failed`. Gated on a settings toggle, default off — answers `not-enabled` until then.                                                                                              |
-| `tab_read`   | `scripting.executeScript` + existing `clip-current.ts`                                | Returns Defuddle markdown + metadata. Fails cleanly on discarded tabs (see below).                                                                                                                                                                                                                           |
-| `tab_clip`   | existing `clip-format.ts` + `obsidian://new` handoff, or `clip-file.ts` + `downloads` | Files exactly as manual Devour does, into whichever destination `clipDestination` names — the vault (including the extension-origin redirect-page dance on both engines) or a markdown file. An optional `vault` overrides the destination for that one call. See below.                                     |
-| `tabs_close` | `tabs.remove`                                                                         | Batched, ids deduplicated. Entries (title, url, pinned, window, index, private) are recorded in an undo log in `storage.local` _before_ the removal, and the batch id comes back with the result.                                                                                                            |
-| `undo_close` | reopen from the log                                                                   | Safety valve for the one destructive act. Omit the batch id to undo the most recent.                                                                                                                                                                                                                         |
+| MCP tool     | Backing APIs                                                                          | Notes                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| ------------ | ------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `tabs_list`  | `tabs.query`                                                                          | id, title, url, `windowId` (hoisted when shared), and — only when true — `lastAccessed`, `discarded`, `pinned`, `active`, `hidden`. Filtered with `query`, ordered with `sort`, capped by `limit`, or collapsed to counts with `groupBy: "domain"`. **On Zen, covers the active workspace only.** See below.                                                                                                                                                             |
+| `tabs_load`  | `tabs.reload` + `tabs.onUpdated`                                                      | Wakes discarded tabs so they can be read. Batched (≤20), three at a time, under a 30s deadline; per-tab `ready`/`pending`/`failed`. Gated on a settings toggle, default off — answers `not-enabled` until then.                                                                                                                                                                                                                                                          |
+| `tab_read`   | `scripting.executeScript` + existing `clip-current.ts`                                | Returns Defuddle markdown + metadata. Fails cleanly on discarded tabs (see below). An extraction under `MIN_CLIP_CONTENT_CHARS` of visible text — usually a bot check served at the parked URL — still returns, with a `thin` note saying how little there was and whether a challenge signature matched; a read files and closes nothing, so it labels rather than refuses. `tab_clip` refuses the same page with `thin-content`, before it can file or close anything. |
+| `tab_clip`   | existing `clip-format.ts` + `obsidian://new` handoff, or `clip-file.ts` + `downloads` | Files exactly as manual Devour does, into whichever destination `clipDestination` names — the vault (including the extension-origin redirect-page dance on both engines) or a markdown file — unless **Route papers to Zotero** is on and the Connector reads the tab as scholarly, which takes it instead. An optional `vault` overrides all of that for one call. See below.                                                                                           |
+| `tabs_close` | `tabs.remove`                                                                         | Batched, ids deduplicated. Entries (title, url, pinned, window, index, private) are recorded in an undo log in `storage.local` _before_ the removal, and the batch id comes back with the result.                                                                                                                                                                                                                                                                        |
+| `undo_close` | reopen from the log                                                                   | Safety valve for the one destructive act. Omit the batch id to undo the most recent.                                                                                                                                                                                                                                                                                                                                                                                     |
 
 Deliberately absent: navigate, click, type, evaluate.
 
@@ -505,6 +505,58 @@ Gullet still sends `close: false` for both destinations. The destination is in t
 not in the question, so forwarding the caller's `close: true` to find out would already have
 closed an Obsidian tab unverified. A file clip pays one extra round trip for that, which is
 the cheaper of the two mistakes.
+
+▸ **Zotero routing is the same routing, not a second one.** `tab_clip` ignored it until
+[#50](https://github.com/mlsimon734/tabglutton/issues/50): routing lived in
+`zoteroDestination` / `destinationForTab`, reached only from `clipSelectedTabs`, so an agent
+clearing a backlog for a user who had switched **Route papers to Zotero** on filed their
+papers into Obsidian — silently, since nothing reported a destination the user had not
+chosen. That is the same split the file destination had, and it gets the same answer: the
+setting is the user's answer to "where do papers go", and the bridge obeys it. The routing
+function is _injected_ (`routesToZotero` in `BridgeMethodDeps`) rather than re-derived, so
+the verdict cannot drift and every Connector wire detail stays in `src/zotero.ts` — which is
+also what insulates this from the upstream API question the POC is still waiting on
+(`docs/ZOTERO_POC.md`).
+
+**The same function is not the same precondition, though, and that gap is real.** Devour
+wakes a tab before asking the Connector, precisely because asking a backlog tab early yields
+a translator-less `ready` that routes to Obsidian silently. The bridge cannot wake: that is
+`tabs_load`'s own gated act, and a read must never navigate as a side effect. So a discarded
+tab is refused outright (`tab-discarded`, with `tabs_load` as the remedy) rather than asked
+about — but a tab that is _loaded and still navigating_ is asked, and can be answered
+`ready` with no translator and filed as a note. `ZOTERO_DETECTION_ATTEMPTS` polling for two
+seconds makes that window narrow; it does not close it. Waking on the bridge's behalf would,
+and is the wrong trade.
+
+A Zotero clip is `destination: "zotero"` with `confirmedBy: "browser"`, no `file` and no
+`vault`. Nothing is extracted: the Connector owns the page and its translator state, so a
+paper costs neither a Defuddle injection nor Tabglutton's host permission — exactly as in
+Devour's phase 1. `confirmedBy` is `"browser"` because the Connector answered
+`status: "saved"`, which is the same evidence the popup closes a routed tab on; it is the
+Connector's word that its own save resolved rather than an inspection of the library item,
+and nothing outside Zotero can supply the latter. Gullet therefore verifies nothing here —
+unlike the file destination, where it _could_ look and declines to, it genuinely cannot: it
+does not speak to Zotero. A save that fails raises `zotero-failed` and leaves the tab open;
+routing never falls through to Obsidian, because a paper quietly filed into the wrong place
+is the bug, not the remedy.
+
+The routing check comes _before_ the vault-missing check and needs a loaded tab, so a
+discarded tab is reported `tab-discarded` — the Connector's answer for one is a two-second
+detection poll ending in "still detecting", where "wake it with `tabs_load`" is the remedy
+the agent can act on. The `vault` override still outranks everything: it is a destination
+the caller stated outright.
+
+This did **not** move `BRIDGE_PROTO`. Nothing became mandatory on either end — an older
+extension never sends `"zotero"`, and a newer one meeting an older Gullet degrades in the
+safe direction rather than misreporting anything. Which degradation depends on how old: a
+Gullet carrying the current verification branch puts the unrecognised destination on the
+Obsidian path, finds no vault and no file, and answers `closed: false` with a `closeSkipped`
+that names the wrong destination; one older than the file destination hits the guard in the
+paragraph below and returns the raw result with the close silently swallowed. Either way the
+tab stays open and the save is still reported. A protocol bump is a hard cut with no
+downgrade, and trading a stale sentence for cutting every older sidecar off entirely is the
+worse of the two. `gullet/tests/tools.test.ts` pins the branch this rests on, with a
+`destination: "future"` result that must be refused rather than waved through.
 
 ▸ **A Gullet older than the extension swallows a file clip's close.** Its guard is
 `if (!result || !vault || !file) return raw`, and a file-destination result carries no
