@@ -7,6 +7,8 @@
 
 interface BrowserInfo {
   name?: string;
+  /** Only the diagnostics block reads this; the bridge label wants the name alone. */
+  version?: string;
 }
 
 let cached: Promise<BrowserInfo | undefined> | null = null;

@@ -1,4 +1,5 @@
 import type { ClipFailureReason, ClipSelectedTabsResponse, PopupTab } from "../src/background.js";
+import { clipMarkFor, type ClipMemoryEntry, type ClipTarget } from "../src/clip-memory.js";
 import { groupDuplicates, pickKeeper } from "../src/dedup.js";
 import { normalizeOptsFrom, type Settings } from "../src/storage.js";
 
@@ -112,14 +113,96 @@ export function extraTabIds(groups: TabGroup[]): number[] {
   return ids;
 }
 
+/**
+ * Which side of the clip memory the list is showing. `unclipped` is the second
+ * pass over a backlog — everything already filed drops out of the way — and
+ * `clipped` is the other half of the same question, the tabs that can go.
+ */
+export type ClipFilter = "all" | "clipped" | "unclipped";
+
+export function clipFilterMatches(tab: PopupTab, filter: ClipFilter): boolean {
+  if (filter === "all") return true;
+  return filter === "clipped" ? tab.clipped !== undefined : tab.clipped === undefined;
+}
+
+function clipTargetLabel(destination: ClipTarget): string {
+  switch (destination) {
+    case "obsidian":
+      return "Obsidian";
+    case "file":
+      return "a file in the download folder";
+    case "zotero":
+      return "Zotero";
+  }
+}
+
+/**
+ * The pill's text. "Clipped" is the whole claim — never "in your vault", which
+ * the extension cannot know: a refused `obsidian://` launch looks exactly like a
+ * taken one from in here. The tick separates the two states without asserting
+ * anything more, and `clipMarkTitle` spells out what it means.
+ */
+export function clipMarkLabel(entry: ClipMemoryEntry): string {
+  return clipMarkFor(entry) === "verified" ? "clipped ✓" : "clipped";
+}
+
+/**
+ * Built once rather than per row: a cockpit list runs to hundreds of rows, and
+ * `toLocaleDateString` with an options bag rebuilds the formatter on each call.
+ * The year is always shown — a conditional one would save four characters and
+ * cost a second formatter.
+ */
+let dateFormat: Intl.DateTimeFormat | null = null;
+function formatDay(at: number): string {
+  dateFormat ??= new Intl.DateTimeFormat(undefined, {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+  });
+  return dateFormat.format(new Date(at));
+}
+
+/**
+ * The hover text behind the pill, where the honest version has room to live.
+ *
+ * The two facts are reported separately on purpose. `at` and `destination`
+ * describe the **most recent** clip, while `verifiedAt` is when a note was last
+ * actually seen — and those can be different clips to different destinations.
+ * Folding them into one sentence let a sticky `verified` claim a disk sighting
+ * on the day of a handoff nothing observed.
+ */
+export function clipMarkTitle(entry: ClipMemoryEntry): string {
+  const clipped = `Clipped to ${clipTargetLabel(entry.destination)} on ${formatDay(entry.at)}.`;
+  const evidence =
+    entry.verifiedAt === undefined
+      ? "The handoff was launched — nothing could confirm the note reached disk."
+      : entry.verifiedAt === entry.at
+        ? "The note was seen on disk then."
+        : `A note for this page was seen on disk on ${formatDay(entry.verifiedAt)}.`;
+  // One sentence reached by every branch rather than a copy per branch. It is
+  // the disclaimer that keeps even a verified mark from reading as a claim
+  // about now, so a reworded copy on one path is a claim quietly overstated.
+  const since = "It may have been moved or deleted since.";
+  return `${clipped} ${evidence} ${since}`;
+}
+
 export function visibleGroups(
   scopedTabs: PopupTab[],
   filter: string,
   settings: Settings | null,
   stickyOrder?: readonly string[] | null,
+  clipFilter: ClipFilter = "all",
 ): TabGroup[] {
   const ts = tokens(filter);
-  const matching = new Set(scopedTabs.filter((tab) => tabMatches(tab, ts)).map((t) => t.id));
+  // Both filters answer the same question — is this row worth looking at — so
+  // they narrow the same set, and duplicate sets go on being found across the
+  // whole scope and shown whole. A clip filter that split a set would pin `keep`
+  // on a copy Dedup is about to close, exactly as a text filter would.
+  const matching = new Set(
+    scopedTabs
+      .filter((tab) => tabMatches(tab, ts) && clipFilterMatches(tab, clipFilter))
+      .map((t) => t.id),
+  );
 
   // Duplicate sets are found across the whole scope and shown *whole* as soon as
   // one copy matches the filter. Detecting them among the matching tabs instead
@@ -197,6 +280,8 @@ export function reasonLabel(reason: ClipFailureReason): string {
   switch (reason) {
     case "extract-failed":
       return "extract failed";
+    case "thin-content":
+      return "too little content";
     case "trigger-failed":
       return "open failed";
     case "vault-missing":

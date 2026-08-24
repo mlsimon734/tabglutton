@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test";
-import { BridgeRequestError, type BridgeMethod } from "../../src/bridge-protocol.js";
+import { BridgeRequestError, type BridgeWireMethod } from "../../src/bridge-protocol.js";
 import type { ObsidianVaultLookup } from "../src/obsidian-vaults.js";
 import type { ConnectionSummary } from "../src/select.js";
 import { createToolCaller, GULLET_TOOLS, type ToolContext } from "../src/tools.js";
@@ -7,7 +7,7 @@ import { chrome, zen } from "./fixtures.js";
 
 interface Sent {
   connectionId: string;
-  method: BridgeMethod;
+  method: BridgeWireMethod;
   params: unknown;
 }
 
@@ -351,6 +351,66 @@ describe("tab-scoped tools", () => {
     });
   });
 
+  // The verdict exists only here — the browser cannot see a vault — and before
+  // clip_confirm it was spent on the close and discarded, leaving the extension
+  // permanently unable to tell its two clip-memory states apart.
+  test("tab_clip tells the extension when the note was really found", async () => {
+    const { call, sent } = caller(
+      [zen],
+      (s) =>
+        s.method === "tab_clip"
+          ? { file: "Clippings/Note", vault: "test", url: "https://example.com/a" }
+          : { closed: 1, batchId: "b7" },
+      { verifyClip: async () => "landed" },
+    );
+    await call("tab_clip", { tabId: 7, close: true });
+    expect(sent.map((x) => x.method)).toEqual(["tab_clip", "clip_confirm", "tabs_close"]);
+    expect(sent[1]?.params).toEqual({ url: "https://example.com/a" });
+  });
+
+  // The guarantee is that `route` gates on isBridgeMethod, which knows only the
+  // agent tools — pinning the type guards alone would not catch a future
+  // "unification" of the two lists, and a model able to call this could mark a
+  // page as provably filed by saying so.
+  test("an agent cannot call clip_confirm", async () => {
+    const { call, sent } = caller([zen], () => ({}));
+    const result = await call("clip_confirm", { url: "https://example.com/a" });
+    expect(result.isError).toBe(true);
+    expect(JSON.stringify(payload(result))).toContain("Unknown tool clip_confirm");
+    expect(sent).toEqual([]);
+  });
+
+  test("an unconfirmable clip is never reported to the extension as verified", async () => {
+    const { call, sent } = caller(
+      [zen],
+      () => ({ file: "Clippings/Note", vault: "test", url: "https://example.com/a" }),
+      { verifyClip: async () => "unknown" },
+    );
+    await call("tab_clip", { tabId: 7 });
+    expect(sent.map((x) => x.method)).toEqual(["tab_clip"]);
+  });
+
+  // An extension older than the method answers bad-request. The page is already
+  // remembered as launched and the close has its own evidence, so losing the
+  // upgrade costs precision and nothing else.
+  test("an extension that does not know clip_confirm does not fail the clip", async () => {
+    const { call } = caller(
+      [zen],
+      (s) => {
+        if (s.method === "clip_confirm") {
+          throw new BridgeRequestError("bad-request", "Unknown method clip_confirm.");
+        }
+        return s.method === "tab_clip"
+          ? { file: "Clippings/Note", vault: "test", url: "https://example.com/a" }
+          : { closed: 1, batchId: "b7" };
+      },
+      { verifyClip: async () => "landed" },
+    );
+    const result = await call("tab_clip", { tabId: 7, close: true });
+    expect(result.isError).toBeUndefined();
+    expect(payload(result)).toMatchObject({ confirmedBy: "gullet", closed: true, batchId: "b7" });
+  });
+
   test("tab_clip never claims a close tabs_close did not confirm", async () => {
     const { call } = caller(
       [zen],
@@ -527,6 +587,78 @@ describe("tab-scoped tools", () => {
     expect(JSON.stringify(payload(result))).toContain("closeSkipped");
     // No path is reported either — the same missing record is why.
     expect(payload(result)).not.toHaveProperty("file");
+    expect(sent.map((s) => s.method)).toEqual(["tab_clip"]);
+  });
+
+  // Issue #50: the popup routes papers to Zotero, so the bridge does too, and a
+  // Connector save that resolved is the browser's own confirmation. Gullet does
+  // not speak to Zotero and must not go looking in the vault for a note that was
+  // never written.
+  test("tab_clip closes a Zotero-routed clip without touching the vault", async () => {
+    let verified = false;
+    const { call, sent } = caller(
+      [zen],
+      (s) =>
+        s.method === "tab_clip"
+          ? {
+              tabId: 7,
+              title: "Attention Is All You Need",
+              url: "https://arxiv.org/abs/1706.03762",
+              destination: "zotero",
+              confirmedBy: "browser",
+              closed: false,
+            }
+          : { closed: 1, batchId: "b9" },
+      {
+        verifyClip: async () => {
+          verified = true;
+          return "missing";
+        },
+      },
+    );
+    const result = await call("tab_clip", { tabId: 7, close: true });
+    expect(result.isError).toBeUndefined();
+    expect(verified).toBe(false);
+    expect(payload(result)).toMatchObject({
+      destination: "zotero",
+      confirmedBy: "browser",
+      closed: true,
+      batchId: "b9",
+    });
+    expect(payload(result)).not.toHaveProperty("closeSkipped");
+    // Closed from here like every other destination, so the undo batch is the
+    // one `tabs_close` wrote.
+    expect(sent.map((s) => s.method)).toEqual(["tab_clip", "tabs_close"]);
+    expect(sent[0]).toMatchObject({ params: { tabId: 7, close: false } });
+  });
+
+  // The compatibility argument for not bumping BRIDGE_PROTO rests on this: a
+  // destination this Gullet has never heard of must land on the Obsidian path,
+  // where a close nothing can justify is refused, rather than being waved
+  // through the way "zotero" is.
+  test("tab_clip refuses to close a destination it does not recognise", async () => {
+    const { call, sent } = caller(
+      [zen],
+      () => ({ destination: "future", confirmedBy: "browser", closed: false }),
+      { verifyClip: async () => "landed" },
+    );
+    const result = await call("tab_clip", { tabId: 7, close: true });
+    expect(result.isError).toBeUndefined();
+    expect(payload(result)).toMatchObject({ destination: "future", closed: false });
+    expect(JSON.stringify(payload(result))).toContain("closeSkipped");
+    expect(sent.map((s) => s.method)).toEqual(["tab_clip"]);
+  });
+
+  test("tab_clip reports a Zotero-routed clip that was not asked to close", async () => {
+    const { call, sent } = caller(
+      [zen],
+      () => ({ destination: "zotero", confirmedBy: "browser", closed: false }),
+      { verifyClip: async () => "landed" },
+    );
+    expect(payload(await call("tab_clip", { tabId: 7 }))).toMatchObject({
+      destination: "zotero",
+      confirmedBy: "browser",
+    });
     expect(sent.map((s) => s.method)).toEqual(["tab_clip"]);
   });
 

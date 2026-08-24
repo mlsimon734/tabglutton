@@ -1,4 +1,8 @@
-import type { BridgeStatusChangedMessage, GetBridgeStatusResponse } from "../src/background.js";
+import type {
+  BridgeStatusChangedMessage,
+  GetBridgeStatusResponse,
+  GetDiagnosticsResponse,
+} from "../src/background.js";
 import type { BridgeStatus } from "../src/bridge-client.js";
 import {
   CONFIG_DIR_NAME,
@@ -7,11 +11,14 @@ import {
   generateToken,
   isBridgePort,
 } from "../src/bridge-protocol.js";
+import { renderDiagnostics, type DiagnosticsGrants } from "../src/diagnostics.js";
 import {
   BRIDGE_ORIGINS,
+  CLIP_ORIGINS,
   DOWNLOADS_REFUSED,
   DOWNLOADS_REVOKED,
   downloadsGrant,
+  originsGrant,
   requestDownloads,
   requestOrigins,
 } from "../src/permissions.js";
@@ -24,7 +31,7 @@ import {
   type ClipMode,
   type ScopeMode,
 } from "../src/storage.js";
-import { IS_CHROME } from "../src/target.js";
+import { IS_CHROME, TARGET } from "../src/target.js";
 import { vaultWarningFor } from "../src/vault-warning.js";
 import { DEFAULT_ZOTERO_CONNECTOR_ID } from "../src/zotero.js";
 
@@ -69,6 +76,7 @@ const bridgeStatusEl = document.getElementById("bridgeStatus") as HTMLSpanElemen
 const bridgeSnippet = document.getElementById("bridgeSnippet") as HTMLPreElement;
 const bridgeSnippetCopy = document.getElementById("bridgeSnippetCopy") as HTMLButtonElement;
 const bridgeLaunchCommand = document.getElementById("bridgeLaunchCommand") as HTMLElement;
+const diagnosticsCopy = document.getElementById("diagnosticsCopy") as HTMLButtonElement;
 
 function parseParams(text: string): string[] {
   return text
@@ -696,6 +704,63 @@ function updateVaultWarning(): void {
   vaultWarning.textContent = msg;
   vaultWarning.hidden = !msg;
 }
+
+// ---------- troubleshooting ----------
+
+/**
+ * The three grants, read from this page rather than from the background.
+ *
+ * That split is the whole reason the block is assembled here. Every
+ * `permissions.contains` resets Chrome's 30s MV3 idle timer, and asking from
+ * the service worker — which the diagnostics message has just woken — would
+ * hold it resident for another half minute each time someone clicks. An
+ * extension page's call never touches that clock, and this page has the click.
+ */
+async function diagnosticsGrants(): Promise<DiagnosticsGrants> {
+  const [sites, loopback, downloads] = await Promise.all([
+    originsGrant(CLIP_ORIGINS),
+    originsGrant(BRIDGE_ORIGINS),
+    downloadsGrant(),
+  ]);
+  return { sites, loopback, downloads };
+}
+
+/**
+ * A background page that will not answer is itself one of the likelier causes
+ * of the report being filed, so the block says so and carries the half it could
+ * gather rather than refusing to produce anything.
+ */
+async function diagnosticsText(): Promise<string> {
+  const grants = await diagnosticsGrants();
+  let facts: GetDiagnosticsResponse | undefined;
+  try {
+    facts = (await browser.runtime.sendMessage({ type: "get-diagnostics" })) as
+      | GetDiagnosticsResponse
+      | undefined;
+  } catch (err) {
+    console.warn("[tabglutton] diagnostics request failed", err);
+  }
+  return renderDiagnostics(
+    {
+      version: browser.runtime.getManifest().version,
+      target: TARGET,
+      grants,
+      background: facts,
+    },
+    Date.now(),
+  );
+}
+
+diagnosticsCopy.addEventListener("click", () => {
+  void (async () => {
+    // `clipboardWrite` is a declared permission, so the awaits above the write
+    // cannot cost it a gesture it never needed. They can still cost it the
+    // document's *focus* — click here, switch window, and Chrome refuses the
+    // write — which is why `copyText` reports a failure rather than assuming one
+    // cannot happen.
+    await copyText(await diagnosticsText(), "Diagnostics copied");
+  })();
+});
 
 const rerunLink = document.getElementById("rerunOnboarding") as HTMLAnchorElement | null;
 rerunLink?.addEventListener("click", async (e) => {
