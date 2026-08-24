@@ -259,7 +259,7 @@ This add-on is written in TypeScript and compiled + minified by Bun, so the pack
 is machine-generated. The full source is attached, and is also public at
 https://github.com/mlsimon734/tabglutton
 
-Toolchain: Bun 1.3.14 (https://bun.sh) is the only dependency. Tested on macOS; any Unix
+Toolchain: Bun 1.4.0 (https://bun.sh) is the only dependency. Tested on macOS; any Unix
 works.
 
   unzip tabglutton-source-<version>.zip
