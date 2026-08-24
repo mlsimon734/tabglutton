@@ -187,7 +187,7 @@ export const GULLET_TOOLS: readonly McpTool[] = [
     name: "tab_read",
     title: "Read a tab's content",
     description:
-      "Extract one open tab as clean markdown via Defuddle, with title, author, published date, description, site, and word count. Only works on loaded http(s) tabs: a discarded tab fails with tab-discarded and needs the user to open it manually. Does not navigate, click, or change the page.",
+      "Extract one open tab as clean markdown via Defuddle, with title, author, published date, description, site, and word count. Only works on loaded http(s) tabs: a discarded tab fails with tab-discarded and needs the user to open it manually. Does not navigate, click, or change the page.\n\nA `thin` field means the page carried too little to be worth filing — with `challengeSuspect: true` it matched a bot-check signature, so what you are reading is most likely a Cloudflare or CAPTCHA interstitial standing where the real page was, not the page itself. You still get the text; judge it rather than trusting it, and note that tab_clip refuses the same page outright.",
     inputSchema: {
       type: "object",
       properties: {

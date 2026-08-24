@@ -8,6 +8,7 @@
 // before it happens.
 
 import { clipContentHash } from "./clip-hash.js";
+import type { ThinClipVerdict } from "./clip-guard.js";
 import { clipDownloadPath, saveClipFile, type SavedClipFile } from "./clip-file.js";
 import { markdownForClip, OBSIDIAN_HANDOFF_GAP_MS, resolveClipRequest } from "./clip-format.js";
 import type { ClipPayload } from "./clip-format.js";
@@ -95,6 +96,15 @@ export interface BridgeExtractResult {
   ok: boolean;
   payload?: ClipPayload;
   error?: string;
+  /**
+   * The extraction itself succeeded and was refused for being too thin to be a
+   * clip (`src/clip-guard.ts`); `ok` is false and the refused text hangs off the
+   * verdict, not off `payload`. Its own field rather than an `error` prefix,
+   * because `readTab` has to branch on it before it starts diagnosing a failure
+   * that did not happen. Mirrors `ClipCurrentResponse` in `background.ts`, whose
+   * comment records where a divergence between the two actually fails.
+   */
+  guarded?: ThinClipVerdict & { payload: ClipPayload };
 }
 
 export interface BridgeMethodDeps {
@@ -647,13 +657,41 @@ export class BridgeMethodRunner {
   }
 
   /**
+   * What the thin-content guard means depends on who asked, so the caller says.
+   *
+   * `tab_clip` refuses: it would file a junk note and close the tab, which is
+   * #49 exactly. `tab_read` does not: it files nothing and closes nothing, so
+   * refusing would cost an agent every legitimately short page — a
+   * one-paragraph issue, a link post, a docs page that is mostly code — with no
+   * override, in order to withhold text the agent can judge for itself. It takes
+   * the text and the label instead.
+   */
+  private thinRead(
+    guarded: ThinClipVerdict & { payload: ClipPayload },
+    refuseThin: boolean,
+  ): { payload: ClipPayload; guarded: ThinClipVerdict } {
+    if (refuseThin) fail(guarded.reason, guarded.message);
+    return { payload: guarded.payload, guarded };
+  }
+
+  /**
    * Reads through the same Defuddle clipper the popup uses. Discarded tabs
    * cannot host a content script and are reported with a distinct code so the
    * agent can say "needs manual load" instead of retrying.
    */
-  private async readTab(tabId: number): Promise<ClipPayload> {
+  private async readTab(
+    tabId: number,
+    { refuseThin }: { refuseThin: boolean },
+  ): Promise<{ payload: ClipPayload; guarded?: ThinClipVerdict }> {
     await this.loadedTab(tabId);
     let result = await this.deps.extract(tabId);
+    // Ahead of everything below, because none of it applies: the injection ran
+    // and the page answered, so site access is plainly held and there is no
+    // second document arriving to make a retry worth its 250ms. Both of those
+    // checks would name a problem this page does not have and hand the agent a
+    // remedy that cannot fix it. Reached before `tabClip` gets to its close, so
+    // a refused clip leaves the tab open — the disposition #49 asks for.
+    if (result.guarded) return this.thinRead(result.guarded, refuseThin);
     if (!result.ok || !result.payload) {
       // Asked only once extraction has already failed, so a read costs no extra
       // IPC in the normal case. Site access is optional on Chrome and only a
@@ -671,7 +709,14 @@ export class BridgeMethodRunner {
       if (isNoInjectionTargetError(result.error)) {
         await delay(TRANSIENT_EXTRACT_RETRY_MS);
         result = await this.deps.extract(tabId);
-        if (result.ok && result.payload) return result.payload;
+        // The retry goes through the same guard, and this is the likeliest way
+        // to meet one: a challenge swapping documents is exactly what makes the
+        // first attempt report no injection target. Checked again rather than
+        // left to fall through, where it would earn "extract-failed" plus a hint
+        // insisting the page can never be read — both wrong, and the hint
+        // contradicts the message it would be glued to.
+        if (result.guarded) return this.thinRead(result.guarded, refuseThin);
+        if (result.ok && result.payload) return { payload: result.payload };
         fail(
           "extract-failed",
           `${result.error ?? "Extraction failed."} ${NO_INJECTION_TARGET_HINT}`,
@@ -680,12 +725,12 @@ export class BridgeMethodRunner {
 
       fail("extract-failed", result.error ?? "Extraction failed.");
     }
-    return result.payload;
+    return { payload: result.payload };
   }
 
   private async tabRead(raw: unknown): Promise<TabReadResult> {
     const { tabId } = parseTabReadParams(raw);
-    const payload = await this.readTab(tabId);
+    const { payload, guarded } = await this.readTab(tabId, { refuseThin: false });
     return {
       tabId,
       title: payload.title,
@@ -696,6 +741,9 @@ export class BridgeMethodRunner {
       site: payload.site,
       wordCount: payload.wordCount,
       markdown: payload.markdown,
+      ...(guarded
+        ? { thin: { chars: guarded.chars, challengeSuspect: guarded.challengeSuspect } }
+        : {}),
     };
   }
 
@@ -741,7 +789,7 @@ export class BridgeMethodRunner {
       );
     }
 
-    const payload = await this.readTab(params.tabId);
+    const { payload } = await this.readTab(params.tabId, { refuseThin: true });
     const rule = pickRule(payload.url);
     const content = markdownForClip(payload);
 
