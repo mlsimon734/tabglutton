@@ -779,7 +779,14 @@ function clipBlocked(blocked: ClipBlockedReason): ClipSelectedTabsResponse {
   return { failed: 0, obsidianSaved: 0, fileSaved: 0, zoteroSaved: 0, blocked, failures: [] };
 }
 
-async function clipSelectedTabs(tabIds: number[]): Promise<ClipSelectedTabsResponse> {
+async function clipSelectedTabs(requestedTabIds: number[]): Promise<ClipSelectedTabsResponse> {
+  // Deduped once, before anything routes, counts or acts. Phase 1's map already
+  // collapses a repeated id to one entry, so a duplicate would be routed once
+  // and then *reported* twice by the loop below — one save counted as two, and a
+  // second `tabs.remove` against a tab that is already gone. `total` would be
+  // wrong by the same amount. `parseTabsCloseParams` dedupes its input for the
+  // same reason.
+  const tabIds = [...new Set(requestedTabIds)];
   const vault = settings.obsidianVault.trim();
   if (!hasClipDestination(settings)) return clipBlocked("no-destination");
   // `downloads` is optional and revocable from the browser's own add-on UI, so
@@ -829,10 +836,29 @@ async function clipSelectedTabs(tabIds: number[]): Promise<ClipSelectedTabsRespo
     ),
   );
 
-  // Phase 2: dispatch in selection order. Connector saves are serialized so
-  // progress/selection UI from two papers cannot race. Obsidian remains serial
-  // because clipboard mode uses the global OS clipboard; the 200ms gap also
-  // keeps its URI handler reliable.
+  // Phase 2: report in selection order. Connector saves are the one part of it
+  // that overlaps — all of them handed over here, so one is already in flight
+  // while the loop below is still filing earlier tabs. `saveTabToZotero` owns
+  // the ceiling (ZOTERO_SAVE_CONCURRENCY), because the Connector is shared with
+  // the bridge and a per-run pool here would only bound this run.
+  //
+  // Everything the loop does itself stays serial: Obsidian because clipboard
+  // mode uses the global OS clipboard (and the 200ms gap keeps its URI handler
+  // reliable), and each close because the results are reported in order.
+  //
+  // Started in selection order and awaited in it too, so a save finishing early
+  // changes nothing an agent or the popup can see: same counts, same failure
+  // order, same progress ticks.
+  const zoteroSaves = new Map<number, Promise<void>>();
+  for (const tabId of tabIds) {
+    if (prepared.get(tabId)?.destination.kind !== "zotero") continue;
+    const save = saveTabToZotero(settings.zoteroConnectorId, tabId);
+    // The loop below is the real handler; this only keeps a save that rejects
+    // before its turn from surfacing as an unhandled rejection in the console.
+    save.catch(() => {});
+    zoteroSaves.set(tabId, save);
+  }
+
   const total = tabIds.length;
   const broadcastProgress = (completed: number): void => {
     const msg: ClipProgressMessage = { type: "clip-progress", completed, total };
@@ -862,9 +888,14 @@ async function clipSelectedTabs(tabIds: number[]): Promise<ClipSelectedTabsRespo
         continue;
       }
 
-      if (destination.kind === "zotero") {
+      // The dispatch above holds exactly the Zotero-bound tabs, so its entry is
+      // what selects this branch — no second predicate to fall out of step with
+      // it. Awaited here rather than there, which is what keeps the counts and
+      // the failure order reading exactly as a serial run's.
+      const save = zoteroSaves.get(tabId);
+      if (save) {
         try {
-          await saveTabToZotero(settings.zoteroConnectorId, tabId);
+          await save;
         } catch (err) {
           fail("zotero-failed", errorMessage(err));
           console.warn("[tabglutton] Zotero save failed for tab", tabId, err);
