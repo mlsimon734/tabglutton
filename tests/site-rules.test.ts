@@ -163,6 +163,20 @@ describe("sanitizeSiteRules", () => {
     ]);
   });
 
+  test("group fields survive, default their colour, and drop with an empty name", () => {
+    const stored = [
+      { id: "a", hostMatches: ["a.com"], group: { name: "Alpha", color: "cyan" } },
+      { id: "b", hostMatches: ["b.com"], group: { name: "Beta", color: "chartreuse" } },
+      { id: "c", hostMatches: ["c.com"], group: { name: "   " } },
+      { id: "d", hostMatches: ["d.com"], group: "nonsense" },
+    ];
+    const rules = sanitizeSiteRules(stored);
+    expect(rules[0]!.group).toEqual({ name: "Alpha", color: "cyan" });
+    expect(rules[1]!.group).toEqual({ name: "Beta", color: "grey" });
+    expect(rules[2]!.group).toBeUndefined();
+    expect(rules[3]!.group).toBeUndefined();
+  });
+
   test("malformed entries are dropped, malformed fields default", () => {
     const stored = [
       null,

@@ -22,7 +22,13 @@ import {
   requestDownloads,
   requestOrigins,
 } from "../src/permissions.js";
-import { newRuleId, type RuleDisposition, type SiteRule } from "../src/site-rules.js";
+import {
+  newRuleId,
+  TAB_GROUP_COLORS,
+  type RuleDisposition,
+  type SiteRule,
+  type TabGroupColor,
+} from "../src/site-rules.js";
 import {
   loadSettings,
   saveSettings,
@@ -46,6 +52,7 @@ const stripFragment = document.getElementById("stripFragment") as HTMLInputEleme
 const extraStripParams = document.getElementById("extraStripParams") as HTMLInputElement;
 const obsidianVault = document.getElementById("obsidianVault") as HTMLInputElement;
 const clippingsBaseFolder = document.getElementById("clippingsBaseFolder") as HTMLInputElement;
+const groupingSkipList = document.getElementById("groupingSkipList") as HTMLInputElement;
 const zoteroRoutingEnabled = document.getElementById("zoteroRoutingEnabled") as HTMLInputElement;
 const zoteroConnectorId = document.getElementById("zoteroConnectorId") as HTMLInputElement;
 const vaultWarning = document.getElementById("vaultWarning") as HTMLParagraphElement;
@@ -100,6 +107,7 @@ async function load(): Promise<void> {
   extraStripParams.value = (settings.extraStripParams ?? []).join(", ");
   obsidianVault.value = settings.obsidianVault;
   clippingsBaseFolder.value = settings.clippingsBaseFolder;
+  groupingSkipList.value = settings.groupingSkipList.join(", ");
   zoteroRoutingEnabled.checked = settings.zoteroRoutingEnabled;
   zoteroConnectorId.value = settings.zoteroConnectorId;
   rules = settings.siteRules;
@@ -182,6 +190,7 @@ async function save(): Promise<void> {
     clipDestination,
     obsidianVault: obsidianVault.value.trim(),
     clippingsBaseFolder: clippingsBaseFolder.value.trim(),
+    groupingSkipList: parseParams(groupingSkipList.value),
     clipMode,
     zoteroRoutingEnabled: zoteroRoutingEnabled.checked,
     zoteroConnectorId: zoteroConnectorId.value.trim() || DEFAULT_ZOTERO_CONNECTOR_ID,
@@ -320,6 +329,7 @@ obsidianVault.addEventListener("input", () => {
   queueSave();
 });
 clippingsBaseFolder.addEventListener("input", queueSave);
+groupingSkipList.addEventListener("input", queueSave);
 zoteroConnectorId.addEventListener("input", queueSave);
 
 // ---------- site rules ----------
@@ -348,13 +358,23 @@ function saveRules(): void {
   if (rulesSaveTimer) clearTimeout(rulesSaveTimer);
   rulesSaveTimer = undefined;
   // Trimmed on the way out, not while typing — a subfolder mid-word carries a
-  // trailing space the user has not finished with yet.
+  // trailing space the user has not finished with yet. A group whose name
+  // trims away is no group.
   void saveSettings({
-    siteRules: rules.map((rule) => ({
-      ...rule,
-      hostMatches: [...rule.hostMatches],
-      subfolder: rule.subfolder.trim(),
-    })),
+    siteRules: rules.map((rule) => {
+      const clone: SiteRule = {
+        ...rule,
+        hostMatches: [...rule.hostMatches],
+        subfolder: rule.subfolder.trim(),
+      };
+      const groupName = rule.group?.name.trim();
+      if (rule.group && groupName) {
+        clone.group = { name: groupName, color: rule.group.color };
+      } else {
+        delete clone.group;
+      }
+      return clone;
+    }),
   }).then(() => flashStatus("Saved"));
 }
 
@@ -482,7 +502,57 @@ function renderRuleCard(rule: SiteRule, index: number): HTMLLIElement {
   });
 
   bottomRow.append(disposition, subfolder);
-  li.append(topRow, bottomRow);
+
+  // Grouping is orthogonal to the disposition: a never-devour rule can still
+  // want its keepers gathered in the tab strip. Name empty = no group.
+  const groupRow = document.createElement("div");
+  groupRow.className = "rule-row";
+
+  const groupName = document.createElement("input");
+  groupName.type = "text";
+  groupName.className = "rule-group-name";
+  groupName.placeholder = "Tab group (optional)";
+  groupName.value = rule.group?.name ?? "";
+  groupName.setAttribute("aria-label", "Tab-strip group name for matching tabs");
+
+  const swatch = document.createElement("span");
+  const groupColor = document.createElement("select");
+  groupColor.className = "rule-group-color";
+  groupColor.setAttribute("aria-label", "Tab group colour");
+  for (const color of TAB_GROUP_COLORS) {
+    const option = document.createElement("option");
+    option.value = color;
+    option.textContent = color;
+    option.selected = color === (rule.group?.color ?? "grey");
+    groupColor.append(option);
+  }
+  groupColor.disabled = !rule.group;
+
+  const paintSwatch = (): void => {
+    swatch.className = `group-swatch swatch-${groupColor.value}`;
+    swatch.classList.toggle("swatch-off", !rule.group);
+  };
+  paintSwatch();
+
+  groupName.addEventListener("input", () => {
+    if (groupName.value.trim()) {
+      rule.group = { name: groupName.value, color: groupColor.value as TabGroupColor };
+    } else {
+      delete rule.group;
+    }
+    groupColor.disabled = !rule.group;
+    paintSwatch();
+    queueRulesSave();
+  });
+
+  groupColor.addEventListener("change", () => {
+    if (rule.group) rule.group.color = groupColor.value as TabGroupColor;
+    paintSwatch();
+    saveRules();
+  });
+
+  groupRow.append(groupName, swatch, groupColor);
+  li.append(topRow, bottomRow, groupRow);
   return li;
 }
 

@@ -292,7 +292,8 @@ code {
 
 /* Same clothes as the text inputs; the arrow is the browser's own and follows
    color-scheme. */
-select.rule-disposition {
+select.rule-disposition,
+select.rule-group-color {
   font: inherit;
   font-size: var(--fs-body);
   color: inherit;
@@ -307,9 +308,62 @@ select.rule-disposition {
     box-shadow var(--duration-fast) var(--easing-soft);
 }
 
-select.rule-disposition:focus-visible {
+select.rule-disposition:focus-visible,
+select.rule-group-color:focus-visible {
   border-color: var(--accent-ring);
   box-shadow: 0 0 0 3px var(--accent-ring);
+}
+
+select.rule-group-color:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.rule-row .rule-group-name {
+  flex: 1;
+  min-width: 0;
+}
+
+/* The engines' own tab-group palette, mirrored from the cockpit preview so a
+   colour chosen here is the colour the strip will show. */
+.group-swatch {
+  flex: none;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px var(--hairline-strong);
+}
+
+.group-swatch.swatch-off {
+  background: var(--hover-strong);
+}
+
+.swatch-grey {
+  background: #5f6368;
+}
+.swatch-blue {
+  background: #1a73e8;
+}
+.swatch-red {
+  background: #d93025;
+}
+.swatch-yellow {
+  background: #f9ab00;
+}
+.swatch-green {
+  background: #188038;
+}
+.swatch-pink {
+  background: #d01884;
+}
+.swatch-purple {
+  background: #a142f4;
+}
+.swatch-cyan {
+  background: #007b83;
+}
+.swatch-orange {
+  background: #fa903e;
 }
 
 .rule-actions {

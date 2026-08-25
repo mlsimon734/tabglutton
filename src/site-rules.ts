@@ -9,6 +9,34 @@ import { normalizeUrl } from "./normalize.js";
  */
 export type RuleDisposition = "devour" | "never-devour" | "auto-close" | "zotero";
 
+/**
+ * The colours both engines' `tabGroups.update` accepts (Firefox 139 / Chrome
+ * 89 share the set — measured in #33).
+ */
+export const TAB_GROUP_COLORS = [
+  "grey",
+  "blue",
+  "red",
+  "yellow",
+  "green",
+  "pink",
+  "purple",
+  "cyan",
+  "orange",
+] as const;
+
+export type TabGroupColor = (typeof TAB_GROUP_COLORS)[number];
+
+export function isTabGroupColor(value: unknown): value is TabGroupColor {
+  return TAB_GROUP_COLORS.some((color) => color === value);
+}
+
+/** A browser tab-strip group a rule writes its matches into. */
+export interface RuleGroup {
+  name: string;
+  color: TabGroupColor;
+}
+
 export interface SiteRule {
   id: string;
   /**
@@ -21,6 +49,12 @@ export interface SiteRule {
   /** Subfolder under the clippings base folder; "" files into the base itself. */
   subfolder: string;
   disposition: RuleDisposition;
+  /**
+   * Orthogonal to the disposition: grouping tidies the tab strip, devouring
+   * empties it, and a never-devour rule can still want its keepers gathered.
+   * Absent = this rule does not group.
+   */
+  group?: RuleGroup;
 }
 
 /**
@@ -112,6 +146,25 @@ function patternMatchesKey(pattern: string, key: string): boolean {
  * a rule cannot claim `about:` or extension pages.
  */
 export function pickRule(url: string, rules: readonly SiteRule[]): SiteRule | null {
+  const key = canonicalKeyFor(url);
+  if (!key) return null;
+  for (const rule of rules) {
+    if (patternsMatchKey(rule.hostMatches, key)) return rule;
+  }
+  return null;
+}
+
+/**
+ * Whether `url` is claimed by any of `patterns` — the grouping skip list asks
+ * this without a rule in hand, so it shares the matcher rather than growing a
+ * second, slightly different one.
+ */
+export function urlMatchesPatterns(url: string, patterns: readonly string[]): boolean {
+  const key = canonicalKeyFor(url);
+  return key !== null && patternsMatchKey(patterns, key);
+}
+
+function canonicalKeyFor(url: string): string | null {
   let protocol: string;
   try {
     protocol = new URL(url).protocol;
@@ -119,15 +172,15 @@ export function pickRule(url: string, rules: readonly SiteRule[]): SiteRule | nu
     return null;
   }
   if (protocol !== "http:" && protocol !== "https:") return null;
-  const key = normalizeUrl(url);
-  if (!key) return null;
-  for (const rule of rules) {
-    for (const raw of rule.hostMatches) {
-      const pattern = canonicalPattern(raw);
-      if (pattern && patternMatchesKey(pattern, key)) return rule;
-    }
+  return normalizeUrl(url);
+}
+
+function patternsMatchKey(patterns: readonly string[], key: string): boolean {
+  for (const raw of patterns) {
+    const pattern = canonicalPattern(raw);
+    if (pattern && patternMatchesKey(pattern, key)) return true;
   }
-  return null;
+  return false;
 }
 
 /**
@@ -151,12 +204,24 @@ export function sanitizeSiteRules(raw: unknown): SiteRule[] {
           .map((h) => h.trim())
           .filter(Boolean)
       : [];
-    rules.push({
+    const rule: SiteRule = {
       id: record.id,
       hostMatches,
       subfolder: typeof record.subfolder === "string" ? record.subfolder : "",
       disposition: isRuleDisposition(record.disposition) ? record.disposition : "devour",
-    });
+    };
+    const group = sanitizeRuleGroup(record.group);
+    if (group) rule.group = group;
+    rules.push(rule);
   }
   return rules;
+}
+
+/** A group needs a name; a missing or unknown colour defaults rather than drops. */
+function sanitizeRuleGroup(raw: unknown): RuleGroup | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const record = raw as Record<string, unknown>;
+  const name = typeof record.name === "string" ? record.name.trim() : "";
+  if (!name) return undefined;
+  return { name, color: isTabGroupColor(record.color) ? record.color : "grey" };
 }
