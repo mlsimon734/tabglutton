@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test";
-import { BridgeRequestError, type BridgeMethod } from "../../src/bridge-protocol.js";
+import { BridgeRequestError, type BridgeWireMethod } from "../../src/bridge-protocol.js";
 import type { ObsidianVaultLookup } from "../src/obsidian-vaults.js";
 import type { ConnectionSummary } from "../src/select.js";
 import { createToolCaller, GULLET_TOOLS, type ToolContext } from "../src/tools.js";
@@ -7,7 +7,7 @@ import { chrome, zen } from "./fixtures.js";
 
 interface Sent {
   connectionId: string;
-  method: BridgeMethod;
+  method: BridgeWireMethod;
   params: unknown;
 }
 
@@ -349,6 +349,66 @@ describe("tab-scoped tools", () => {
       batchId: "b7",
       confirmedBy: "gullet",
     });
+  });
+
+  // The verdict exists only here — the browser cannot see a vault — and before
+  // clip_confirm it was spent on the close and discarded, leaving the extension
+  // permanently unable to tell its two clip-memory states apart.
+  test("tab_clip tells the extension when the note was really found", async () => {
+    const { call, sent } = caller(
+      [zen],
+      (s) =>
+        s.method === "tab_clip"
+          ? { file: "Clippings/Note", vault: "test", url: "https://example.com/a" }
+          : { closed: 1, batchId: "b7" },
+      { verifyClip: async () => "landed" },
+    );
+    await call("tab_clip", { tabId: 7, close: true });
+    expect(sent.map((x) => x.method)).toEqual(["tab_clip", "clip_confirm", "tabs_close"]);
+    expect(sent[1]?.params).toEqual({ url: "https://example.com/a" });
+  });
+
+  // The guarantee is that `route` gates on isBridgeMethod, which knows only the
+  // agent tools — pinning the type guards alone would not catch a future
+  // "unification" of the two lists, and a model able to call this could mark a
+  // page as provably filed by saying so.
+  test("an agent cannot call clip_confirm", async () => {
+    const { call, sent } = caller([zen], () => ({}));
+    const result = await call("clip_confirm", { url: "https://example.com/a" });
+    expect(result.isError).toBe(true);
+    expect(JSON.stringify(payload(result))).toContain("Unknown tool clip_confirm");
+    expect(sent).toEqual([]);
+  });
+
+  test("an unconfirmable clip is never reported to the extension as verified", async () => {
+    const { call, sent } = caller(
+      [zen],
+      () => ({ file: "Clippings/Note", vault: "test", url: "https://example.com/a" }),
+      { verifyClip: async () => "unknown" },
+    );
+    await call("tab_clip", { tabId: 7 });
+    expect(sent.map((x) => x.method)).toEqual(["tab_clip"]);
+  });
+
+  // An extension older than the method answers bad-request. The page is already
+  // remembered as launched and the close has its own evidence, so losing the
+  // upgrade costs precision and nothing else.
+  test("an extension that does not know clip_confirm does not fail the clip", async () => {
+    const { call } = caller(
+      [zen],
+      (s) => {
+        if (s.method === "clip_confirm") {
+          throw new BridgeRequestError("bad-request", "Unknown method clip_confirm.");
+        }
+        return s.method === "tab_clip"
+          ? { file: "Clippings/Note", vault: "test", url: "https://example.com/a" }
+          : { closed: 1, batchId: "b7" };
+      },
+      { verifyClip: async () => "landed" },
+    );
+    const result = await call("tab_clip", { tabId: 7, close: true });
+    expect(result.isError).toBeUndefined();
+    expect(payload(result)).toMatchObject({ confirmedBy: "gullet", closed: true, batchId: "b7" });
   });
 
   test("tab_clip never claims a close tabs_close did not confirm", async () => {

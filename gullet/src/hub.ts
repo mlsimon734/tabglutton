@@ -23,7 +23,7 @@ import {
   randomNonce,
   RETIRING_FOR_NEWER_PEER,
   toBridgeError,
-  type BridgeMethod,
+  type BridgeWireMethod,
   type HelloMessage,
   type ProofRole,
   type ServerMessage,
@@ -365,7 +365,7 @@ export class Hub {
   }
 
   /** Send one bridge method to one browser and await its answer. */
-  request(connectionId: string, method: BridgeMethod, params: unknown): Promise<unknown> {
+  request(connectionId: string, method: BridgeWireMethod, params: unknown): Promise<unknown> {
     const conn = this.connections.get(connectionId);
     if (!conn) {
       return Promise.reject(

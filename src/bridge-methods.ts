@@ -15,6 +15,7 @@ import type { ClipPayload } from "./clip-format.js";
 import {
   BridgeRequestError,
   errorMessage,
+  parseClipConfirmParams,
   parseTabClipParams,
   parseTabReadParams,
   parseTabsCloseParams,
@@ -24,8 +25,9 @@ import {
   parseUndoCloseParams,
   TABS_LOAD_DEADLINE_MS,
   type BridgeErrorCode,
-  type BridgeMethod,
   type BridgeTab,
+  type BridgeWireMethod,
+  type ClipMark,
   type ClosedTabEntry,
   type FileClipResult,
   type ObsidianClipResult,
@@ -39,10 +41,19 @@ import {
   type UndoCloseResult,
   type ZoteroClipResult,
 } from "./bridge-protocol.js";
+import {
+  clipMarkFor,
+  loadClipMemory,
+  lookupClip,
+  recordClip,
+  type ClipMemory,
+  type ClipTarget,
+} from "./clip-memory.js";
+import type { NormalizeOpts } from "./normalize.js";
 import { getFilePlatformOnce } from "./platform.js";
 import { createTaskQueue, delay } from "./serialize.js";
-import { pickRule, type SiteRule } from "./site-rules.js";
-import { clipDestinationFor, type Settings } from "./storage.js";
+import { pickRule, ruleLabel, type SiteRule } from "./site-rules.js";
+import { clipDestinationFor, normalizeOptsFrom, type Settings } from "./storage.js";
 import { CLIP_ORIGINS, DOWNLOADS_REMEDY, downloadsGrant, hasOrigins } from "./permissions.js";
 import { IS_CHROME } from "./target.js";
 import {
@@ -225,7 +236,16 @@ export function isHttpUrl(url: string | undefined): boolean {
   return url?.startsWith("http://") === true || url?.startsWith("https://") === true;
 }
 
-function toBridgeTab(tab: browser.tabs.Tab): BridgeTab | null {
+/**
+ * `memory` and `opts` come from the caller rather than being read here: a
+ * listing maps up to a few thousand tabs and the memory is one `storage.local`
+ * read for all of them.
+ */
+function toBridgeTab(
+  tab: browser.tabs.Tab,
+  memory: ClipMemory,
+  opts: NormalizeOpts,
+): BridgeTab | null {
   const url = tabUrl(tab);
   if (tab.id === undefined || url === undefined) return null;
   const bridgeTab: BridgeTab = {
@@ -246,6 +266,8 @@ function toBridgeTab(tab: browser.tabs.Tab): BridgeTab | null {
   if (tab.active) bridgeTab.active = true;
   // Chrome has no `tab.hidden` at all, so there it is never a signal either way.
   if (!IS_CHROME && tab.hidden === true) bridgeTab.hidden = true;
+  const clipped = lookupClip(memory, url, opts);
+  if (clipped) bridgeTab.clipped = clipMarkFor(clipped);
   return bridgeTab;
 }
 
@@ -498,7 +520,7 @@ export class BridgeMethodRunner {
     this.deps = deps;
   }
 
-  async run(method: BridgeMethod, params: unknown): Promise<unknown> {
+  async run(method: BridgeWireMethod, params: unknown): Promise<unknown> {
     switch (method) {
       case "tabs_list":
         return this.tabsList(params);
@@ -512,7 +534,25 @@ export class BridgeMethodRunner {
         return this.tabsClose(params);
       case "undo_close":
         return this.undoClose(params);
+      case "clip_confirm":
+        return this.clipConfirm(params);
     }
+  }
+
+  /**
+   * Gullet found the note this extension could only report having launched.
+   * Raises that page's clip memory to `verified` — see `ClipConfirmParams` for
+   * why the sidecar is the only party that can say so, and
+   * `BRIDGE_SIDECAR_METHODS` for why no agent can.
+   *
+   * Obsidian by construction: it is sent only after a vault check, because the
+   * file destination is confirmed by the browser that watched the download and
+   * Gullet deliberately verifies nothing there.
+   */
+  private async clipConfirm(raw: unknown): Promise<{ recorded: true }> {
+    const { url } = parseClipConfirmParams(raw);
+    await this.noteClip(url, "verified", "obsidian");
+    return { recorded: true };
   }
 
   private async tabsList(raw: unknown): Promise<TabsListResult> {
@@ -521,7 +561,11 @@ export class BridgeMethodRunner {
       params.scope === "current-window"
         ? await browser.tabs.query({ currentWindow: true })
         : await queryAllTabs();
-    const mapped = tabs.map(toBridgeTab).filter((t): t is BridgeTab => t !== null);
+    const memory = await loadClipMemory();
+    const opts = normalizeOptsFrom(this.deps.getSettings());
+    const mapped = tabs
+      .map((tab) => toBridgeTab(tab, memory, opts))
+      .filter((t): t is BridgeTab => t !== null);
     // `groupBy` counts every match, so truncating here would corrupt the counts.
     // Gullet does the grouping, over every browser at once — and the full list
     // crossing loopback costs nothing, unlike the same list crossing into a
@@ -758,7 +802,31 @@ export class BridgeMethodRunner {
     const params = parseTabClipParams(raw);
     const settings = this.deps.getSettings();
 
-    // Zotero routing runs first, and runs the *same* routing the popup's Devour
+    // A never-devour rule is the user's standing refusal, and it outranks the
+    // agent's request the way it outranks the popup's Devour button — refused
+    // from tab metadata, before a Connector round trip or a Defuddle injection
+    // is spent on it. Ahead of Zotero routing deliberately: a routed save still
+    // files and closes the tab, which is exactly what the rule forbids. The
+    // other dispositions do not reroute an explicit tab_clip: the agent asked
+    // for a clip, and a rule silently closing the tab or re-aiming the note
+    // instead would be the tool acting on its own. A metadata read that throws
+    // is left for readTab below, which owns the missing-tab error and its hint.
+    let metaUrl = "";
+    try {
+      metaUrl = tabUrl(await browser.tabs.get(params.tabId)) ?? "";
+    } catch {
+      // readTab reports this tab properly.
+    }
+    const metaRule = pickRule(metaUrl, settings.siteRules);
+    if (metaRule?.disposition === "never-devour") {
+      fail(
+        "not-enabled",
+        `The user's site rules mark this site (${ruleLabel(metaRule)}) never-devour, ` +
+          "so this tab is not clipped. They can edit the rule in Tabglutton's settings.",
+      );
+    }
+
+    // Zotero routing runs next, and runs the *same* routing the popup's Devour
     // does. An agent clearing a backlog for a user who routes papers to Zotero
     // must not quietly file them into Obsidian instead
     // ([#50](https://github.com/mlsimon734/tabglutton/issues/50)) — a
@@ -790,7 +858,7 @@ export class BridgeMethodRunner {
     }
 
     const { payload } = await this.readTab(params.tabId, { refuseThin: true });
-    const rule = pickRule(payload.url);
+    const rule = pickRule(payload.url, settings.siteRules);
     const content = markdownForClip(payload);
 
     const filed =
@@ -916,6 +984,11 @@ export class BridgeMethodRunner {
       return request.file;
     });
 
+    // Launched, never verified: this is the destination whose handoff cannot be
+    // observed from here. Gullet raises it with `clip_confirm` if the note
+    // turns up in the vault.
+    await this.noteClip(payload.url, "launched", "obsidian");
+
     return {
       tabId,
       title: payload.title,
@@ -927,6 +1000,15 @@ export class BridgeMethodRunner {
       confirmedBy: "nobody",
       closed: false,
     };
+  }
+
+  /**
+   * Note one clip in the clip memory. Never throws — `recordClip` swallows its
+   * own failures, and a filed note must not be reported as a failed clip
+   * because remembering it did not work.
+   */
+  private async noteClip(url: string, state: ClipMark, destination: ClipTarget): Promise<void> {
+    await recordClip({ url, state, destination }, normalizeOptsFrom(this.deps.getSettings()));
   }
 
   /**
@@ -980,6 +1062,13 @@ export class BridgeMethodRunner {
         `The clip could not be written to the download folder: ${errorMessage(err)}`,
       );
     }
+
+    // The browser watched this download reach `state: "complete"`, which is the
+    // same evidence `confirmedBy: "browser"` rests on and the strongest anything
+    // in the extension can produce. An erased record proves nothing, so that
+    // case is remembered as `launched` — the file may well be there, and this is
+    // exactly the distinction the two states exist to keep.
+    await this.noteClip(payload.url, saved.confirmed ? "verified" : "launched", "file");
 
     return {
       tabId,

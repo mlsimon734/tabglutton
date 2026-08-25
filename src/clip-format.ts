@@ -22,8 +22,9 @@ export function normalizeBaseFolder(input: string): string {
   return cleaned === "" ? DEFAULT_CLIPPER_PATH : cleaned;
 }
 
+/** A rule with no subfolder files into the base folder itself. */
 function folderForRule(rule: SiteRule | null, baseFolder: string): string {
-  return rule ? `${baseFolder}/${rule.subfolder}` : baseFolder;
+  return rule?.subfolder ? `${baseFolder}/${rule.subfolder}` : baseFolder;
 }
 
 interface ClipperProperty {

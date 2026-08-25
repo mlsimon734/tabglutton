@@ -19,8 +19,8 @@ import {
   TABS_LOAD_MAX_BATCH,
   toBridgeError,
   type BridgeError,
-  type BridgeMethod,
   type BridgeTab,
+  type BridgeWireMethod,
   type ClipConfirmedBy,
 } from "../../src/bridge-protocol.js";
 import { renderTabs, TAB_TITLE_MAX } from "./tabs-view.js";
@@ -32,7 +32,7 @@ import { selectAll, selectOne, type ConnectionSummary } from "./select.js";
 export interface ToolContext {
   /** May block briefly waiting for a browser to dial in; see Hub.connectionsWithin. */
   connections: () => Promise<ConnectionSummary[]>;
-  request: (connectionId: string, method: BridgeMethod, params: unknown) => Promise<unknown>;
+  request: (connectionId: string, method: BridgeWireMethod, params: unknown) => Promise<unknown>;
   /**
    * Why this sidecar cannot serve anything, if it cannot. Reported in answer to
    * every tool call, because the alternative — exiting at startup — kills the
@@ -109,6 +109,7 @@ export const GULLET_TOOLS: readonly McpTool[] = [
       `List the user's open tabs with metadata only — id, title, url, lastAccessed, and the flags discarded, pinned, active and (Firefox/Zen) hidden. **Flags appear only when true**: no \`discarded\` key means the tab is loaded. \`discarded: true\` means the tab is unloaded and cannot be read until tabs_load wakes it. \`windowId\` appears at the top level when every tab shares one window, and per tab otherwise.\n\n` +
       `**On Zen, a listing covers the active workspace only.** Tabs in other workspaces are not returned at all — not flagged, absent — so \`matched\` counts that workspace, not the browser. Never tell the user how many tabs they have "in total" from this; say which workspace you looked at. Switching workspace changes the answer completely.\n\n` +
       `Titles longer than ${TAB_TITLE_MAX} characters are clipped with a trailing "…", and URLs are shortened (tracking parameters and \`www.\` dropped). \`query\` always matches against the **full** title and URL, so a term that was clipped away still finds its tab. Use tab_read for a tab's real content.\n\n` +
+      `Already-filed pages carry \`clipped\`, from Tabglutton's own memory of what it has clipped — keyed by normalized URL, so it marks a page reached from a different link too. \`"launched"\` means the note was handed over without error; \`"verified"\` means something that can see the filesystem saw it land. **Neither says a note is on disk now** — notes get moved and deleted, and pages filed before this memory existed carry nothing at all. Treat it as a reason to skip tab_read, not as licence to close: ask the user first, as with any close.\n\n` +
       `Backlogs are large, so this returns the ${TABS_LIST_DEFAULT_LIMIT} most recently accessed tabs by default and reports \`matched\` (how many the filter actually hit) plus \`truncated: true\` when there were more. Narrow with \`query\` rather than raising \`limit\` — a full listing of a thousand tabs will not fit in your context.\n\n` +
       `Start a triage run with \`groupBy: "domain"\`: it returns one row per domain with tab and discarded counts instead of any tabs, which is a few hundred bytes for the whole backlog and tells you what to pass as \`query\` next.`,
     inputSchema: {
@@ -419,6 +420,7 @@ async function clipAndVerify(
       };
     }
     upgrade = { confirmedBy: await verifyObsidianClip(verify, result, vault, file, startedAt) };
+    if (upgrade.confirmedBy === "gullet") confirmClipMemory(ctx, connectionId, result);
   }
 
   if (!wantsClose) return { ...result, ...upgrade };
@@ -445,6 +447,38 @@ async function clipAndVerify(
     ...(didClose && typeof closed?.batchId === "string" ? { batchId: closed.batchId } : {}),
     ...(didClose ? {} : { closeSkipped: closeError ?? closed?.skipped ?? closed?.missing ?? true }),
   };
+}
+
+/**
+ * Tell the extension the note is really there, so its clip memory can say so.
+ *
+ * This is the only moment the fact exists anywhere: the browser cannot see a
+ * vault, and before this the verdict was spent on the close decision and
+ * discarded — leaving the extension permanently unable to tell a launched
+ * handoff from a landed one for the destination where that gap is the whole
+ * problem.
+ *
+ * Sent but deliberately **not waited for**, and it never rejects. The note is
+ * already on disk and the close that follows has its own evidence, so nothing
+ * downstream depends on the answer — while waiting for one would put a request
+ * with `BRIDGE_REQUEST_TIMEOUT_MS` on it in front of the close, and a browser
+ * that has stopped reading its socket (the shape diagnosed in #27) would then
+ * hold a verified clip's tab open for another 45 seconds. The request still
+ * goes out first, because `request` is called before the close is; only its
+ * reply is unawaited.
+ *
+ * The commonest failure is an extension older than the method, which answers
+ * `bad-request`. That costs precision — the page keeps the `launched` it already
+ * has — and never correctness.
+ */
+function confirmClipMemory(
+  ctx: ToolContext,
+  connectionId: string,
+  result: Record<string, unknown>,
+): void {
+  const url = typeof result.url === "string" ? result.url : "";
+  if (!url) return;
+  void ctx.request(connectionId, "clip_confirm", { url }).catch(() => {});
 }
 
 /**

@@ -6,9 +6,19 @@
 // is unresolvable in a Firefox module service worker and aborts registration.
 import { BridgeClient, type BridgeStatus } from "./bridge-client.js";
 import { BridgeMethodRunner, isHttpUrl } from "./bridge-methods.js";
+import type { ClipMark } from "./bridge-protocol.js";
 import { getBrowserInfoOnce } from "./browser-info.js";
 import { clipDownloadPath, saveClipFile, type SavedClipFile } from "./clip-file.js";
 import { thinClipVerdict, type ClipGuardReason, type ThinClipVerdict } from "./clip-guard.js";
+import type { DiagnosticsBackgroundFacts } from "./diagnostics.js";
+import {
+  loadClipMemory,
+  lookupClip,
+  recordClip,
+  type ClipMemory,
+  type ClipMemoryEntry,
+  type ClipTarget,
+} from "./clip-memory.js";
 import {
   markdownForClip,
   OBSIDIAN_HANDOFF_GAP_MS,
@@ -16,10 +26,11 @@ import {
   type ClipPayload,
   type ObsidianClipRequest,
 } from "./clip-format.js";
+import type { NormalizeOpts } from "./normalize.js";
 import { DOWNLOADS_GONE, downloadsGrant } from "./permissions.js";
 import { getFilePlatformOnce } from "./platform.js";
 import { delay } from "./serialize.js";
-import { pickRule } from "./site-rules.js";
+import { pickRule, ruleLabel, type SiteRule } from "./site-rules.js";
 import { groupDuplicates, pickKeeper, type Tab } from "./dedup.js";
 import {
   clipsToFile,
@@ -47,6 +58,7 @@ export type ReopenTabsMessage = {
 };
 export type OpenCockpitMessage = { type: "open-cockpit" };
 export type GetBridgeStatusMessage = { type: "get-bridge-status" };
+export type GetDiagnosticsMessage = { type: "get-diagnostics" };
 export type IncomingMessage =
   | GetScopedTabsMessage
   | ClipSelectedTabsMessage
@@ -56,7 +68,15 @@ export type IncomingMessage =
   | FocusTabMessage
   | ReopenTabsMessage
   | OpenCockpitMessage
-  | GetBridgeStatusMessage;
+  | GetBridgeStatusMessage
+  | GetDiagnosticsMessage;
+
+/**
+ * Everything the diagnostics block needs that only this page knows — the bridge
+ * client's state and its error log, and the tab counts. The options page adds
+ * the permission grants and renders; see `collectDiagnostics`.
+ */
+export type GetDiagnosticsResponse = DiagnosticsBackgroundFacts;
 
 export interface GetBridgeStatusResponse {
   status: BridgeStatus;
@@ -77,7 +97,16 @@ export type ClipFailureReason =
   | "trigger-failed"
   | "vault-missing"
   | "zotero-failed"
-  | "download-failed";
+  | "download-failed"
+  /** An auto-close rule's `tabs.remove` was refused and the tab is still open. */
+  | "close-failed"
+  /**
+   * Not a fault: a site rule marks this site never-devour, so the run left the
+   * tab open on purpose. Reported through the same channel because a selected
+   * tab that was not clipped needs saying either way — the pill and summary
+   * name the rule rather than calling it a failure.
+   */
+  | "never-devour";
 
 export interface ClipFailure {
   tabId: number;
@@ -101,6 +130,10 @@ export interface ClipSelectedTabsResponse {
   /** Written as markdown files in the download folder (`clipDestination: "file"`). */
   fileSaved: number;
   zoteroSaved: number;
+  /** Closed without saving by an `auto-close` site rule. */
+  ruleClosed: number;
+  /** What those closes could reopen — the popups feed this to their undo toast. */
+  ruleClosedRestorable: ClosedTabRecord[];
   /** Present only when nothing was attempted — and nothing was woken either. */
   blocked?: ClipBlockedReason;
   failures: ClipFailure[];
@@ -122,6 +155,17 @@ export interface PopupTab {
   pinned: boolean;
   windowId: number | undefined;
   index: number;
+  /**
+   * Present when this page has been clipped before, from any tab and in any
+   * earlier session. A record of the past, never a claim about the vault or the
+   * download folder as they are now — see `ClipMark` and `src/clip-memory.ts`.
+   *
+   * The whole entry, where the wire's `BridgeTab` carries only the state: this
+   * one crosses `runtime.sendMessage` to a surface with a tooltip to fill, not
+   * into a model's context, so the listing budget `BridgeTab` protects does not
+   * apply.
+   */
+  clipped?: ClipMemoryEntry;
 }
 
 export interface ClosedTabRecord {
@@ -176,6 +220,31 @@ interface ClipCurrentResultMessage extends ClipCurrentResponse {
 }
 
 let settings: Settings = defaults();
+/**
+ * The initial load, and the thing to await before reading `settings`.
+ *
+ * This page is an event page on Gecko and a service worker on Chrome, so a
+ * runtime message is frequently what *wakes* it — arriving while the load is
+ * still in flight, when `settings` is still the defaults. For most handlers
+ * that is a scope or a folder being briefly wrong; for the diagnostics block it
+ * would freeze "bridge off, no token, clips to obsidian" into a paste, at the
+ * exact moment someone is filing a report about an install that had been
+ * sitting idle.
+ *
+ * It owns the load rather than signalling one, so there is no path on which it
+ * never settles — a rejected `storage.local.get` would otherwise hang every
+ * awaiting handler forever, which is a worse answer than the stale one this
+ * exists to prevent. A failed load leaves the defaults standing, as before.
+ * Await *this*, never `init()` — the badge pass at the end of init costs
+ * seconds on a thousand-tab backlog.
+ */
+const settingsReady: Promise<void> = (async () => {
+  try {
+    settings = await loadSettings();
+  } catch (err) {
+    console.warn("[tabglutton] initial settings load failed; using defaults", err);
+  }
+})();
 // Only the connected/not-connected split reaches the badge, so that is all we
 // mirror; `bridge.status` stays the source of truth for anyone who asks.
 let bridgeConnected = false;
@@ -383,8 +452,8 @@ function safeFavIconUrl(raw: string | undefined): string | undefined {
   }
 }
 
-function tabToPopupTab(t: Tab): PopupTab {
-  return {
+function tabToPopupTab(t: Tab, memory: ClipMemory, opts: NormalizeOpts): PopupTab {
+  const tab: PopupTab = {
     id: t.id ?? -1,
     title: t.title,
     url: t.url,
@@ -395,6 +464,9 @@ function tabToPopupTab(t: Tab): PopupTab {
     windowId: t.windowId,
     index: t.index,
   };
+  const clipped = lookupClip(memory, t.url, opts);
+  if (clipped) tab.clipped = clipped;
+  return tab;
 }
 
 function tabToClosedRecord(t: Tab): ClosedTabRecord | null {
@@ -674,6 +746,8 @@ type TabDestination =
   | { kind: "obsidian" }
   | { kind: "file" }
   | { kind: "zotero" }
+  | { kind: "never-devour"; rule: SiteRule }
+  | { kind: "auto-close" }
   | { kind: "failed"; reason: ClipFailureReason; detail: string };
 
 /** Both note destinations run Defuddle; Zotero owns its own page reading. */
@@ -698,7 +772,14 @@ async function destinationForTab(
   tabId: number,
   url: string,
   downloadsHeld: boolean,
+  rule: SiteRule | null,
 ): Promise<TabDestination> {
+  // The two dispositions that never touch the page are answered before the
+  // wake below: a never-devour tab is left exactly as it is, and an auto-close
+  // needs no content — reloading a discarded backlog just to keep or close its
+  // tabs would spend what discarding saved.
+  if (rule?.disposition === "never-devour") return { kind: "never-devour", rule };
+  if (rule?.disposition === "auto-close") return { kind: "auto-close" };
   // clipTab re-checks the scheme against its own fresh read and owns the error
   // message; this gate only keeps a tab that provably cannot be clipped from
   // being woken and probed for nothing. An address we cannot read yet is not
@@ -713,6 +794,12 @@ async function destinationForTab(
       // extract failure, which is what the Obsidian path always called it.
       return { kind: "failed", reason: "extract-failed", detail: errorMessage(err) };
     }
+    // A zotero rule skips the Connector's detection poll on purpose: the user
+    // named the destination outright, the same way a `vault` override names
+    // Obsidian — and it holds whether or not detection-based routing is on.
+    // The save itself still goes through the Connector, which is where a
+    // missing Zotero fails loudly rather than silently going elsewhere.
+    if (rule?.disposition === "zotero") return { kind: "zotero" };
     if (settings.zoteroRoutingEnabled) {
       const zotero = await zoteroDestination(tabId);
       if (zotero) return zotero;
@@ -788,8 +875,30 @@ async function downloadFailureDetail(err: unknown): Promise<string> {
   return errorMessage(err);
 }
 
+/**
+ * Note one clip in the clip memory, against the settings this run is using.
+ * Never throws (see `recordClip`) — the page is already filed by the time this
+ * runs, and a memory write that fails must not turn it into a reported failure.
+ */
+async function noteClip(
+  url: string | undefined,
+  state: ClipMark,
+  destination: ClipTarget,
+): Promise<void> {
+  await recordClip({ url, state, destination }, normalizeOptsFrom(settings));
+}
+
 function clipBlocked(blocked: ClipBlockedReason): ClipSelectedTabsResponse {
-  return { failed: 0, obsidianSaved: 0, fileSaved: 0, zoteroSaved: 0, blocked, failures: [] };
+  return {
+    failed: 0,
+    obsidianSaved: 0,
+    fileSaved: 0,
+    zoteroSaved: 0,
+    ruleClosed: 0,
+    ruleClosedRestorable: [],
+    blocked,
+    failures: [],
+  };
 }
 
 async function clipSelectedTabs(requestedTabIds: number[]): Promise<ClipSelectedTabsResponse> {
@@ -802,6 +911,21 @@ async function clipSelectedTabs(requestedTabIds: number[]): Promise<ClipSelected
   const tabIds = [...new Set(requestedTabIds)];
   const vault = settings.obsidianVault.trim();
   if (!hasClipDestination(settings)) return clipBlocked("no-destination");
+
+  // Metadata and rules come first: the downloads gate below has to know
+  // whether anything in the run could go somewhere other than a file, and a
+  // rule disposition is one of the ways it can. `resolveTabMeta` is a plain
+  // read — nothing is woken by it.
+  const metas = new Map<number, { title: string; url: string }>();
+  const rules = new Map<number, SiteRule | null>();
+  await Promise.all(
+    tabIds.map(async (tabId) => {
+      const meta = await resolveTabMeta(tabId);
+      metas.set(tabId, meta);
+      rules.set(tabId, pickRule(meta.url, settings.siteRules));
+    }),
+  );
+
   // `downloads` is optional and revocable from the browser's own add-on UI, so
   // the grant the options page collected may be gone. It is run-global, so it
   // is answered once here — and *before* phase 1, which reloads every discarded
@@ -812,11 +936,16 @@ async function clipSelectedTabs(requestedTabIds: number[]): Promise<ClipSelected
   // Refusing the whole run needs the stronger claim that nothing in it could
   // have gone anywhere else. Zotero routing breaks that: an academic tab files
   // through the Connector, which needs no `downloads` at all, so a run with
-  // routing on is let through and only its file-bound tabs fail. And only a
-  // grant seen to be missing refuses anything — `unknown` carries on, because a
-  // check that threw is not evidence of a revocation.
+  // routing on is let through and only its file-bound tabs fail. A site rule
+  // breaks it the same way — a never-devour, auto-close, or zotero disposition
+  // spends nothing on the grant. And only a grant seen to be missing refuses
+  // anything — `unknown` carries on, because a check that threw is not
+  // evidence of a revocation.
   const downloadsHeld = clipsToFile(settings) ? (await downloadsGrant()) !== "missing" : true;
-  if (!downloadsHeld && !settings.zoteroRoutingEnabled) return clipBlocked("downloads-revoked");
+  const couldGoElsewhere =
+    settings.zoteroRoutingEnabled ||
+    [...rules.values()].some((rule) => rule !== null && rule.disposition !== "devour");
+  if (!downloadsHeld && !couldGoElsewhere) return clipBlocked("downloads-revoked");
 
   // Phase 1: read, wake, route and extract each tab as one per-tab chain, all
   // of them overlapping. There is deliberately no barrier between the steps —
@@ -830,8 +959,13 @@ async function clipSelectedTabs(requestedTabIds: number[]): Promise<ClipSelected
   const prepared = new Map(
     await Promise.all(
       tabIds.map(async (tabId): Promise<[number, PreparedTab]> => {
-        const meta = await resolveTabMeta(tabId);
-        const destination = await destinationForTab(tabId, meta.url, downloadsHeld);
+        const meta = metas.get(tabId) ?? { title: "", url: "" };
+        const destination = await destinationForTab(
+          tabId,
+          meta.url,
+          downloadsHeld,
+          rules.get(tabId) ?? null,
+        );
         if (!needsExtraction(destination)) return [tabId, { meta, destination }];
         try {
           return [
@@ -881,6 +1015,8 @@ async function clipSelectedTabs(requestedTabIds: number[]): Promise<ClipSelected
   let obsidianSaved = 0;
   let fileSaved = 0;
   let zoteroSaved = 0;
+  let ruleClosed = 0;
+  const ruleClosedRestorable: ClosedTabRecord[] = [];
   const failures: ClipFailure[] = [];
   for (const [i, tabId] of tabIds.entries()) {
     try {
@@ -901,6 +1037,50 @@ async function clipSelectedTabs(requestedTabIds: number[]): Promise<ClipSelected
         continue;
       }
 
+      if (destination.kind === "never-devour") {
+        fail(
+          "never-devour",
+          `A site rule (${ruleLabel(destination.rule)}) keeps this site out of Devour. ` +
+            "Edit or remove the rule in Settings to clip it.",
+        );
+        continue;
+      }
+
+      if (destination.kind === "auto-close") {
+        // Recorded before removing, like the dedup path — a rule-driven close
+        // must stay as reversible as one the user clicked, so the popups get a
+        // record their undo toast can reopen.
+        let record: ClosedTabRecord | null = null;
+        try {
+          record = tabToClosedRecord(await browser.tabs.get(tabId));
+        } catch {
+          // Already gone; the remove below reports it.
+        }
+        try {
+          await browser.tabs.remove(tabId);
+        } catch (err) {
+          // A rejection is not proof the close failed — the tab may have gone
+          // on its own since the record read. Ask, and report whichever fact
+          // holds: still open is a failure the summary must carry (a silently
+          // dropped tab counts nowhere at all), already gone owes nothing.
+          let stillOpen = false;
+          try {
+            await browser.tabs.get(tabId);
+            stillOpen = true;
+          } catch {
+            // Gone — someone else closed it; there is nothing left to report.
+          }
+          if (stillOpen) {
+            fail("close-failed", errorMessage(err));
+            console.warn("[tabglutton] rule auto-close failed for tab", tabId, err);
+          }
+          continue;
+        }
+        ruleClosed += 1;
+        if (record) ruleClosedRestorable.push(record);
+        continue;
+      }
+
       // The dispatch above holds exactly the Zotero-bound tabs, so its entry is
       // what selects this branch — no second predicate to fall out of step with
       // it. Awaited here rather than there, which is what keeps the counts and
@@ -914,6 +1094,9 @@ async function clipSelectedTabs(requestedTabIds: number[]): Promise<ClipSelected
           console.warn("[tabglutton] Zotero save failed for tab", tabId, err);
           continue;
         }
+        // The Connector accepted the item, which is its report of a handoff and
+        // not a file this extension ever sees — `launched`, like Obsidian.
+        await noteClip(meta.url, "launched", "zotero");
         try {
           await browser.tabs.remove(tabId);
         } catch (err) {
@@ -945,7 +1128,7 @@ async function clipSelectedTabs(requestedTabIds: number[]): Promise<ClipSelected
         try {
           const path = clipDownloadPath(
             res.payload,
-            pickRule(res.payload.url),
+            pickRule(res.payload.url, settings.siteRules),
             settings.clippingsBaseFolder,
             await getFilePlatformOnce(),
           );
@@ -974,6 +1157,10 @@ async function clipSelectedTabs(requestedTabIds: number[]): Promise<ClipSelected
           );
           continue;
         }
+        // `verified`: reaching here means saveClipFile watched the download
+        // reach `state: "complete"`, which is the same evidence that licenses
+        // the close below. The unconfirmed branch above never gets this far.
+        await noteClip(res.payload.url || meta.url, "verified", "file");
         // No OBSIDIAN_HANDOFF_GAP_MS here: that gap paces an external app
         // reading the OS clipboard, and this destination touches neither.
         // saveClipFile has now seen the file land, so the close is safe.
@@ -988,7 +1175,7 @@ async function clipSelectedTabs(requestedTabIds: number[]): Promise<ClipSelected
 
       let req: ObsidianClipRequest;
       try {
-        const rule = pickRule(res.payload.url);
+        const rule = pickRule(res.payload.url, settings.siteRules);
         const content = markdownForClip(res.payload);
         req = await resolveClipRequest(
           res.payload,
@@ -1029,6 +1216,10 @@ async function clipSelectedTabs(requestedTabIds: number[]): Promise<ClipSelected
         continue;
       }
 
+      // `launched` and nothing stronger: the popup has no sidecar to ask, and a
+      // refused obsidian:// launch is indistinguishable from a taken one.
+      await noteClip(res.payload.url || meta.url, "launched", "obsidian");
+
       await delay(OBSIDIAN_HANDOFF_GAP_MS);
       try {
         await browser.tabs.remove(tabId);
@@ -1045,6 +1236,8 @@ async function clipSelectedTabs(requestedTabIds: number[]): Promise<ClipSelected
     obsidianSaved,
     fileSaved,
     zoteroSaved,
+    ruleClosed,
+    ruleClosedRestorable,
     failures,
   };
 }
@@ -1057,9 +1250,12 @@ browser.runtime.onMessage.addListener(async (rawMsg: unknown): Promise<unknown> 
       return finishClipResult(msg);
     case "get-scoped-tabs": {
       const tabs = (await queryScopedTabs()).filter(tabInScope);
+      // Both read once for the whole listing, not once per tab.
+      const memory = await loadClipMemory();
+      const opts = normalizeOptsFrom(settings);
       const response: GetScopedTabsResponse = {
         tabs: tabs
-          .map(tabToPopupTab)
+          .map((t) => tabToPopupTab(t, memory, opts))
           .sort((a, b) => (a.windowId ?? 0) - (b.windowId ?? 0) || a.index - b.index),
         settings,
       };
@@ -1140,9 +1336,107 @@ browser.runtime.onMessage.addListener(async (rawMsg: unknown): Promise<unknown> 
       };
       return response;
     }
+    case "get-diagnostics":
+      return collectDiagnostics();
   }
   return undefined;
 });
+
+/**
+ * The half of the diagnostics block this page owns.
+ *
+ * Deliberately assembled field by field out of `settings` rather than spread
+ * from it: `Settings` carries `bridgeToken`, a spread would carry it into a
+ * block whose whole purpose is to be pasted into a public issue, and a later
+ * field added to `Settings` would be published by a spread without anyone
+ * deciding to publish it. Same reason `loggableSettings` exists a few lines
+ * down. Nothing here reads a tab's URL or title either — `queryScopedTabs`
+ * returns whole tabs, and only their count leaves this function.
+ *
+ * The grants are not read here on purpose: `permissions.contains` is a
+ * WebExtension API call, every one of them resets Chrome's 30s MV3 idle timer,
+ * and the options page can ask the same question without touching this worker's
+ * clock at all.
+ */
+async function collectDiagnostics(): Promise<GetDiagnosticsResponse> {
+  // The message that asked for this may be what woke the page — see
+  // `settingsReady`. Reading `settings` before it resolves would report the
+  // defaults as though they were the user's configuration.
+  await settingsReady;
+  const inScope = (await queryScopedTabs()).filter(tabInScope);
+  const all = await browser.tabs.query({});
+  // Counted over the same list `tabsInScope` reports, so the two numbers in the
+  // block cannot disagree. That still matches the badge: `refreshBadge` groups
+  // the unfiltered scoped list, and the only tabs `tabInScope` drops beyond it
+  // have no URL, which `groupDuplicates` skips anyway.
+  const duplicates = groupDuplicates(inScope, normalizeOptsFrom(settings)).reduce(
+    (n, group) => n + (group.tabs.length - 1),
+    0,
+  );
+  return {
+    engine: await engineLabel(),
+    platform: await platformLabel(),
+    tabsInScope: inScope.length,
+    tabsTotal: all.length,
+    duplicates,
+    windows: new Set(all.map((tab) => tab.windowId)).size,
+    scope: settings.scope,
+    clipDestination: settings.clipDestination,
+    zoteroRouting: settings.zoteroRoutingEnabled,
+    bridge: {
+      enabled: settings.bridgeEnabled,
+      hasToken: settings.bridgeToken.length > 0,
+      portMode: settings.bridgePortMode,
+      fixedPort: settings.bridgePort,
+      status: bridge.status,
+      connectedPort: bridge.connectedPort,
+      allowTabLoad: settings.bridgeAllowTabLoad,
+      errors: bridge.recentErrors,
+    },
+  };
+}
+
+/** Chrome's client-hints surface, which the DOM lib does not declare. */
+interface UserAgentData {
+  getHighEntropyValues?: (hints: string[]) => Promise<{ uaFullVersion?: string }>;
+}
+
+/**
+ * Gecko answers with a name and version outright; Chrome has no
+ * `getBrowserInfo`, so the version comes from client hints, falling back to the
+ * user-agent string. The fallback is the poorer answer on purpose rather than
+ * by accident: Chrome's UA reduction freezes the last three parts, so it
+ * reports `151.0.0.0` for what is really `151.0.7922.174` — measured on 151 —
+ * and a build number is exactly what makes a bug report reproducible.
+ *
+ * Every branch can come up empty, and "unknown" is a better line in a report
+ * than a confidently wrong one.
+ */
+async function engineLabel(): Promise<string> {
+  if (!IS_CHROME) {
+    const info = await getBrowserInfoOnce();
+    if (info?.name) return info.version ? `${info.name} ${info.version}` : info.name;
+    return "Firefox (version unknown)";
+  }
+  const uaData = (navigator as Navigator & { userAgentData?: UserAgentData }).userAgentData;
+  try {
+    const full = (await uaData?.getHighEntropyValues?.(["uaFullVersion"]))?.uaFullVersion;
+    if (full) return `Chrome ${full}`;
+  } catch (err) {
+    console.warn("[tabglutton] client-hint version lookup failed", err);
+  }
+  const version = /Chrome\/([\d.]+)/.exec(navigator.userAgent)?.[1];
+  return version ? `Chrome ${version}` : "Chrome (version unknown)";
+}
+
+async function platformLabel(): Promise<string> {
+  try {
+    const { os, arch } = await browser.runtime.getPlatformInfo();
+    return `${os} ${arch}`;
+  } catch {
+    return "unknown";
+  }
+}
 
 const COCKPIT_URL = browser.runtime.getURL("popup/devour.html");
 
@@ -1182,7 +1476,7 @@ browser.runtime.onInstalled.addListener(async (details) => {
 });
 
 void (async function init() {
-  settings = await loadSettings();
+  await settingsReady;
   // Dial before the tab-heavy work below, not after. This is an event page: the
   // browser re-runs init on every wake, including the wakes the reconnect alarm
   // causes, so anything ahead of `start()` is paid again on every single

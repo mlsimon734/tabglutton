@@ -185,9 +185,8 @@
             <strong>Clippings folder</strong>
             <small>
               Folder where Devour saves clipped pages — inside your vault, or inside your download
-              folder in file mode. Per-site subfolders are added automatically (e.g.
-              <code>&lt;folder&gt;/GitHub</code>, <code>&lt;folder&gt;/Social</code>). Leave blank
-              to use <code>Clippings</code>.
+              folder in file mode. Site rules below add per-site subfolders (e.g.
+              <code>&lt;folder&gt;/GitHub</code>). Leave blank to use <code>Clippings</code>.
             </small>
           </div>
           <div class="setting-control">
@@ -223,6 +222,20 @@
             </label>
           </div>
         </div>
+      </section>
+
+      <section>
+        <h2 class="section-title">Site rules</h2>
+        <p class="section-intro">
+          Standing decisions for sites you meet constantly. The first matching rule, top to bottom,
+          decides what Devour does with a tab: file it into a subfolder, keep it open, close it
+          without saving, or send it to Zotero. Patterns ignore case,
+          <code>www.</code>, and tracking params, and can pin a path — <code>github.com</code> takes
+          the whole site, <code>reddit.com/r/rust</code> just that corner. Every rule shows on its
+          tabs in the popup and the cockpit before Devour runs.
+        </p>
+        <ul id="rulesList" class="rules-list"></ul>
+        <button type="button" id="ruleAdd" class="mini-button rules-add">Add rule</button>
       </section>
 
       <section>
@@ -458,6 +471,28 @@
                 <small>Shown in Firefox's own panel for extension settings.</small>
               </span>
             </label>
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <h2 class="section-title">Troubleshooting</h2>
+
+        <!-- The id is the scroll target for the CDP screenshot harness this
+             project requires for a visible-surface change, not a script hook. -->
+        <div class="setting block" id="diagnosticsBlock">
+          <div class="setting-text">
+            <strong>Copy diagnostics</strong>
+            <small>
+              Puts a short summary of this install on the clipboard — versions, tab counts, bridge
+              state and its recent errors — ready to paste into a bug report. It contains no page
+              addresses, no tab titles and never your bridge token.
+            </small>
+          </div>
+          <div class="setting-control">
+            <button type="button" id="diagnosticsCopy" class="mini-button self-start">
+              Copy diagnostics
+            </button>
           </div>
         </div>
       </section>

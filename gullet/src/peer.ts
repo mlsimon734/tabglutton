@@ -16,7 +16,7 @@ import {
   parseMessage,
   proofsMatch,
   randomNonce,
-  type BridgeMethod,
+  type BridgeWireMethod,
 } from "../../src/bridge-protocol.js";
 import { parsePeerMessage, type PeerRequestMessage } from "./peer-protocol.js";
 import type { ConnectionSummary } from "./select.js";
@@ -197,7 +197,7 @@ export class PeerClient {
     return this.call({ op: "connections" }) as Promise<ConnectionSummary[]>;
   }
 
-  request(connectionId: string, method: BridgeMethod, params: unknown): Promise<unknown> {
+  request(connectionId: string, method: BridgeWireMethod, params: unknown): Promise<unknown> {
     return this.call({ op: "call", connectionId, method, params });
   }
 
