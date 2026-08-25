@@ -71,7 +71,8 @@ body.cockpit {
 .action-cluster,
 .kbd-legend,
 .warning,
-.devour-failures {
+.devour-failures,
+.group-preview {
   box-shadow:
     inset 0 1px 0 var(--glass-rim),
     0 0 0 1px var(--glass-edge),
@@ -813,6 +814,21 @@ body.initial-load .section-head {
   white-space: nowrap;
 }
 
+/* Quiet ink, not accent: a rule disposition is a standing decision the user
+   already made, not a state the tool is choosing now. */
+.rule-pill {
+  font-size: var(--fs-micro);
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: var(--track-label);
+  text-transform: uppercase;
+  color: var(--muted);
+  background: var(--hover-strong);
+  border-radius: var(--radius-pill);
+  padding: 4px 8px;
+  white-space: nowrap;
+}
+
 /* Quieter than `.keep-pill`: this one is history, not a claim about what the
    next click will do. The verified state is the only one that earns the
    confident colour, and it earns it from a filesystem check. */
@@ -1098,6 +1114,133 @@ body.initial-load .section-head {
 .devour-failures-row .retry {
   font-size: var(--fs-tiny);
   padding: 3px 11px;
+}
+
+/* ---------- group preview ---------- */
+
+/* Same floating-panel grammar as the failures panel, in neutral ink — a
+   preview is information, not an alarm. */
+.group-preview {
+  margin: 0 0 var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-3);
+  background: var(--glass-dense);
+  -webkit-backdrop-filter: var(--glass-blur-dense);
+  backdrop-filter: var(--glass-blur-dense);
+  border: 1px solid var(--hairline-strong);
+  font-size: var(--fs-small);
+}
+
+.group-preview-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-bottom: 6px;
+}
+
+.group-preview-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--ink);
+  font-weight: 500;
+}
+
+.group-preview-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.group-preview-actions button {
+  font-size: var(--fs-tiny);
+  padding: 4px 10px;
+}
+
+.group-preview-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 180px;
+  overflow: auto;
+  scrollbar-width: thin;
+}
+
+/* Count sits beside the name it describes — the panel spans the whole bottom
+   chrome, and a 1fr middle column flung the number to the far edge, the exact
+   fault the queue's max-width exists to prevent. */
+.group-preview-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: 4px 8px;
+  border-radius: var(--radius-1);
+}
+
+.group-preview-name {
+  font-weight: 500;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.group-preview-tabs {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.group-preview-note {
+  margin: 6px 0 0;
+  padding: 0 8px;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.group-preview-note:empty {
+  display: none;
+}
+
+/* The engines' own tab-group palette, close enough to be recognizable as a
+   swatch on both themes; the ring keeps yellow legible on paper. */
+.group-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px var(--hairline-strong);
+}
+
+.swatch-grey {
+  background: #5f6368;
+}
+.swatch-blue {
+  background: #1a73e8;
+}
+.swatch-red {
+  background: #d93025;
+}
+.swatch-yellow {
+  background: #f9ab00;
+}
+.swatch-green {
+  background: #188038;
+}
+.swatch-pink {
+  background: #d01884;
+}
+.swatch-purple {
+  background: #a142f4;
+}
+.swatch-cyan {
+  background: #007b83;
+}
+.swatch-orange {
+  background: #fa903e;
 }
 
 /* ---------- action bar ---------- */

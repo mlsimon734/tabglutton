@@ -30,7 +30,8 @@ import type { NormalizeOpts } from "./normalize.js";
 import { DOWNLOADS_GONE, downloadsGrant } from "./permissions.js";
 import { getFilePlatformOnce } from "./platform.js";
 import { delay } from "./serialize.js";
-import { pickRule } from "./site-rules.js";
+import type { PlannedGroup } from "./grouping.js";
+import { pickRule, ruleLabel, type SiteRule } from "./site-rules.js";
 import { groupDuplicates, pickKeeper, type Tab } from "./dedup.js";
 import {
   clipsToFile,
@@ -59,6 +60,7 @@ export type ReopenTabsMessage = {
 export type OpenCockpitMessage = { type: "open-cockpit" };
 export type GetBridgeStatusMessage = { type: "get-bridge-status" };
 export type GetDiagnosticsMessage = { type: "get-diagnostics" };
+export type ApplyGroupingMessage = { type: "apply-grouping"; groups: PlannedGroup[] };
 export type IncomingMessage =
   | GetScopedTabsMessage
   | ClipSelectedTabsMessage
@@ -69,7 +71,8 @@ export type IncomingMessage =
   | ReopenTabsMessage
   | OpenCockpitMessage
   | GetBridgeStatusMessage
-  | GetDiagnosticsMessage;
+  | GetDiagnosticsMessage
+  | ApplyGroupingMessage;
 
 /**
  * Everything the diagnostics block needs that only this page knows — the bridge
@@ -77,6 +80,18 @@ export type IncomingMessage =
  * the permission grants and renders; see `collectDiagnostics`.
  */
 export type GetDiagnosticsResponse = DiagnosticsBackgroundFacts;
+
+export interface ApplyGroupingResponse {
+  /** Tabs actually placed into a group. */
+  grouped: number;
+  /** Browser groups created or added to. */
+  groupsTouched: number;
+  /**
+   * A stated fact when this engine cannot group at all — `tabs.group` absent,
+   * or `tabGroups` missing despite the manifest permission. Nothing was moved.
+   */
+  unsupported?: string;
+}
 
 export interface GetBridgeStatusResponse {
   status: BridgeStatus;
@@ -97,7 +112,16 @@ export type ClipFailureReason =
   | "trigger-failed"
   | "vault-missing"
   | "zotero-failed"
-  | "download-failed";
+  | "download-failed"
+  /** An auto-close rule's `tabs.remove` was refused and the tab is still open. */
+  | "close-failed"
+  /**
+   * Not a fault: a site rule marks this site never-devour, so the run left the
+   * tab open on purpose. Reported through the same channel because a selected
+   * tab that was not clipped needs saying either way — the pill and summary
+   * name the rule rather than calling it a failure.
+   */
+  | "never-devour";
 
 export interface ClipFailure {
   tabId: number;
@@ -121,6 +145,10 @@ export interface ClipSelectedTabsResponse {
   /** Written as markdown files in the download folder (`clipDestination: "file"`). */
   fileSaved: number;
   zoteroSaved: number;
+  /** Closed without saving by an `auto-close` site rule. */
+  ruleClosed: number;
+  /** What those closes could reopen — the popups feed this to their undo toast. */
+  ruleClosedRestorable: ClosedTabRecord[];
   /** Present only when nothing was attempted — and nothing was woken either. */
   blocked?: ClipBlockedReason;
   failures: ClipFailure[];
@@ -733,6 +761,8 @@ type TabDestination =
   | { kind: "obsidian" }
   | { kind: "file" }
   | { kind: "zotero" }
+  | { kind: "never-devour"; rule: SiteRule }
+  | { kind: "auto-close" }
   | { kind: "failed"; reason: ClipFailureReason; detail: string };
 
 /** Both note destinations run Defuddle; Zotero owns its own page reading. */
@@ -757,7 +787,14 @@ async function destinationForTab(
   tabId: number,
   url: string,
   downloadsHeld: boolean,
+  rule: SiteRule | null,
 ): Promise<TabDestination> {
+  // The two dispositions that never touch the page are answered before the
+  // wake below: a never-devour tab is left exactly as it is, and an auto-close
+  // needs no content — reloading a discarded backlog just to keep or close its
+  // tabs would spend what discarding saved.
+  if (rule?.disposition === "never-devour") return { kind: "never-devour", rule };
+  if (rule?.disposition === "auto-close") return { kind: "auto-close" };
   // clipTab re-checks the scheme against its own fresh read and owns the error
   // message; this gate only keeps a tab that provably cannot be clipped from
   // being woken and probed for nothing. An address we cannot read yet is not
@@ -772,6 +809,12 @@ async function destinationForTab(
       // extract failure, which is what the Obsidian path always called it.
       return { kind: "failed", reason: "extract-failed", detail: errorMessage(err) };
     }
+    // A zotero rule skips the Connector's detection poll on purpose: the user
+    // named the destination outright, the same way a `vault` override names
+    // Obsidian — and it holds whether or not detection-based routing is on.
+    // The save itself still goes through the Connector, which is where a
+    // missing Zotero fails loudly rather than silently going elsewhere.
+    if (rule?.disposition === "zotero") return { kind: "zotero" };
     if (settings.zoteroRoutingEnabled) {
       const zotero = await zoteroDestination(tabId);
       if (zotero) return zotero;
@@ -861,7 +904,16 @@ async function noteClip(
 }
 
 function clipBlocked(blocked: ClipBlockedReason): ClipSelectedTabsResponse {
-  return { failed: 0, obsidianSaved: 0, fileSaved: 0, zoteroSaved: 0, blocked, failures: [] };
+  return {
+    failed: 0,
+    obsidianSaved: 0,
+    fileSaved: 0,
+    zoteroSaved: 0,
+    ruleClosed: 0,
+    ruleClosedRestorable: [],
+    blocked,
+    failures: [],
+  };
 }
 
 async function clipSelectedTabs(requestedTabIds: number[]): Promise<ClipSelectedTabsResponse> {
@@ -874,6 +926,21 @@ async function clipSelectedTabs(requestedTabIds: number[]): Promise<ClipSelected
   const tabIds = [...new Set(requestedTabIds)];
   const vault = settings.obsidianVault.trim();
   if (!hasClipDestination(settings)) return clipBlocked("no-destination");
+
+  // Metadata and rules come first: the downloads gate below has to know
+  // whether anything in the run could go somewhere other than a file, and a
+  // rule disposition is one of the ways it can. `resolveTabMeta` is a plain
+  // read — nothing is woken by it.
+  const metas = new Map<number, { title: string; url: string }>();
+  const rules = new Map<number, SiteRule | null>();
+  await Promise.all(
+    tabIds.map(async (tabId) => {
+      const meta = await resolveTabMeta(tabId);
+      metas.set(tabId, meta);
+      rules.set(tabId, pickRule(meta.url, settings.siteRules));
+    }),
+  );
+
   // `downloads` is optional and revocable from the browser's own add-on UI, so
   // the grant the options page collected may be gone. It is run-global, so it
   // is answered once here — and *before* phase 1, which reloads every discarded
@@ -884,11 +951,16 @@ async function clipSelectedTabs(requestedTabIds: number[]): Promise<ClipSelected
   // Refusing the whole run needs the stronger claim that nothing in it could
   // have gone anywhere else. Zotero routing breaks that: an academic tab files
   // through the Connector, which needs no `downloads` at all, so a run with
-  // routing on is let through and only its file-bound tabs fail. And only a
-  // grant seen to be missing refuses anything — `unknown` carries on, because a
-  // check that threw is not evidence of a revocation.
+  // routing on is let through and only its file-bound tabs fail. A site rule
+  // breaks it the same way — a never-devour, auto-close, or zotero disposition
+  // spends nothing on the grant. And only a grant seen to be missing refuses
+  // anything — `unknown` carries on, because a check that threw is not
+  // evidence of a revocation.
   const downloadsHeld = clipsToFile(settings) ? (await downloadsGrant()) !== "missing" : true;
-  if (!downloadsHeld && !settings.zoteroRoutingEnabled) return clipBlocked("downloads-revoked");
+  const couldGoElsewhere =
+    settings.zoteroRoutingEnabled ||
+    [...rules.values()].some((rule) => rule !== null && rule.disposition !== "devour");
+  if (!downloadsHeld && !couldGoElsewhere) return clipBlocked("downloads-revoked");
 
   // Phase 1: read, wake, route and extract each tab as one per-tab chain, all
   // of them overlapping. There is deliberately no barrier between the steps —
@@ -902,8 +974,13 @@ async function clipSelectedTabs(requestedTabIds: number[]): Promise<ClipSelected
   const prepared = new Map(
     await Promise.all(
       tabIds.map(async (tabId): Promise<[number, PreparedTab]> => {
-        const meta = await resolveTabMeta(tabId);
-        const destination = await destinationForTab(tabId, meta.url, downloadsHeld);
+        const meta = metas.get(tabId) ?? { title: "", url: "" };
+        const destination = await destinationForTab(
+          tabId,
+          meta.url,
+          downloadsHeld,
+          rules.get(tabId) ?? null,
+        );
         if (!needsExtraction(destination)) return [tabId, { meta, destination }];
         try {
           return [
@@ -953,6 +1030,8 @@ async function clipSelectedTabs(requestedTabIds: number[]): Promise<ClipSelected
   let obsidianSaved = 0;
   let fileSaved = 0;
   let zoteroSaved = 0;
+  let ruleClosed = 0;
+  const ruleClosedRestorable: ClosedTabRecord[] = [];
   const failures: ClipFailure[] = [];
   for (const [i, tabId] of tabIds.entries()) {
     try {
@@ -970,6 +1049,50 @@ async function clipSelectedTabs(requestedTabIds: number[]): Promise<ClipSelected
 
       if (destination.kind === "failed") {
         fail(destination.reason, destination.detail);
+        continue;
+      }
+
+      if (destination.kind === "never-devour") {
+        fail(
+          "never-devour",
+          `A site rule (${ruleLabel(destination.rule)}) keeps this site out of Devour. ` +
+            "Edit or remove the rule in Settings to clip it.",
+        );
+        continue;
+      }
+
+      if (destination.kind === "auto-close") {
+        // Recorded before removing, like the dedup path — a rule-driven close
+        // must stay as reversible as one the user clicked, so the popups get a
+        // record their undo toast can reopen.
+        let record: ClosedTabRecord | null = null;
+        try {
+          record = tabToClosedRecord(await browser.tabs.get(tabId));
+        } catch {
+          // Already gone; the remove below reports it.
+        }
+        try {
+          await browser.tabs.remove(tabId);
+        } catch (err) {
+          // A rejection is not proof the close failed — the tab may have gone
+          // on its own since the record read. Ask, and report whichever fact
+          // holds: still open is a failure the summary must carry (a silently
+          // dropped tab counts nowhere at all), already gone owes nothing.
+          let stillOpen = false;
+          try {
+            await browser.tabs.get(tabId);
+            stillOpen = true;
+          } catch {
+            // Gone — someone else closed it; there is nothing left to report.
+          }
+          if (stillOpen) {
+            fail("close-failed", errorMessage(err));
+            console.warn("[tabglutton] rule auto-close failed for tab", tabId, err);
+          }
+          continue;
+        }
+        ruleClosed += 1;
+        if (record) ruleClosedRestorable.push(record);
         continue;
       }
 
@@ -1020,7 +1143,7 @@ async function clipSelectedTabs(requestedTabIds: number[]): Promise<ClipSelected
         try {
           const path = clipDownloadPath(
             res.payload,
-            pickRule(res.payload.url),
+            pickRule(res.payload.url, settings.siteRules),
             settings.clippingsBaseFolder,
             await getFilePlatformOnce(),
           );
@@ -1067,7 +1190,7 @@ async function clipSelectedTabs(requestedTabIds: number[]): Promise<ClipSelected
 
       let req: ObsidianClipRequest;
       try {
-        const rule = pickRule(res.payload.url);
+        const rule = pickRule(res.payload.url, settings.siteRules);
         const content = markdownForClip(res.payload);
         req = await resolveClipRequest(
           res.payload,
@@ -1128,6 +1251,8 @@ async function clipSelectedTabs(requestedTabIds: number[]): Promise<ClipSelected
     obsidianSaved,
     fileSaved,
     zoteroSaved,
+    ruleClosed,
+    ruleClosedRestorable,
     failures,
   };
 }
@@ -1184,6 +1309,8 @@ browser.runtime.onMessage.addListener(async (rawMsg: unknown): Promise<unknown> 
       }
       return { closed: ids.length };
     }
+    case "apply-grouping":
+      return applyGrouping(Array.isArray(msg.groups) ? msg.groups : []);
     case "focus-tab": {
       const tab = await browser.tabs.get(msg.tabId);
       if (tab.id !== undefined) {
@@ -1231,6 +1358,92 @@ browser.runtime.onMessage.addListener(async (rawMsg: unknown): Promise<unknown> 
   }
   return undefined;
 });
+
+/**
+ * Materialize a grouping plan the cockpit previewed. The plan is the contract:
+ * only the ids it names are touched, and ids that stopped resolving since the
+ * preview are skipped rather than retried — Chrome renumbers a tab on discard,
+ * and grouping a guess would move something the preview never showed.
+ *
+ * Typed through narrow local casts because `tabs.group` (Firefox 138) and
+ * `tabGroups` (139, behind the manifest permission) postdate the ambient
+ * types, and their absence at runtime has to be a stated fact either way.
+ */
+async function applyGrouping(groups: PlannedGroup[]): Promise<ApplyGroupingResponse> {
+  const tabsApi = browser.tabs as typeof browser.tabs & {
+    group?: (options: {
+      tabIds: number[];
+      groupId?: number;
+      createProperties?: { windowId?: number };
+    }) => Promise<number>;
+  };
+  const tabGroups = (
+    browser as typeof browser & {
+      tabGroups?: {
+        query: (info: { windowId?: number; title?: string }) => Promise<{ id: number }[]>;
+        update: (groupId: number, props: { title?: string; color?: string }) => Promise<unknown>;
+      };
+    }
+  ).tabGroups;
+  if (typeof tabsApi.group !== "function" || !tabGroups) {
+    return {
+      grouped: 0,
+      groupsTouched: 0,
+      unsupported:
+        typeof tabsApi.group !== "function"
+          ? "This browser has no tabs.group API (Firefox 138+ / Chrome 88+), so nothing was moved."
+          : "The tabGroups API is missing despite the manifest permission, so nothing was moved.",
+    };
+  }
+
+  let grouped = 0;
+  let groupsTouched = 0;
+  for (const plan of groups) {
+    const wanted = Array.isArray(plan.tabIds) ? plan.tabIds.filter(Number.isInteger) : [];
+    const live: number[] = [];
+    for (const id of wanted) {
+      try {
+        await browser.tabs.get(id);
+        live.push(id);
+      } catch {
+        // Closed or renumbered since the preview; skipped, never guessed at.
+      }
+    }
+    if (!live.length) continue;
+
+    // Add to a same-named group in that window rather than minting a twin.
+    let existingGroupId: number | undefined;
+    try {
+      const existing = await tabGroups.query({ windowId: plan.windowId, title: plan.name });
+      existingGroupId = existing[0]?.id;
+    } catch (err) {
+      console.warn("[tabglutton] tabGroups.query failed for", plan.name, err);
+    }
+
+    try {
+      const groupId =
+        existingGroupId !== undefined
+          ? await tabsApi.group({ tabIds: live, groupId: existingGroupId })
+          : await tabsApi.group({
+              tabIds: live,
+              ...(plan.windowId >= 0 ? { createProperties: { windowId: plan.windowId } } : {}),
+            });
+      grouped += live.length;
+      groupsTouched += 1;
+      try {
+        await tabGroups.update(groupId, { title: plan.name, color: plan.color });
+      } catch (err) {
+        // The tabs are grouped; only the label/colour write failed. Grouping
+        // stands — reporting a whole group as failed over a cosmetic write
+        // would overstate it.
+        console.warn("[tabglutton] tabGroups.update failed for", plan.name, err);
+      }
+    } catch (err) {
+      console.warn("[tabglutton] tabs.group failed for", plan.name, err);
+    }
+  }
+  return { grouped, groupsTouched };
+}
 
 /**
  * The half of the diagnostics block this page owns.

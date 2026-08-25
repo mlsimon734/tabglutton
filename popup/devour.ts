@@ -1,4 +1,5 @@
 import type {
+  ApplyGroupingResponse,
   ClipFailure,
   ClipSelectedTabsResponse,
   ClosedTabRecord,
@@ -6,10 +7,11 @@ import type {
   GetScopedTabsResponse,
   PopupTab,
 } from "../src/background.js";
+import { planGrouping, plannedTabCount, type GroupingPlan } from "../src/grouping.js";
 import { clipMarkFor } from "../src/clip-memory.js";
 import { openOptionsUi } from "../src/open-options.js";
 import { CLIP_ORIGINS, DOWNLOADS_GONE, requestOrigins } from "../src/permissions.js";
-import { pickRule, type SiteRule } from "../src/site-rules.js";
+import { pickRule, ruleLabel, type SiteRule } from "../src/site-rules.js";
 import {
   clipNeedsPageAccess,
   clipsToFile,
@@ -27,6 +29,7 @@ import {
   hostOf,
   markdownForTabs,
   reasonLabel,
+  ruleMark,
   selectedTabsInUiOrder,
   sendMessage,
   type TabGroup,
@@ -50,6 +53,8 @@ interface CockpitState {
   devourFailures: ClipFailure[];
   focusedTabId: number | null;
   stickyOrder: string[] | null;
+  /** The grouping plan on preview. Apply sends exactly this; Cancel drops it. */
+  groupPlan: GroupingPlan | null;
 }
 
 interface ToastState {
@@ -88,6 +93,13 @@ const devourFailuresCountEl = document.getElementById("devour-failures-count") a
 const devourFailuresListEl = document.getElementById("devour-failures-list") as HTMLUListElement;
 const devourRetryAllBtn = document.getElementById("devour-retry-all") as HTMLButtonElement;
 const devourDismissBtn = document.getElementById("devour-dismiss") as HTMLButtonElement;
+const groupTabsBtn = document.getElementById("group-tabs") as HTMLButtonElement;
+const groupPreviewEl = document.getElementById("group-preview") as HTMLElement;
+const groupPreviewCountEl = document.getElementById("group-preview-count") as HTMLSpanElement;
+const groupPreviewListEl = document.getElementById("group-preview-list") as HTMLUListElement;
+const groupPreviewNoteEl = document.getElementById("group-preview-note") as HTMLParagraphElement;
+const groupApplyBtn = document.getElementById("group-apply") as HTMLButtonElement;
+const groupCancelBtn = document.getElementById("group-cancel") as HTMLButtonElement;
 
 const state: CockpitState = {
   scopedTabs: [],
@@ -101,6 +113,7 @@ const state: CockpitState = {
   devourFailures: [],
   focusedTabId: null,
   stickyOrder: null,
+  groupPlan: null,
 };
 
 function renderWarning(): void {
@@ -289,6 +302,18 @@ function renderGroup(group: TabGroup): HTMLLIElement {
 function renderMarks(tab: PopupTab, group: TabGroup): HTMLSpanElement | null {
   const marks: HTMLElement[] = [];
 
+  // Disposition pills come first: a rule about to keep, close, or reroute a
+  // tab has to be readable before Devour runs, not discovered in its report.
+  const rule = state.settings && tab.url ? pickRule(tab.url, state.settings.siteRules) : null;
+  if (rule && rule.disposition !== "devour") {
+    const mark = ruleMark(rule.disposition);
+    const pill = document.createElement("span");
+    pill.className = `rule-pill rule-${rule.disposition}`;
+    pill.textContent = mark.label;
+    pill.title = mark.title;
+    marks.push(pill);
+  }
+
   if (group.kind === "duplicate" && tab.id === group.keeperId) {
     const keep = document.createElement("span");
     keep.className = "keep-pill";
@@ -471,6 +496,117 @@ function renderDevourFailures(): void {
   devourFailuresListEl.replaceChildren(...failures.map(renderFailureRow));
 }
 
+/* ---------- rule grouping ---------- */
+
+/**
+ * The preview is the whole contract with the user: silently reordering a few
+ * hundred tabs is alarming even though it is non-destructive, so nothing is
+ * grouped until this panel has shown exactly what will move — and Apply sends
+ * the previewed plan itself, not a fresh computation that could have drifted.
+ */
+function previewGrouping(): void {
+  if (!state.settings) return;
+  state.groupPlan = planGrouping(
+    state.scopedTabs,
+    state.settings.siteRules,
+    state.settings.groupingSkipList,
+  );
+  renderGroupPreview();
+}
+
+function discardGroupPreview(): void {
+  state.groupPlan = null;
+  renderGroupPreview();
+}
+
+function windowLabelsNeeded(plan: GroupingPlan): boolean {
+  return new Set(plan.groups.map((g) => g.windowId)).size > 1;
+}
+
+function renderGroupPreview(): void {
+  const plan = state.groupPlan;
+  if (!plan) {
+    groupPreviewEl.hidden = true;
+    groupPreviewListEl.replaceChildren();
+    return;
+  }
+  groupPreviewEl.hidden = false;
+
+  const moved = plannedTabCount(plan);
+  groupPreviewCountEl.hidden = moved === 0;
+  groupPreviewCountEl.textContent = String(moved);
+  groupApplyBtn.disabled = moved === 0;
+
+  const multiWindow = windowLabelsNeeded(plan);
+  const rows = plan.groups.map((g) => {
+    const li = document.createElement("li");
+    li.className = "group-preview-row";
+    const swatch = document.createElement("span");
+    swatch.className = `group-swatch swatch-${g.color}`;
+    const name = document.createElement("span");
+    name.className = "group-preview-name";
+    name.textContent = g.name;
+    const count = document.createElement("span");
+    count.className = "group-preview-tabs";
+    count.textContent =
+      `${g.tabIds.length} ${g.tabIds.length === 1 ? "tab" : "tabs"}` +
+      (multiWindow ? ` · window ${g.windowId}` : "");
+    li.append(swatch, name, count);
+    return li;
+  });
+  groupPreviewListEl.replaceChildren(...rows);
+
+  const notes: string[] = [];
+  if (moved === 0) {
+    notes.push(
+      "Nothing to group — no rule with a group matches this scope. Give a rule a group in Settings.",
+    );
+  }
+  if (plan.pinnedExcluded > 0) {
+    notes.push(
+      `${plan.pinnedExcluded} pinned ${plan.pinnedExcluded === 1 ? "tab" : "tabs"} excluded — grouping would unpin them.`,
+    );
+  }
+  if (plan.skippedBySkipList > 0) {
+    notes.push(`${plan.skippedBySkipList} parked by the skip list.`);
+  }
+  if (plan.unmatched > 0 && moved > 0) {
+    notes.push(
+      `${plan.unmatched} unmatched ${plan.unmatched === 1 ? "tab stays" : "tabs stay"} put.`,
+    );
+  }
+  groupPreviewNoteEl.textContent = notes.join(" ");
+  groupPreviewNoteEl.hidden = notes.length === 0;
+}
+
+async function applyGroupPreview(): Promise<void> {
+  const plan = state.groupPlan;
+  if (!plan || plannedTabCount(plan) === 0) return;
+  groupApplyBtn.disabled = true;
+  const res = await sendMessage<ApplyGroupingResponse>({
+    type: "apply-grouping",
+    groups: plan.groups,
+  });
+  if (!res) {
+    groupPreviewNoteEl.textContent = "Grouping failed — the background page did not answer.";
+    groupApplyBtn.disabled = false;
+    return;
+  }
+  if (res.unsupported) {
+    // A stated fact, in the panel that asked: nothing moved.
+    groupPreviewNoteEl.textContent = res.unsupported;
+    groupApplyBtn.disabled = false;
+    return;
+  }
+  discardGroupPreview();
+  const original = groupTabsBtn.textContent;
+  groupTabsBtn.textContent = `Grouped ${res.grouped}`;
+  setTimeout(() => {
+    groupTabsBtn.textContent = original;
+  }, 1600);
+  await refresh();
+}
+
 /* ---------- inspector ---------- */
 
 function sanitizeFileName(name: string): string {
@@ -610,33 +746,50 @@ function renderInspectorPreview(tab: PopupTab, root: string): HTMLElement {
   head.append(fav, headText);
   wrap.append(head);
 
-  const rule = tab.url ? pickRule(tab.url) : null;
+  const rule = tab.url && state.settings ? pickRule(tab.url, state.settings.siteRules) : null;
   const folder = targetFolder(rule);
   const fileName = sanitizeFileName(tab.title || tab.url || "Untitled");
+  const disposition = rule?.disposition ?? "devour";
 
   const pathSection = document.createElement("section");
   pathSection.className = "inspector-section";
   const pathLabel = document.createElement("span");
   pathLabel.className = "inspector-section-label";
-  pathLabel.textContent = "Will save to";
+  pathLabel.textContent = disposition === "devour" ? "Will save to" : "On devour";
   const path = document.createElement("div");
   path.className = "inspector-path";
-  const rootEl = document.createElement("strong");
-  rootEl.textContent = root;
-  path.append(rootEl, ` / ${folder} / ${fileName}.md`);
+  if (disposition === "devour") {
+    const rootEl = document.createElement("strong");
+    rootEl.textContent = root;
+    path.append(rootEl, ` / ${folder} / ${fileName}.md`);
+  } else {
+    // A rule that keeps, closes, or reroutes the tab means the save path above
+    // would describe something that will not happen — say what will instead.
+    path.textContent =
+      disposition === "never-devour"
+        ? "Kept open — a site rule keeps this site out of Devour."
+        : disposition === "auto-close"
+          ? "Closed without saving — a site rule."
+          : "Saved to Zotero through its Connector — a site rule.";
+  }
   pathSection.append(pathLabel, path);
   wrap.append(pathSection);
 
-  const fmSection = document.createElement("section");
-  fmSection.className = "inspector-section";
-  const fmLabel = document.createElement("span");
-  fmLabel.className = "inspector-section-label";
-  fmLabel.textContent = "Frontmatter preview";
-  const fm = document.createElement("pre");
-  fm.className = "inspector-frontmatter";
-  fm.append(buildFrontmatterPreview(tab));
-  fmSection.append(fmLabel, fm);
-  wrap.append(fmSection);
+  // Only a tab that will actually become a note gets a frontmatter preview —
+  // under "Kept open" or "Closed without saving" it would preview a note the
+  // rule just said will not exist.
+  if (disposition === "devour") {
+    const fmSection = document.createElement("section");
+    fmSection.className = "inspector-section";
+    const fmLabel = document.createElement("span");
+    fmLabel.className = "inspector-section-label";
+    fmLabel.textContent = "Frontmatter preview";
+    const fm = document.createElement("pre");
+    fm.className = "inspector-frontmatter";
+    fm.append(buildFrontmatterPreview(tab));
+    fmSection.append(fmLabel, fm);
+    wrap.append(fmSection);
+  }
 
   const metaSection = document.createElement("section");
   metaSection.className = "inspector-section";
@@ -646,8 +799,14 @@ function renderInspectorPreview(tab: PopupTab, root: string): HTMLElement {
   const dl = document.createElement("dl");
   dl.className = "inspector-meta";
   addDef(dl, "Host", hostOf(tab.url));
-  addDef(dl, "Rule", rule ? rule.id : "default");
-  addDef(dl, "Folder", folder);
+  addDef(dl, "Rule", rule ? ruleLabel(rule) : "default");
+  if (disposition === "devour") {
+    // A folder row under a disposition that files nothing would name a place
+    // nothing will go.
+    addDef(dl, "Folder", folder);
+  } else {
+    addDef(dl, "Disposition", ruleMark(disposition).label);
+  }
   metaSection.append(metaLabel, dl);
   wrap.append(metaSection);
 
@@ -875,6 +1034,9 @@ async function clipSelected(): Promise<void> {
   }
   mergeClipFailures(tabIds, res.failures);
   await refresh();
+  // Rule-driven closes get the same undo the dedup button offers — a rule the
+  // user wrote is still a close they may want back.
+  if (res.ruleClosed > 0) showUndoToast(res.ruleClosed, res.ruleClosedRestorable);
   restore(clipSummary(res), res.failed === 0 ? 1400 : 2400);
 }
 
@@ -1061,6 +1223,9 @@ document.addEventListener("keydown", (e) => {
 });
 
 dedupBtn.addEventListener("click", () => void runDedup());
+groupTabsBtn.addEventListener("click", () => previewGrouping());
+groupApplyBtn.addEventListener("click", () => void applyGroupPreview());
+groupCancelBtn.addEventListener("click", () => discardGroupPreview());
 optionsBtn.addEventListener("click", () => void openOptionsUi());
 filterInput.addEventListener("input", () => {
   state.filter = filterInput.value;

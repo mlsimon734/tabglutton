@@ -52,7 +52,7 @@ import {
 import type { NormalizeOpts } from "./normalize.js";
 import { getFilePlatformOnce } from "./platform.js";
 import { createTaskQueue, delay } from "./serialize.js";
-import { pickRule, type SiteRule } from "./site-rules.js";
+import { pickRule, ruleLabel, type SiteRule } from "./site-rules.js";
 import { clipDestinationFor, normalizeOptsFrom, type Settings } from "./storage.js";
 import { CLIP_ORIGINS, DOWNLOADS_REMEDY, downloadsGrant, hasOrigins } from "./permissions.js";
 import { IS_CHROME } from "./target.js";
@@ -802,7 +802,31 @@ export class BridgeMethodRunner {
     const params = parseTabClipParams(raw);
     const settings = this.deps.getSettings();
 
-    // Zotero routing runs first, and runs the *same* routing the popup's Devour
+    // A never-devour rule is the user's standing refusal, and it outranks the
+    // agent's request the way it outranks the popup's Devour button — refused
+    // from tab metadata, before a Connector round trip or a Defuddle injection
+    // is spent on it. Ahead of Zotero routing deliberately: a routed save still
+    // files and closes the tab, which is exactly what the rule forbids. The
+    // other dispositions do not reroute an explicit tab_clip: the agent asked
+    // for a clip, and a rule silently closing the tab or re-aiming the note
+    // instead would be the tool acting on its own. A metadata read that throws
+    // is left for readTab below, which owns the missing-tab error and its hint.
+    let metaUrl = "";
+    try {
+      metaUrl = tabUrl(await browser.tabs.get(params.tabId)) ?? "";
+    } catch {
+      // readTab reports this tab properly.
+    }
+    const metaRule = pickRule(metaUrl, settings.siteRules);
+    if (metaRule?.disposition === "never-devour") {
+      fail(
+        "not-enabled",
+        `The user's site rules mark this site (${ruleLabel(metaRule)}) never-devour, ` +
+          "so this tab is not clipped. They can edit the rule in Tabglutton's settings.",
+      );
+    }
+
+    // Zotero routing runs next, and runs the *same* routing the popup's Devour
     // does. An agent clearing a backlog for a user who routes papers to Zotero
     // must not quietly file them into Obsidian instead
     // ([#50](https://github.com/mlsimon734/tabglutton/issues/50)) — a
@@ -834,7 +858,7 @@ export class BridgeMethodRunner {
     }
 
     const { payload } = await this.readTab(params.tabId, { refuseThin: true });
-    const rule = pickRule(payload.url);
+    const rule = pickRule(payload.url, settings.siteRules);
     const content = markdownForClip(payload);
 
     const filed =

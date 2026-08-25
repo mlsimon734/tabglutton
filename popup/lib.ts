@@ -290,13 +290,49 @@ export function reasonLabel(reason: ClipFailureReason): string {
       return "Zotero failed";
     case "download-failed":
       return "file write failed";
+    case "close-failed":
+      return "close failed";
+    case "never-devour":
+      return "kept by rule";
+  }
+}
+
+/**
+ * The pill a rule-driven disposition puts on a tab row, in both popups — the
+ * rule has to be visible *before* Devour runs, or its effect reads as the tool
+ * acting on its own. `null` for plain subfolder rules: where a note files is
+ * the inspector's job, and a pill per GitHub tab would restate the group
+ * header down every row.
+ */
+export function ruleMark(disposition: "never-devour" | "auto-close" | "zotero"): {
+  label: string;
+  title: string;
+} {
+  switch (disposition) {
+    case "never-devour":
+      return {
+        label: "no devour",
+        title: "A site rule keeps this site out of Devour — the tab stays open.",
+      };
+    case "auto-close":
+      return {
+        label: "auto-close",
+        title: "A site rule closes this tab without saving when it is devoured.",
+      };
+    case "zotero":
+      return {
+        label: "→ Zotero",
+        title: "A site rule sends this site to Zotero instead of a note.",
+      };
   }
 }
 
 /**
  * "Saved 3 to Zotero, 1 to Obsidian". A destination is named only when it
  * actually took something, and Obsidian alone is left unnamed because it is
- * the default — so the common single-destination run stays short.
+ * the default — so the common single-destination run stays short. Rule-driven
+ * outcomes are named apart from failures: a tab a rule kept or closed went
+ * exactly where the user's own rule sent it.
  */
 export function clipSummary(res: ClipSelectedTabsResponse): string {
   const named: string[] = [];
@@ -306,7 +342,13 @@ export function clipSummary(res: ClipSelectedTabsResponse): string {
   const obsidianOnly = named.length === 1 && res.obsidianSaved > 0;
   const saved =
     named.length === 0 ? "0" : obsidianOnly ? String(res.obsidianSaved) : named.join(", ");
-  return res.failed === 0 ? `Saved ${saved}` : `Saved ${saved}, ${res.failed} failed`;
+  const kept = res.failures.filter((f) => f.reason === "never-devour").length;
+  const failed = res.failed - kept;
+  let out = `Saved ${saved}`;
+  if (res.ruleClosed) out += `, closed ${res.ruleClosed} by rule`;
+  if (kept) out += `, ${kept} kept by rule`;
+  if (failed) out += `, ${failed} failed`;
+  return out;
 }
 
 export function selectedTabsInUiOrder(groups: TabGroup[], selected: Set<number>): PopupTab[] {
