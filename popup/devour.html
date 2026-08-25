@@ -20,18 +20,46 @@
           </div>
         </div>
 
-        <div class="header-search">
-          <svg class="search-glyph" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
-            <circle cx="7" cy="7" r="4.4" fill="none" stroke="currentColor" stroke-width="1.4" />
-            <path
-              d="M10.4 10.4 13.5 13.5"
-              stroke="currentColor"
-              stroke-width="1.4"
-              stroke-linecap="round"
-            />
-          </svg>
-          <input type="search" id="filter" placeholder="Filter URL or title" autocomplete="off" />
-          <kbd class="search-hint" aria-hidden="true">/</kbd>
+        <div class="header-filters">
+          <div class="header-search">
+            <svg class="search-glyph" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+              <circle cx="7" cy="7" r="4.4" fill="none" stroke="currentColor" stroke-width="1.4" />
+              <path
+                d="M10.4 10.4 13.5 13.5"
+                stroke="currentColor"
+                stroke-width="1.4"
+                stroke-linecap="round"
+              />
+            </svg>
+            <input type="search" id="filter" placeholder="Filter URL or title" autocomplete="off" />
+            <kbd class="search-hint" aria-hidden="true">/</kbd>
+          </div>
+
+          <!-- Tabglutton's own record of what it has clipped before. Never a
+               claim about the vault as it is now — see clipMarkTitle. -->
+          <div id="clip-filter" class="seg" role="group" aria-label="Filter by clip memory">
+            <button type="button" class="seg-btn" data-clip-filter="all" aria-pressed="true">
+              All
+            </button>
+            <button
+              type="button"
+              class="seg-btn"
+              data-clip-filter="unclipped"
+              aria-pressed="false"
+              title="Pages Tabglutton has no record of clipping. A duplicate set still shows whole when one copy matches."
+            >
+              Unclipped
+            </button>
+            <button
+              type="button"
+              class="seg-btn"
+              data-clip-filter="clipped"
+              aria-pressed="false"
+              title="Pages Tabglutton remembers clipping. A duplicate set still shows whole when one copy matches."
+            >
+              Clipped
+            </button>
+          </div>
         </div>
 
         <div class="header-controls">
@@ -92,6 +120,23 @@
         <ul id="devour-failures-list" class="devour-failures-list"></ul>
       </section>
 
+      <!-- Nothing is moved that this panel did not show: Apply sends exactly
+           the plan rendered here, and closing the panel discards it. -->
+      <section id="group-preview" class="group-preview" hidden aria-live="polite">
+        <header class="group-preview-header">
+          <span class="group-preview-title">
+            Group preview
+            <span id="group-preview-count" class="count-badge" hidden>0</span>
+          </span>
+          <div class="group-preview-actions">
+            <button id="group-apply" type="button" class="primary">Apply</button>
+            <button id="group-cancel" type="button" class="quiet">Cancel</button>
+          </div>
+        </header>
+        <ul id="group-preview-list" class="group-preview-list"></ul>
+        <p id="group-preview-note" class="group-preview-note"></p>
+      </section>
+
       <footer class="action-bar">
         <div class="action-cluster">
           <button
@@ -108,6 +153,13 @@
           <button id="dedup" type="button" disabled title="Close duplicate tabs">
             Dedup
             <span id="dedup-count" class="count-badge" hidden>0</span>
+          </button>
+          <button
+            id="group-tabs"
+            type="button"
+            title="Preview the tab groups your site rules would write into the tab strip"
+          >
+            Group
           </button>
           <span class="action-divider" aria-hidden="true"></span>
           <button id="close-selected" type="button" class="danger" disabled>Close</button>

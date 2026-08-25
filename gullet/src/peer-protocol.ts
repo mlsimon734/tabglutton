@@ -11,7 +11,7 @@
 // extension is typechecked against, and the extension neither sends nor receives
 // any of this. The single shared change is the optional `role` on the hello.
 
-import { asRecord, type BridgeError, type BridgeMethod } from "../../src/bridge-protocol.js";
+import { asRecord, type BridgeError, type BridgeWireMethod } from "../../src/bridge-protocol.js";
 
 /**
  * Peer → hub. `connections` asks what browsers the hub can see (and inherits the
@@ -23,7 +23,7 @@ export interface PeerRequestMessage {
   id: string;
   op: "connections" | "call";
   connectionId?: string;
-  method?: BridgeMethod;
+  method?: BridgeWireMethod;
   params?: unknown;
 }
 

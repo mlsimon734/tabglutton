@@ -30,7 +30,7 @@
  * that may read permissions), and this module stays pure and unit-tested.
  */
 
-import type { BridgeMethod } from "./bridge-protocol.js";
+import type { BridgeWireMethod } from "./bridge-protocol.js";
 import type { PermissionGrant } from "./permissions.js";
 import type { BridgePortMode, ClipDestination, ScopeMode } from "./storage.js";
 import type { BridgeStatus } from "./bridge-client.js";
@@ -62,7 +62,7 @@ export type BridgeErrorKind =
  * code, a protocol version) or a bridge method name. Deliberately not `string`
  * — see the vocabulary rule in this module's header.
  */
-export type BridgeErrorSubject = number | BridgeMethod;
+export type BridgeErrorSubject = number | BridgeWireMethod;
 
 export interface BridgeErrorEntry {
   /** Epoch ms of the most recent occurrence in this run of identical failures. */

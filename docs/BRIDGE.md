@@ -366,6 +366,11 @@ extVersion, label, nonce, proof }`.
   `{ type: "hello-error", error }`.
 - Sidecar → extension requests: `{ type: "request", id, method, params }`; responses
   `{ type: "response", id, result }` or `{ type: "response", id, error: { code, message } }`.
+  `method` is a **wire** method, which is the six agent tools plus `BRIDGE_SIDECAR_METHODS`
+  — today just `clip_confirm`, which tells the extension a clip it could only record as
+  launched was found on disk. That list is separate from `BRIDGE_METHODS` because
+  `BRIDGE_METHODS` doubles as Gullet's MCP routing table, and an agent able to call
+  `clip_confirm` could assert a page was verified without anything having looked.
 - Sidecar → extension: `{ type: "sessions", count }` whenever the number of agent sessions
   the hub serves changes. This is the extension's entitlement to hold its background page
   awake, which a hub outliving its sessions can no longer imply from the socket alone. An
@@ -387,6 +392,17 @@ into the configured destination. Protocol 2's boundary is the relayable proof be
 the refusal is not about a wrong answer but about a hole, which is why that one in
 particular must never grow a downgrade path. The handshake rejects every mixed-version
 pairing instead of allowing a call to appear successful with the wrong result.
+
+Clip memory rode in under that rule without a bump, in both directions. An extension that
+does not send `clipped` on a listed tab looks exactly like one whose user has never clipped
+that page, which is the same answer a page filed before the memory existed gives; an
+extension that does not know `clip_confirm` answers `bad-request`, and the page keeps the
+`launched` it was already recorded under. Both are less precise, neither is wrong, and
+nothing downstream acts on the difference — the close decision has its own evidence. A
+`clipped` **filter** on `tabs_list` would not qualify, which is why there is not one:
+`limit` is applied by the extension, so an extension that ignored the filter would return a
+page of tabs cut from the wrong set, with a `matched` count Gullet cannot recompute. That
+belongs to the next bump.
 
 The bump is not the default for a new field, and the test is whether the other end ignoring
 it produces a _wrong_ answer or merely a less precise one. `matched` and `query` are
@@ -464,7 +480,7 @@ extension and Gullet so the contract is typechecked from one definition.
 
 | MCP tool     | Backing APIs                                                                          | Notes                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | ------------ | ------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `tabs_list`  | `tabs.query`                                                                          | id, title, url, `windowId` (hoisted when shared), and — only when true — `lastAccessed`, `discarded`, `pinned`, `active`, `hidden`. Filtered with `query`, ordered with `sort`, capped by `limit`, or collapsed to counts with `groupBy: "domain"`. **On Zen, covers the active workspace only.** See below.                                                                                                                                                             |
+| `tabs_list`  | `tabs.query`                                                                          | id, title, url, `windowId` (hoisted when shared), and — only when true — `lastAccessed`, `discarded`, `pinned`, `active`, `hidden`. Also `clipped` (`launched` / `verified`) on a page Tabglutton remembers filing. Filtered with `query`, ordered with `sort`, capped by `limit`, or collapsed to counts with `groupBy: "domain"`. **On Zen, covers the active workspace only.** See below.                                                                             |
 | `tabs_load`  | `tabs.reload` + `tabs.onUpdated`                                                      | Wakes discarded tabs so they can be read. Batched (≤20), three at a time, under a 30s deadline; per-tab `ready`/`pending`/`failed`. Gated on a settings toggle, default off — answers `not-enabled` until then.                                                                                                                                                                                                                                                          |
 | `tab_read`   | `scripting.executeScript` + existing `clip-current.ts`                                | Returns Defuddle markdown + metadata. Fails cleanly on discarded tabs (see below). An extraction under `MIN_CLIP_CONTENT_CHARS` of visible text — usually a bot check served at the parked URL — still returns, with a `thin` note saying how little there was and whether a challenge signature matched; a read files and closes nothing, so it labels rather than refuses. `tab_clip` refuses the same page with `thin-content`, before it can file or close anything. |
 | `tab_clip`   | existing `clip-format.ts` + `obsidian://new` handoff, or `clip-file.ts` + `downloads` | Files exactly as manual Devour does, into whichever destination `clipDestination` names — the vault (including the extension-origin redirect-page dance on both engines) or a markdown file — unless **Route papers to Zotero** is on and the Connector reads the tab as scholarly, which takes it instead. An optional `vault` overrides all of that for one call. See below.                                                                                           |

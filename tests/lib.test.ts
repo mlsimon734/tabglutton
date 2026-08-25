@@ -1,6 +1,14 @@
 import { describe, expect, test } from "bun:test";
 import type { ClipSelectedTabsResponse, PopupTab } from "../src/background.js";
-import { clipSummary, computeDedupCount, extraTabIds, visibleGroups } from "../popup/lib.js";
+import {
+  clipMarkLabel,
+  clipMarkTitle,
+  clipSummary,
+  computeDedupCount,
+  extraTabIds,
+  visibleGroups,
+} from "../popup/lib.js";
+import type { ClipMemoryEntry } from "../src/clip-memory.js";
 import { defaults, type Settings } from "../src/storage.js";
 
 function tab(id: number, host: string, overrides: Partial<PopupTab> = {}): PopupTab {
@@ -184,7 +192,25 @@ describe("visibleGroups duplicates", () => {
 });
 
 function summary(partial: Partial<ClipSelectedTabsResponse> = {}): ClipSelectedTabsResponse {
-  return { failed: 0, obsidianSaved: 0, fileSaved: 0, zoteroSaved: 0, failures: [], ...partial };
+  return {
+    failed: 0,
+    obsidianSaved: 0,
+    fileSaved: 0,
+    zoteroSaved: 0,
+    ruleClosed: 0,
+    ruleClosedRestorable: [],
+    failures: [],
+    ...partial,
+  };
+}
+
+function neverDevourFailure(tabId: number) {
+  return {
+    tabId,
+    title: "t",
+    url: "https://example.com",
+    reason: "never-devour" as const,
+  };
 }
 
 describe("clipSummary", () => {
@@ -211,5 +237,111 @@ describe("clipSummary", () => {
     expect(clipSummary(summary({ fileSaved: 4, zoteroSaved: 1 }))).toBe(
       "Saved 1 to Zotero, 4 to files",
     );
+  });
+
+  test("rule-driven outcomes are named apart from failures", () => {
+    expect(clipSummary(summary({ obsidianSaved: 2, ruleClosed: 3 }))).toBe(
+      "Saved 2, closed 3 by rule",
+    );
+    expect(
+      clipSummary(summary({ obsidianSaved: 2, failed: 1, failures: [neverDevourFailure(1)] })),
+    ).toBe("Saved 2, 1 kept by rule");
+    expect(
+      clipSummary(
+        summary({
+          obsidianSaved: 2,
+          ruleClosed: 1,
+          failed: 2,
+          failures: [
+            neverDevourFailure(1),
+            { tabId: 2, title: "t", url: "u", reason: "extract-failed" as const },
+          ],
+        }),
+      ),
+    ).toBe("Saved 2, closed 1 by rule, 1 kept by rule, 1 failed");
+  });
+});
+
+describe("the clip filter", () => {
+  const clipped = (id: number, host: string): PopupTab =>
+    tab(id, host, { clipped: { at: 1, destination: "obsidian" } });
+
+  test("narrows to remembered pages, or to the ones with no record", () => {
+    const tabs = [clipped(1, "a.com"), tab(2, "b.com")];
+    expect(
+      visibleGroups(tabs, "", settings, null, "all").flatMap((g) => g.tabs.map((t) => t.id)),
+    ).toEqual([1, 2]);
+    expect(
+      visibleGroups(tabs, "", settings, null, "clipped").flatMap((g) => g.tabs.map((t) => t.id)),
+    ).toEqual([1]);
+    expect(
+      visibleGroups(tabs, "", settings, null, "unclipped").flatMap((g) => g.tabs.map((t) => t.id)),
+    ).toEqual([2]);
+  });
+
+  // Same rule the text filter follows: a duplicate set is found across the whole
+  // scope and shown whole, so the `keep` pill never lands on a copy Dedup would
+  // close. A set with one clipped copy would otherwise split in half.
+  test("shows a duplicate set whole when one copy matches", () => {
+    const tabs = [
+      copy(1, "https://a.com/x", { clipped: { at: 1, destination: "file", verifiedAt: 1 } }),
+      copy(2, "https://a.com/x"),
+    ];
+    const groups = visibleGroups(tabs, "", settings, null, "clipped");
+    expect(groups).toHaveLength(1);
+    expect(groups[0]?.kind).toBe("duplicate");
+    expect(groups[0]?.tabs.map((t) => t.id).sort()).toEqual([1, 2]);
+  });
+
+  test("combines with the text filter rather than replacing it", () => {
+    const tabs = [clipped(1, "a.com"), clipped(2, "b.com"), tab(3, "a.com")];
+    const groups = visibleGroups(tabs, "a.com", settings, null, "clipped");
+    expect(groups.flatMap((g) => g.tabs.map((t) => t.id))).toEqual([1]);
+  });
+});
+
+describe("the clip mark", () => {
+  const CLIPPED_AT = Date.parse("2026-03-12T10:00:00Z");
+  const entry = (state: "launched" | "verified"): ClipMemoryEntry => ({
+    at: CLIPPED_AT,
+    destination: "obsidian",
+    ...(state === "verified" ? { verifiedAt: CLIPPED_AT } : {}),
+  });
+
+  // The whole naming constraint in one assertion: the extension can say a page
+  // was clipped and never that it is in the vault, because a refused
+  // obsidian:// launch is indistinguishable from a taken one.
+  test("says clipped, never vault", () => {
+    for (const state of ["launched", "verified"] as const) {
+      expect(clipMarkLabel(entry(state))).toStartWith("clipped");
+      expect(clipMarkTitle(entry(state)).toLowerCase()).not.toInclude("vault");
+    }
+  });
+
+  test("distinguishes the two states in the pill and in the hover text", () => {
+    expect(clipMarkLabel(entry("launched"))).not.toBe(clipMarkLabel(entry("verified")));
+    expect(clipMarkTitle(entry("launched"))).toInclude("nothing could confirm");
+    expect(clipMarkTitle(entry("verified"))).toInclude("seen on disk");
+  });
+
+  // The failure this shape exists to prevent: a page verified as a file in
+  // March, re-clipped to Obsidian today, must not report that an Obsidian note
+  // was seen today. Nothing looked today, and nothing ever looked in Obsidian.
+  test("never attributes an old sighting to a newer clip", () => {
+    const title = clipMarkTitle({
+      at: Date.parse("2026-08-20T10:00:00Z"),
+      destination: "obsidian",
+      verifiedAt: Date.parse("2026-03-12T10:00:00Z"),
+    });
+    expect(title).toInclude("Clipped to Obsidian on Aug 20, 2026");
+    expect(title).toInclude("seen on disk on Mar 12, 2026");
+    expect(title).not.toInclude("seen on disk then");
+  });
+
+  // Neither state is a claim about disk *now*: notes get moved and deleted.
+  test("both states disclaim the present", () => {
+    for (const state of ["launched", "verified"] as const) {
+      expect(clipMarkTitle(entry(state))).toInclude("moved or deleted since");
+    }
   });
 });

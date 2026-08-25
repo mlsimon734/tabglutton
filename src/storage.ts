@@ -5,6 +5,7 @@ import {
   type ClipDestination,
 } from "./bridge-protocol.js";
 import type { NormalizeOpts } from "./normalize.js";
+import { sanitizeSiteRules, seedRules, type SiteRule } from "./site-rules.js";
 import { IS_CHROME } from "./target.js";
 import { DEFAULT_ZOTERO_CONNECTOR_ID } from "./zotero.js";
 
@@ -26,6 +27,17 @@ export interface Settings {
   clippingsBaseFolder: string;
   /** Obsidian-only: how the note body reaches it. Unused in file mode. */
   clipMode: ClipMode;
+  /**
+   * User-editable site rules, first match wins (see `pickRule`). Seeded from
+   * `BUILT_IN_RULES` when nothing is stored; an empty stored list is a user
+   * who deleted every rule, not a reason to re-seed.
+   */
+  siteRules: SiteRule[];
+  /**
+   * Patterns (same shape as a rule's) whose tabs a grouping pass must never
+   * reorder — parked, not grouped, whatever the rules say.
+   */
+  groupingSkipList: string[];
   /** Route scholarly items detected by Zotero Connector there instead of Obsidian. */
   zoteroRoutingEnabled: boolean;
   /** Published Connector ID by default; overrideable for an unpacked POC build. */
@@ -63,6 +75,8 @@ const DEFAULTS: Readonly<Settings> = Object.freeze({
   obsidianVault: "",
   clippingsBaseFolder: "Clippings",
   clipMode: "clipboard",
+  siteRules: seedRules(),
+  groupingSkipList: [],
   zoteroRoutingEnabled: false,
   zoteroConnectorId: DEFAULT_ZOTERO_CONNECTOR_ID,
   optionsInTab: true,
@@ -75,7 +89,12 @@ const DEFAULTS: Readonly<Settings> = Object.freeze({
 });
 
 export function defaults(): Settings {
-  return { ...DEFAULTS, extraStripParams: [...DEFAULTS.extraStripParams] };
+  return {
+    ...DEFAULTS,
+    extraStripParams: [...DEFAULTS.extraStripParams],
+    siteRules: seedRules(),
+    groupingSkipList: [...DEFAULTS.groupingSkipList],
+  };
 }
 
 /** Whether an Obsidian vault is configured — the Obsidian path needs one. */
@@ -138,7 +157,10 @@ export async function loadSettings(): Promise<Settings> {
   const bridgePort = isBridgePort(stored.bridgePort ?? Number.NaN)
     ? (stored.bridgePort as number)
     : DEFAULT_BRIDGE_PORT;
-  return { ...defaults(), ...stored, bridgePortMode, bridgePort };
+  // Sanitized, not trusted: rules are user-shaped data an old build (or a hand
+  // edit) may have stored differently; absent storage gets the seed here.
+  const siteRules = sanitizeSiteRules(stored.siteRules);
+  return { ...defaults(), ...stored, bridgePortMode, bridgePort, siteRules };
 }
 
 export async function saveSettings(patch: Partial<Settings>): Promise<void> {

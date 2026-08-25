@@ -23,6 +23,13 @@ import {
   requestOrigins,
 } from "../src/permissions.js";
 import {
+  newRuleId,
+  TAB_GROUP_COLORS,
+  type RuleDisposition,
+  type SiteRule,
+  type TabGroupColor,
+} from "../src/site-rules.js";
+import {
   loadSettings,
   saveSettings,
   type BridgePortMode,
@@ -45,6 +52,7 @@ const stripFragment = document.getElementById("stripFragment") as HTMLInputEleme
 const extraStripParams = document.getElementById("extraStripParams") as HTMLInputElement;
 const obsidianVault = document.getElementById("obsidianVault") as HTMLInputElement;
 const clippingsBaseFolder = document.getElementById("clippingsBaseFolder") as HTMLInputElement;
+const groupingSkipList = document.getElementById("groupingSkipList") as HTMLInputElement;
 const zoteroRoutingEnabled = document.getElementById("zoteroRoutingEnabled") as HTMLInputElement;
 const zoteroConnectorId = document.getElementById("zoteroConnectorId") as HTMLInputElement;
 const vaultWarning = document.getElementById("vaultWarning") as HTMLParagraphElement;
@@ -99,8 +107,11 @@ async function load(): Promise<void> {
   extraStripParams.value = (settings.extraStripParams ?? []).join(", ");
   obsidianVault.value = settings.obsidianVault;
   clippingsBaseFolder.value = settings.clippingsBaseFolder;
+  groupingSkipList.value = settings.groupingSkipList.join(", ");
   zoteroRoutingEnabled.checked = settings.zoteroRoutingEnabled;
   zoteroConnectorId.value = settings.zoteroConnectorId;
+  rules = settings.siteRules;
+  renderRules();
   updateVaultWarning();
   for (const radio of scopeRadios) {
     radio.checked = radio.value === settings.scope;
@@ -179,6 +190,7 @@ async function save(): Promise<void> {
     clipDestination,
     obsidianVault: obsidianVault.value.trim(),
     clippingsBaseFolder: clippingsBaseFolder.value.trim(),
+    groupingSkipList: parseParams(groupingSkipList.value),
     clipMode,
     zoteroRoutingEnabled: zoteroRoutingEnabled.checked,
     zoteroConnectorId: zoteroConnectorId.value.trim() || DEFAULT_ZOTERO_CONNECTOR_ID,
@@ -317,7 +329,250 @@ obsidianVault.addEventListener("input", () => {
   queueSave();
 });
 clippingsBaseFolder.addEventListener("input", queueSave);
+groupingSkipList.addEventListener("input", queueSave);
 zoteroConnectorId.addEventListener("input", queueSave);
+
+// ---------- site rules ----------
+
+const rulesList = document.getElementById("rulesList") as HTMLUListElement;
+const ruleAdd = document.getElementById("ruleAdd") as HTMLButtonElement;
+
+/**
+ * The live model the cards below edit in place. Saved as its own key, never
+ * through `save()` — that function persists the rest of the form, and rules
+ * are structured data with their own timing (text edits debounce, structural
+ * edits persist at once).
+ */
+let rules: SiteRule[] = [];
+
+const DISPOSITION_OPTIONS: ReadonlyArray<[RuleDisposition, string]> = [
+  ["devour", "Devour normally"],
+  ["never-devour", "Never devour"],
+  ["auto-close", "Close without saving"],
+  ["zotero", "Send to Zotero"],
+];
+
+let rulesSaveTimer: ReturnType<typeof setTimeout> | undefined;
+
+function saveRules(): void {
+  if (rulesSaveTimer) clearTimeout(rulesSaveTimer);
+  rulesSaveTimer = undefined;
+  // Trimmed on the way out, not while typing — a subfolder mid-word carries a
+  // trailing space the user has not finished with yet. A group whose name
+  // trims away is no group.
+  void saveSettings({
+    siteRules: rules.map((rule) => {
+      const clone: SiteRule = {
+        ...rule,
+        hostMatches: [...rule.hostMatches],
+        subfolder: rule.subfolder.trim(),
+      };
+      const groupName = rule.group?.name.trim();
+      if (rule.group && groupName) {
+        clone.group = { name: groupName, color: rule.group.color };
+      } else {
+        delete clone.group;
+      }
+      return clone;
+    }),
+  }).then(() => flashStatus("Saved"));
+}
+
+function queueRulesSave(): void {
+  if (rulesSaveTimer) clearTimeout(rulesSaveTimer);
+  rulesSaveTimer = setTimeout(saveRules, 400);
+}
+
+const RULE_ICON_NS = "http://www.w3.org/2000/svg";
+
+/** House glyph style: 16-unit viewBox, 1.4px stroke, round caps. */
+function ruleIcon(d: string): SVGSVGElement {
+  const svg = document.createElementNS(RULE_ICON_NS, "svg");
+  svg.setAttribute("viewBox", "0 0 16 16");
+  svg.setAttribute("width", "13");
+  svg.setAttribute("height", "13");
+  svg.setAttribute("aria-hidden", "true");
+  const path = document.createElementNS(RULE_ICON_NS, "path");
+  path.setAttribute("fill", "none");
+  path.setAttribute("stroke", "currentColor");
+  path.setAttribute("stroke-width", "1.4");
+  path.setAttribute("stroke-linecap", "round");
+  path.setAttribute("stroke-linejoin", "round");
+  path.setAttribute("d", d);
+  svg.append(path);
+  return svg;
+}
+
+function ruleActionButton(
+  label: string,
+  d: string,
+  disabled: boolean,
+  onClick: () => void,
+): HTMLButtonElement {
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "rule-icon";
+  btn.title = label;
+  btn.setAttribute("aria-label", label);
+  btn.disabled = disabled;
+  btn.append(ruleIcon(d));
+  btn.addEventListener("click", onClick);
+  return btn;
+}
+
+function renderRuleCard(rule: SiteRule, index: number): HTMLLIElement {
+  const li = document.createElement("li");
+  li.className = "rule-card";
+
+  const topRow = document.createElement("div");
+  topRow.className = "rule-row";
+
+  const hosts = document.createElement("input");
+  hosts.type = "text";
+  hosts.className = "rule-hosts";
+  hosts.placeholder = "github.com, gist.github.com or reddit.com/r/rust";
+  hosts.value = rule.hostMatches.join(", ");
+  hosts.setAttribute("aria-label", "Sites this rule matches");
+  hosts.addEventListener("input", () => {
+    rule.hostMatches = parseParams(hosts.value);
+    queueRulesSave();
+  });
+
+  const actions = document.createElement("div");
+  actions.className = "rule-actions";
+  actions.append(
+    ruleActionButton("Move rule up", "M8 12V4M4.5 7.5 8 4l3.5 3.5", index === 0, () => {
+      [rules[index - 1], rules[index]] = [rules[index]!, rules[index - 1]!];
+      saveRules();
+      renderRules();
+    }),
+    ruleActionButton(
+      "Move rule down",
+      "M8 4v8M4.5 8.5 8 12l3.5-3.5",
+      index === rules.length - 1,
+      () => {
+        [rules[index], rules[index + 1]] = [rules[index + 1]!, rules[index]!];
+        saveRules();
+        renderRules();
+      },
+    ),
+    ruleActionButton("Remove rule", "M4 4l8 8M12 4l-8 8", false, () => {
+      rules.splice(index, 1);
+      saveRules();
+      renderRules();
+    }),
+  );
+  actions.lastElementChild?.classList.add("danger");
+
+  topRow.append(hosts, actions);
+
+  const bottomRow = document.createElement("div");
+  bottomRow.className = "rule-row";
+
+  const disposition = document.createElement("select");
+  disposition.className = "rule-disposition";
+  disposition.setAttribute("aria-label", "What Devour does with matching tabs");
+  for (const [value, label] of DISPOSITION_OPTIONS) {
+    const option = document.createElement("option");
+    option.value = value;
+    option.textContent = label;
+    option.selected = value === rule.disposition;
+    disposition.append(option);
+  }
+
+  const subfolder = document.createElement("input");
+  subfolder.type = "text";
+  subfolder.className = "rule-subfolder";
+  subfolder.placeholder = "Subfolder (optional)";
+  subfolder.value = rule.subfolder;
+  subfolder.setAttribute("aria-label", "Subfolder under the clippings folder");
+  subfolder.hidden = rule.disposition !== "devour";
+  subfolder.addEventListener("input", () => {
+    rule.subfolder = subfolder.value;
+    queueRulesSave();
+  });
+
+  disposition.addEventListener("change", () => {
+    const value = disposition.value as RuleDisposition;
+    rule.disposition = value;
+    // Toggled in place rather than re-rendered, so the select keeps focus. The
+    // subfolder only means something to a rule that files a note.
+    subfolder.hidden = value !== "devour";
+    saveRules();
+  });
+
+  bottomRow.append(disposition, subfolder);
+
+  // Grouping is orthogonal to the disposition: a never-devour rule can still
+  // want its keepers gathered in the tab strip. Name empty = no group.
+  const groupRow = document.createElement("div");
+  groupRow.className = "rule-row";
+
+  const groupName = document.createElement("input");
+  groupName.type = "text";
+  groupName.className = "rule-group-name";
+  groupName.placeholder = "Tab group (optional)";
+  groupName.value = rule.group?.name ?? "";
+  groupName.setAttribute("aria-label", "Tab-strip group name for matching tabs");
+
+  const swatch = document.createElement("span");
+  const groupColor = document.createElement("select");
+  groupColor.className = "rule-group-color";
+  groupColor.setAttribute("aria-label", "Tab group colour");
+  for (const color of TAB_GROUP_COLORS) {
+    const option = document.createElement("option");
+    option.value = color;
+    option.textContent = color;
+    option.selected = color === (rule.group?.color ?? "grey");
+    groupColor.append(option);
+  }
+  groupColor.disabled = !rule.group;
+
+  const paintSwatch = (): void => {
+    swatch.className = `group-swatch swatch-${groupColor.value}`;
+    swatch.classList.toggle("swatch-off", !rule.group);
+  };
+  paintSwatch();
+
+  groupName.addEventListener("input", () => {
+    if (groupName.value.trim()) {
+      rule.group = { name: groupName.value, color: groupColor.value as TabGroupColor };
+    } else {
+      delete rule.group;
+    }
+    groupColor.disabled = !rule.group;
+    paintSwatch();
+    queueRulesSave();
+  });
+
+  groupColor.addEventListener("change", () => {
+    if (rule.group) rule.group.color = groupColor.value as TabGroupColor;
+    paintSwatch();
+    saveRules();
+  });
+
+  groupRow.append(groupName, swatch, groupColor);
+  li.append(topRow, bottomRow, groupRow);
+  return li;
+}
+
+function renderRules(): void {
+  if (rules.length === 0) {
+    const empty = document.createElement("li");
+    empty.className = "rules-empty";
+    empty.textContent = "No rules. Devour files everything into the clippings folder.";
+    rulesList.replaceChildren(empty);
+    return;
+  }
+  rulesList.replaceChildren(...rules.map(renderRuleCard));
+}
+
+ruleAdd.addEventListener("click", () => {
+  rules.push({ id: newRuleId(), hostMatches: [], subfolder: "", disposition: "devour" });
+  saveRules();
+  renderRules();
+  rulesList.querySelector<HTMLInputElement>(".rule-card:last-child .rule-hosts")?.focus();
+});
 
 // ---------- agent bridge ----------
 

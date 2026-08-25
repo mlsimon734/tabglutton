@@ -11,6 +11,7 @@ import {
   normalizeOptsFrom,
   type Settings,
 } from "../src/storage.js";
+import { seedRules } from "../src/site-rules.js";
 import { IS_CHROME } from "../src/target.js";
 
 describe("defaults()", () => {
@@ -25,6 +26,8 @@ describe("defaults()", () => {
       obsidianVault: "",
       clippingsBaseFolder: "Clippings",
       clipMode: "clipboard",
+      siteRules: seedRules(),
+      groupingSkipList: [],
       zoteroRoutingEnabled: false,
       zoteroConnectorId: IS_CHROME ? "ekhagklcjbdpajgpjgmbionohlpdbjgc" : "zotero@chnm.gmu.edu",
       optionsInTab: true,
@@ -117,6 +120,8 @@ describe("normalizeOptsFrom()", () => {
       obsidianVault: "v",
       clippingsBaseFolder: "Inbox",
       clipMode: "clipboard",
+      siteRules: [],
+      groupingSkipList: [],
       zoteroRoutingEnabled: true,
       zoteroConnectorId: "connector@example.test",
       optionsInTab: true,
