@@ -106,13 +106,19 @@
         </header>
       </div>
 
-      <main>
+      <main class="u-rail-host">
         <div id="empty" class="empty" hidden>
           <p id="empty-title">No tabs in scope.</p>
           <p id="empty-sub" class="muted"></p>
         </div>
         <ul id="groups"></ul>
       </main>
+
+      <!-- Decorative and aria-hidden; the list stays natively scrollable. See
+           `mountScrollRail` for why the native bar cannot be inset instead. -->
+      <div id="scroll-rail" class="scroll-rail" aria-hidden="true" hidden>
+        <div class="scroll-rail-thumb"></div>
+      </div>
 
       <div id="chrome-bottom" class="chrome chrome-bottom u-glass u-glass-bottom">
         <section id="devour-failures" class="devour-failures" hidden aria-live="polite">

@@ -33,6 +33,7 @@ import {
   selectedTabsInUiOrder,
   sendMessage,
   type TabGroup,
+  mountScrollRail,
   trackChromeHeights,
   trackScrollLift,
   visibleGroups,
@@ -1303,6 +1304,10 @@ trackChromeHeights(
   document.getElementById("chrome-bottom"),
 );
 trackScrollLift(document.body, [
+  document.querySelector<HTMLElement>(".queue"),
+  document.querySelector<HTMLElement>(".cockpit-main"),
+]);
+mountScrollRail(document.getElementById("scroll-rail"), [
   document.querySelector<HTMLElement>(".queue"),
   document.querySelector<HTMLElement>(".cockpit-main"),
 ]);

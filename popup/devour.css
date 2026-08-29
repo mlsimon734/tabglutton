@@ -13,6 +13,7 @@ body.cockpit {
      falls back to if the stacks are ever measured at zero. */
   --chrome-top: 78px;
   --chrome-bottom: 69px;
+  --rail-inset: var(--space-5);
 
   position: relative;
   height: 100vh;
@@ -475,8 +476,6 @@ body.inspecting .cockpit-main {
    passage is the only thing the glass is describing. */
 .queue {
   overflow-y: auto;
-  scrollbar-width: thin;
-  scrollbar-color: var(--hairline-strong) transparent;
   padding-right: var(--space-3);
   padding-block: calc(var(--chrome-top) + var(--space-5))
     calc(var(--chrome-bottom) + var(--space-5));
@@ -504,15 +503,6 @@ body.inspecting .cockpit-main {
 body.inspecting .queue {
   max-width: none;
   margin-inline: 0;
-}
-
-.queue::-webkit-scrollbar {
-  width: 8px;
-}
-
-.queue::-webkit-scrollbar-thumb {
-  background: var(--hairline-strong);
-  border-radius: var(--radius-pill);
 }
 
 /* Opaque, deliberately. It is a content surface — the frontmatter preview and

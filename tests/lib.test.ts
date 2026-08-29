@@ -6,7 +6,11 @@ import {
   clipSummary,
   computeDedupCount,
   extraTabIds,
+  RAIL_MIN_THUMB,
+  railScrollTop,
+  railThumb,
   visibleGroups,
+  type RailMetrics,
 } from "../popup/lib.js";
 import type { ClipMemoryEntry } from "../src/clip-memory.js";
 import { defaults, type Settings } from "../src/storage.js";
@@ -343,5 +347,71 @@ describe("the clip mark", () => {
     for (const state of ["launched", "verified"] as const) {
       expect(clipMarkTitle(entry(state))).toInclude("moved or deleted since");
     }
+  });
+});
+
+describe("railThumb", () => {
+  /** A 600px band over a list four screens tall. */
+  function metrics(overrides: Partial<RailMetrics> = {}): RailMetrics {
+    return { track: 600, clientHeight: 800, scrollHeight: 3200, scrollTop: 0, ...overrides };
+  }
+
+  test("thumb is proportional to how much of the list is on screen", () => {
+    expect(railThumb(metrics())).toEqual({ height: 150, offset: 0 });
+  });
+
+  test("offset runs the thumb's own travel, not the track", () => {
+    const range = 3200 - 800;
+    expect(railThumb(metrics({ scrollTop: range }))?.offset).toBe(600 - 150);
+    expect(railThumb(metrics({ scrollTop: range / 2 }))?.offset).toBe(Math.round((600 - 150) / 2));
+  });
+
+  // A thumb sized honestly on a 5000-tab list is a couple of pixels tall.
+  test("a very long list still gets a grabbable thumb", () => {
+    const thumb = railThumb(metrics({ scrollHeight: 400_000 }));
+    expect(thumb?.height).toBe(RAIL_MIN_THUMB);
+    expect(railThumb(metrics({ scrollHeight: 400_000, scrollTop: 399_200 }))?.offset).toBe(
+      600 - RAIL_MIN_THUMB,
+    );
+  });
+
+  // Nothing to scroll means no rail at all: a full-length thumb reads as stuck.
+  test("nothing to scroll answers null", () => {
+    expect(railThumb(metrics({ scrollHeight: 800 }))).toBeNull();
+    expect(railThumb(metrics({ scrollHeight: 801 }))).toBeNull();
+    expect(railThumb(metrics({ track: 0 }))).toBeNull();
+  });
+
+  // Gecko's elastic overscroll reports a scrollTop past the end mid-bounce.
+  test("overscroll cannot push the thumb off either end", () => {
+    expect(railThumb(metrics({ scrollTop: -120 }))?.offset).toBe(0);
+    expect(railThumb(metrics({ scrollTop: 99_999 }))?.offset).toBe(600 - 150);
+  });
+});
+
+describe("railScrollTop", () => {
+  function metrics(overrides: Partial<RailMetrics> = {}): RailMetrics {
+    return { track: 600, clientHeight: 800, scrollHeight: 3200, scrollTop: 0, ...overrides };
+  }
+
+  test("dragging the thumb the length of its travel reaches the end", () => {
+    expect(railScrollTop(metrics(), 150, 600 - 150)).toBe(2400);
+    expect(railScrollTop(metrics(), 150, 0)).toBe(0);
+  });
+
+  // The clamp to RAIL_MIN_THUMB makes the mapping non-proportional, so a drag
+  // has to divide by the thumb's real travel or it undershoots the end.
+  test("a clamped thumb still reaches the end of a long list", () => {
+    const m = metrics({ scrollHeight: 400_000 });
+    expect(railScrollTop(m, RAIL_MIN_THUMB, 600 - RAIL_MIN_THUMB)).toBe(399_200);
+  });
+
+  test("a drag past either end of the track clamps", () => {
+    expect(railScrollTop(metrics(), 150, -500)).toBe(0);
+    expect(railScrollTop(metrics(), 150, 9999)).toBe(2400);
+  });
+
+  test("an unscrollable list stays at the top", () => {
+    expect(railScrollTop(metrics({ scrollHeight: 800 }), 600, 300)).toBe(0);
   });
 });

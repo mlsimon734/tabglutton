@@ -400,17 +400,6 @@ main {
     calc(var(--chrome-bottom) + var(--space-3));
   scroll-padding-block: calc(var(--chrome-top) + var(--space-2))
     calc(var(--chrome-bottom) + var(--space-2));
-  scrollbar-width: thin;
-  scrollbar-color: var(--hairline-strong) transparent;
-}
-
-main::-webkit-scrollbar {
-  width: 8px;
-}
-
-main::-webkit-scrollbar-thumb {
-  background: var(--hairline-strong);
-  border-radius: var(--radius-pill);
 }
 
 .empty {

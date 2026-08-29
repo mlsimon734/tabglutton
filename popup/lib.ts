@@ -421,6 +421,182 @@ export function trackScrollLift(root: HTMLElement, scrollers: (HTMLElement | nul
   update();
 }
 
+/* ---------- scroll rail ---------- */
+
+/**
+ * Geometry of the scroll thumb, given the band it travels in.
+ *
+ * Pure so the arithmetic is testable; `mountScrollRail` supplies the live
+ * numbers. `null` means there is nothing to scroll and the rail should be
+ * absent rather than showing a full-length thumb, which reads as a stuck one.
+ */
+export interface RailMetrics {
+  /** Height of the band the thumb travels in, in px — not the scrollport's. */
+  track: number;
+  clientHeight: number;
+  scrollHeight: number;
+  scrollTop: number;
+}
+
+export interface RailThumb {
+  height: number;
+  /** Distance from the top of the track, in px. */
+  offset: number;
+}
+
+/**
+ * Below this a thumb on a long list becomes a dot too small to grab. Trading
+ * proportionality for a usable target is what every native scrollbar does.
+ */
+export const RAIL_MIN_THUMB = 28;
+
+export function railThumb(m: RailMetrics): RailThumb | null {
+  const range = m.scrollHeight - m.clientHeight;
+  if (range <= 1 || m.track <= 0) return null;
+  const proportional = Math.round((m.track * m.clientHeight) / m.scrollHeight);
+  const height = Math.min(m.track, Math.max(RAIL_MIN_THUMB, proportional));
+  const travel = m.track - height;
+  const progress = Math.min(1, Math.max(0, m.scrollTop / range));
+  return { height, offset: Math.round(travel * progress) };
+}
+
+/**
+ * The `scrollTop` a thumb of `thumbHeight` dragged to `offset` px down the
+ * track corresponds to. The inverse of {@link railThumb}, and not derivable
+ * from it: the clamp to `RAIL_MIN_THUMB` makes the mapping non-proportional,
+ * so a drag has to divide by the thumb's real travel rather than by the track.
+ */
+export function railScrollTop(m: RailMetrics, thumbHeight: number, offset: number): number {
+  const travel = m.track - thumbHeight;
+  const range = m.scrollHeight - m.clientHeight;
+  if (travel <= 0 || range <= 0) return 0;
+  return (Math.min(travel, Math.max(0, offset)) / travel) * range;
+}
+
+/**
+ * Draw the list's scroll affordance over the band between the floating chrome
+ * stacks, instead of over the whole window.
+ *
+ * The popup's list and the cockpit's queue are full-viewport-height scroll
+ * containers that pad themselves clear of the fixed chrome, so rows pass *under*
+ * the glass — that passage is the only thing the material is describing. A
+ * native scrollbar always spans its scrollport, so it ran from the top of the
+ * window to the bottom, level with bars the list never reaches; in full screen,
+ * with no browser chrome above it, that is unmissable ([#67]).
+ *
+ * Neither engine can inset a native track — Blink takes a margin on
+ * `::-webkit-scrollbar-track`, Gecko's entire vocabulary is `scrollbar-width`
+ * and `scrollbar-color` — so the native bar is hidden on both (`.u-rail-host`)
+ * and the thumb is drawn here. The rail is **decorative**: the scroller stays
+ * natively scrollable, so the wheel, the keyboard, and `scroll-padding-block`
+ * are untouched, and it is `aria-hidden` because it duplicates no state a
+ * screen reader is missing. It only ever reads and sets `scrollTop`.
+ *
+ * `scrollers` takes the same pair `trackScrollLift` does, for the same reason:
+ * the cockpit moves its scroll from `.queue` out to `.cockpit-main` below
+ * 980px, so which element is live is a question of layout, re-asked on every
+ * draw rather than answered once at mount.
+ */
+export function mountScrollRail(rail: HTMLElement | null, scrollers: (HTMLElement | null)[]): void {
+  if (!rail) return;
+  const thumb = rail.querySelector<HTMLElement>(".scroll-rail-thumb");
+  const live = scrollers.filter((el): el is HTMLElement => el !== null);
+  if (!thumb || !live.length) return;
+
+  const active = (): HTMLElement | null =>
+    live.find((el) => el.scrollHeight - el.clientHeight > 1) ?? null;
+
+  const metrics = (el: HTMLElement): RailMetrics => ({
+    track: rail.clientHeight,
+    clientHeight: el.clientHeight,
+    scrollHeight: el.scrollHeight,
+    scrollTop: el.scrollTop,
+  });
+
+  let frame = 0;
+  const draw = (): void => {
+    frame = 0;
+    const el = active();
+    if (!el) {
+      rail.hidden = true;
+      return;
+    }
+    // Unhidden *before* the track is measured, not after: `hidden` is
+    // `display: none`, whose `clientHeight` is 0, which `railThumb` reads as
+    // nothing to scroll — so a rail that starts hidden could never show
+    // itself again. Re-hiding below happens in the same frame, so nothing
+    // paints in between.
+    rail.hidden = false;
+    const geometry = railThumb(metrics(el));
+    if (!geometry) {
+      rail.hidden = true;
+      return;
+    }
+    // Hung off the scroller's *content* edge, not the window's and not its
+    // border box: the queue is a centred measure on a wide display, so the
+    // window edge can be several hundred px away from the list, and the two
+    // scrollers carry very different padding — matching the border box put the
+    // rail flush against the frame in the narrow layout while every other
+    // element held the `--edge` inset. CSS pulls it back out into its gutter.
+    const box = el.getBoundingClientRect();
+    const padding = Number.parseFloat(getComputedStyle(el).paddingRight) || 0;
+    rail.style.right = `${Math.max(0, Math.round(window.innerWidth - box.right + padding))}px`;
+    thumb.style.height = `${geometry.height}px`;
+    thumb.style.transform = `translateY(${geometry.offset}px)`;
+  };
+  const schedule = (): void => {
+    if (frame) return;
+    frame = requestAnimationFrame(draw);
+  };
+
+  for (const el of live) {
+    el.addEventListener("scroll", schedule, { passive: true });
+    // A re-render replaces the rows without scrolling or resizing anything, so
+    // neither listener above would fire and the thumb would keep the length of
+    // the list it was drawn for. Filtering is exactly that.
+    new MutationObserver(schedule).observe(el, { childList: true, subtree: true });
+    new ResizeObserver(schedule).observe(el);
+  }
+  // The chrome stacks change height when the warning banner or the failures
+  // panel appears, and the rail is inset off their measured heights.
+  new ResizeObserver(schedule).observe(rail);
+  window.addEventListener("resize", schedule);
+
+  thumb.addEventListener("pointerdown", (ev: PointerEvent) => {
+    const el = active();
+    if (!el) return;
+    ev.preventDefault();
+    const m = metrics(el);
+    const height = thumb.offsetHeight;
+    const startY = ev.clientY;
+    const startOffset = railThumb(m)?.offset ?? 0;
+    thumb.setPointerCapture(ev.pointerId);
+    rail.classList.add("dragging");
+    const onMove = (move: PointerEvent): void => {
+      el.scrollTop = railScrollTop(m, height, startOffset + (move.clientY - startY));
+    };
+    const onEnd = (): void => {
+      thumb.removeEventListener("pointermove", onMove);
+      rail.classList.remove("dragging");
+    };
+    thumb.addEventListener("pointermove", onMove);
+    thumb.addEventListener("pointerup", onEnd, { once: true });
+    thumb.addEventListener("pointercancel", onEnd, { once: true });
+  });
+
+  // Clicking the track pages towards the click, as a native one does.
+  rail.addEventListener("pointerdown", (ev: PointerEvent) => {
+    if (ev.target !== rail) return;
+    const el = active();
+    if (!el) return;
+    const box = thumb.getBoundingClientRect();
+    const page = el.clientHeight * 0.9;
+    el.scrollBy({ top: ev.clientY < box.top ? -page : page, behavior: "smooth" });
+  });
+
+  draw();
+}
+
 export function prettifyShortcut(raw: string): string {
   const isMac = navigator.platform.toLowerCase().includes("mac");
   return raw
