@@ -9,6 +9,8 @@ import {
   RAIL_MIN_THUMB,
   railScrollTop,
   railThumb,
+  WHEEL_LINE_HEIGHT,
+  wheelPixels,
   visibleGroups,
   type RailMetrics,
 } from "../popup/lib.js";
@@ -413,5 +415,24 @@ describe("railScrollTop", () => {
 
   test("an unscrollable list stays at the top", () => {
     expect(railScrollTop(metrics({ scrollHeight: 800 }), 600, 300)).toBe(0);
+  });
+});
+
+describe("wheelPixels", () => {
+  test("a pixel delta passes through", () => {
+    expect(wheelPixels(120, 0, 800)).toBe(120);
+    expect(wheelPixels(-40.5, 0, 800)).toBe(-40.5);
+  });
+
+  // Gecko reports a mouse wheel in lines; forwarding the raw number there
+  // scrolls three pixels a notch and reads as a broken scrollbar.
+  test("a line delta becomes pixels", () => {
+    expect(wheelPixels(3, 1, 800)).toBe(3 * WHEEL_LINE_HEIGHT);
+    expect(wheelPixels(-1, 1, 800)).toBe(-WHEEL_LINE_HEIGHT);
+  });
+
+  test("a page delta is a viewport each", () => {
+    expect(wheelPixels(1, 2, 800)).toBe(800);
+    expect(wheelPixels(-2, 2, 640)).toBe(-1280);
   });
 });

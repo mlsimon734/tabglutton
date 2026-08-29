@@ -329,13 +329,24 @@ body {
   margin-right: calc(-1 * var(--rail-gutter));
   width: var(--rail-width);
   z-index: 15;
-  cursor: default;
+  /* Transparent to the pointer, thumb excepted. The rail lies over the
+     scroller's padding gutter, and the native bar it replaces scrolled its
+     element on a wheel — an 8px strip that swallowed the wheel instead would
+     be a regression, measured as exactly that: 600px of travel over a row,
+     zero over the rail. There is deliberately no track-click paging, because
+     re-arming the track for clicks is what puts the dead zone back. */
+  pointer-events: none;
 }
 
 .scroll-rail-thumb {
   width: 100%;
   border-radius: var(--radius-pill);
   background: var(--hairline-strong);
+  pointer-events: auto;
+  /* `preventDefault` on `pointerdown` does not suppress the browser's own pan
+     gesture: without this the first touchmove becomes a scroll, the drag is
+     cancelled, and a touch or pen user can never move the thumb. */
+  touch-action: none;
   transition: background var(--duration) var(--easing-soft);
 }
 

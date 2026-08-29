@@ -466,6 +466,22 @@ export function railThumb(m: RailMetrics): RailThumb | null {
  * from it: the clamp to `RAIL_MIN_THUMB` makes the mapping non-proportional,
  * so a drag has to divide by the thumb's real travel rather than by the track.
  */
+/**
+ * A wheel event's travel in pixels.
+ *
+ * `deltaY` is only in pixels when `deltaMode` says so — Gecko reports lines for
+ * a real mouse wheel — so a handler that forwards the raw number scrolls a
+ * couple of pixels per notch there and feels broken.
+ */
+export function wheelPixels(deltaY: number, deltaMode: number, pageHeight: number): number {
+  if (deltaMode === 1) return deltaY * WHEEL_LINE_HEIGHT;
+  if (deltaMode === 2) return deltaY * pageHeight;
+  return deltaY;
+}
+
+/** Gecko's own default for a wheel line when it has no better answer. */
+export const WHEEL_LINE_HEIGHT = 16;
+
 export function railScrollTop(m: RailMetrics, thumbHeight: number, offset: number): number {
   const travel = m.track - thumbHeight;
   const range = m.scrollHeight - m.clientHeight;
@@ -490,7 +506,9 @@ export function railScrollTop(m: RailMetrics, thumbHeight: number, offset: numbe
  * and the thumb is drawn here. The rail is **decorative**: the scroller stays
  * natively scrollable, so the wheel, the keyboard, and `scroll-padding-block`
  * are untouched, and it is `aria-hidden` because it duplicates no state a
- * screen reader is missing. It only ever reads and sets `scrollTop`.
+ * screen reader is missing. It only ever reads and sets `scrollTop`, and the
+ * track is `pointer-events: none` so the strip it lies over keeps scrolling on
+ * a wheel the way the native bar did.
  *
  * `scrollers` takes the same pair `trackScrollLift` does, for the same reason:
  * the cockpit moves its scroll from `.queue` out to `.cockpit-main` below
@@ -566,33 +584,55 @@ export function mountScrollRail(rail: HTMLElement | null, scrollers: (HTMLElemen
     const el = active();
     if (!el) return;
     ev.preventDefault();
-    const m = metrics(el);
-    const height = thumb.offsetHeight;
+    // Only where the drag *started* is snapshotted. The geometry it maps
+    // through is re-read every move, because a Devour run re-renders the rows
+    // and grows the failures panel while the pointer is down — that changes
+    // `scrollHeight` and, through `--chrome-bottom`, the track itself. Mapping
+    // against stale numbers while `draw` repaints from live ones is the thumb
+    // visibly sliding away from the cursor.
     const startY = ev.clientY;
-    const startOffset = railThumb(m)?.offset ?? 0;
+    const startOffset = railThumb(metrics(el))?.offset ?? 0;
+    const stop = new AbortController();
     thumb.setPointerCapture(ev.pointerId);
     rail.classList.add("dragging");
-    const onMove = (move: PointerEvent): void => {
-      el.scrollTop = railScrollTop(m, height, startOffset + (move.clientY - startY));
-    };
-    const onEnd = (): void => {
-      thumb.removeEventListener("pointermove", onMove);
+    const end = (): void => {
+      stop.abort();
       rail.classList.remove("dragging");
     };
-    thumb.addEventListener("pointermove", onMove);
-    thumb.addEventListener("pointerup", onEnd, { once: true });
-    thumb.addEventListener("pointercancel", onEnd, { once: true });
+    thumb.addEventListener(
+      "pointermove",
+      (move: PointerEvent) => {
+        el.scrollTop = railScrollTop(
+          metrics(el),
+          thumb.offsetHeight,
+          startOffset + (move.clientY - startY),
+        );
+      },
+      { signal: stop.signal },
+    );
+    // One signal for all three: `pointerup` and `pointercancel` are mutually
+    // exclusive, so registering them `once` each leaves the loser attached for
+    // the life of the page, one closure per drag.
+    thumb.addEventListener("pointerup", end, { signal: stop.signal });
+    thumb.addEventListener("pointercancel", end, { signal: stop.signal });
   });
 
-  // Clicking the track pages towards the click, as a native one does.
-  rail.addEventListener("pointerdown", (ev: PointerEvent) => {
-    if (ev.target !== rail) return;
-    const el = active();
-    if (!el) return;
-    const box = thumb.getBoundingClientRect();
-    const page = el.clientHeight * 0.9;
-    el.scrollBy({ top: ev.clientY < box.top ? -page : page, behavior: "smooth" });
-  });
+  // The thumb has to stay pointer-interactive to be draggable, which makes it
+  // the one part of the rail that can still swallow a wheel — measured at
+  // exactly that: 600px of travel over a row and over the bare track, zero over
+  // the thumb. The native bar this replaces scrolled its element on a wheel, so
+  // the event is forwarded rather than the affordance surrendered. Bound on the
+  // rail, which the thumb bubbles to.
+  rail.addEventListener(
+    "wheel",
+    (ev: WheelEvent) => {
+      const el = active();
+      if (!el) return;
+      ev.preventDefault();
+      el.scrollTop += wheelPixels(ev.deltaY, ev.deltaMode, el.clientHeight);
+    },
+    { passive: false },
+  );
 
   draw();
 }
