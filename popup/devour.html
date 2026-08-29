@@ -91,8 +91,8 @@
       <div id="warning" class="warning" hidden></div>
     </div>
 
-    <main class="cockpit-main">
-      <section class="queue" aria-label="Tab queue">
+    <main class="cockpit-main u-rail-host">
+      <section class="queue u-rail-host" aria-label="Tab queue">
         <div id="empty" class="empty" hidden>
           <p id="empty-title">No tabs in scope.</p>
           <p id="empty-sub" class="muted"></p>
@@ -104,6 +104,13 @@
         <div id="inspector-content"></div>
       </aside>
     </main>
+
+    <!-- The list's scroll affordance. Decorative and aria-hidden: the queue
+         stays natively scrollable and this only reflects it — see
+         `mountScrollRail` for why the native bar cannot be inset instead. -->
+    <div id="scroll-rail" class="scroll-rail" aria-hidden="true" hidden>
+      <div class="scroll-rail-thumb"></div>
+    </div>
 
     <div id="chrome-bottom" class="chrome chrome-bottom">
       <section id="devour-failures" class="devour-failures" hidden aria-live="polite">

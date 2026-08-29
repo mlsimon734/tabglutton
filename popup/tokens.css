@@ -130,6 +130,12 @@
   --pad: 14px;
   --gap: 10px;
 
+  /* How far the scroll rail clears the chrome stacks — matched per surface to
+     the scroller's own top padding, so the thumb starts level with row one. */
+  --rail-inset: var(--space-3);
+  --rail-width: 8px;
+  --rail-gutter: var(--space-3);
+
   /* Radii */
   --radius-1: 3px;
   --radius-2: 6px;
@@ -292,6 +298,61 @@ body {
     inset 0 1px 0 var(--glass-rim),
     0 -1px 0 var(--glass-edge),
     0 -10px 30px -22px var(--glass-shade);
+}
+
+/* ---------- scroll rail ---------- */
+
+/* A scroll container whose native bar is suppressed because `.scroll-rail`
+   draws one for it. Both engines are covered here: Gecko reads
+   `scrollbar-width`, Blink the pseudo-element, and neither can inset a native
+   track to the band the list actually occupies. See `mountScrollRail`. */
+.u-rail-host {
+  scrollbar-width: none;
+}
+
+.u-rail-host::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
+/* Fixed, so it holds its band while the list scrolls under the chrome; the
+   vertical inset is the chrome's own measured height, so it follows the
+   warning banner and the failures panel without being told. `right` is set
+   from the live scroller in `mountScrollRail` — the queue is a centred measure
+   on a wide display and the window edge is not where the list ends. */
+.scroll-rail {
+  position: fixed;
+  top: calc(var(--chrome-top) + var(--rail-inset));
+  bottom: calc(var(--chrome-bottom) + var(--rail-inset));
+  /* `right` is the scroller's content edge; the negative margin hangs the rail
+     in a gutter just outside it, the same width whichever scroller is live. */
+  margin-right: calc(-1 * var(--rail-gutter));
+  width: var(--rail-width);
+  z-index: 15;
+  /* Transparent to the pointer, thumb excepted. The rail lies over the
+     scroller's padding gutter, and the native bar it replaces scrolled its
+     element on a wheel — an 8px strip that swallowed the wheel instead would
+     be a regression, measured as exactly that: 600px of travel over a row,
+     zero over the rail. There is deliberately no track-click paging, because
+     re-arming the track for clicks is what puts the dead zone back. */
+  pointer-events: none;
+}
+
+.scroll-rail-thumb {
+  width: 100%;
+  border-radius: var(--radius-pill);
+  background: var(--hairline-strong);
+  pointer-events: auto;
+  /* `preventDefault` on `pointerdown` does not suppress the browser's own pan
+     gesture: without this the first touchmove becomes a scroll, the drag is
+     cancelled, and a touch or pen user can never move the thumb. */
+  touch-action: none;
+  transition: background var(--duration) var(--easing-soft);
+}
+
+.scroll-rail:hover .scroll-rail-thumb,
+.scroll-rail.dragging .scroll-rail-thumb {
+  background: var(--muted-soft);
 }
 
 @media (prefers-reduced-motion: reduce) {

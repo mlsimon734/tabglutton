@@ -61,6 +61,15 @@ All notable changes to Tabglutton are documented here.
   list parks sites that must never be reordered, and grouping never moves a tab between
   windows. Needs the new `tabGroups` permission, which browsers do not surface in the
   install prompt.
+- **The scrollbar in the Devour cockpit and the popup now spans the list instead of the
+  window.** It ran the full height of the viewport, starting level with — and behind — the
+  floating header rather than at the first row; in full screen, with no browser chrome above
+  it, it reached the top edge of the display. Both surfaces scroll a full-height container so
+  rows pass under the glass, and no engine can inset a native scrollbar to a shorter band, so
+  the native bar is now hidden on both and the thumb is drawn over the band between the
+  header and the action bar. It follows the chrome when the warning banner or the failures
+  panel changes its height, and it can be dragged. Scrolling by wheel, trackpad and keyboard
+  is unchanged.
 - **Tabglutton remembers what it has clipped.** Every successful clip — Devour, the bridge's
   `tab_clip`, Obsidian, a markdown file, or a Zotero save — is recorded under the same
   normalized URL dedup uses, so a page filed from a newsletter link is still recognised when

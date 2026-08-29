@@ -23,6 +23,7 @@ import {
   selectedTabsInUiOrder,
   sendMessage,
   type TabGroup,
+  mountScrollRail,
   trackChromeHeights,
   visibleGroups,
   visibleTabIds,
@@ -817,6 +818,9 @@ trackChromeHeights(
   document.getElementById("chrome-top"),
   document.getElementById("chrome-bottom"),
 );
+mountScrollRail(document.getElementById("scroll-rail"), [
+  document.querySelector<HTMLElement>("main"),
+]);
 document.body.classList.add("initial-load");
 void refresh().then(() => {
   requestAnimationFrame(() => {
