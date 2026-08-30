@@ -2,47 +2,18 @@
 
 All notable changes to Tabglutton are documented here.
 
-## [0.4.1](https://github.com/mlsimon734/tabglutton/compare/v0.4.0...v0.4.1) (unreleased)
+## [0.4.1](https://github.com/mlsimon734/tabglutton/compare/v0.4.0...v0.4.1) (2026-08-29)
 
-- **Gullet's clip verification stays inside the vault.** The note path `tab_clip` reports comes
-  off the browser connection, and it was joined onto the vault directory unchecked — so a
-  `../`-laden path had Gullet list a directory elsewhere on disk, stat and read any note by that
-  name in it, and report a verdict on what it found: a weak existence oracle for anything holding
-  that connection (`SECURITY-REVIEW.md` §7). A path that resolves outside the vault now answers `unknown` before
-  anything is read, the same soft contract every other "cannot check" in that module follows.
-  No in-vault clip verdicts differently.
-- **A clip that extracts almost nothing now keeps its tab instead of filing junk and closing
-  it.** Waking a backlog is the traffic pattern most likely to draw a bot check, and a
-  challenge served at the parked URL has no translator, so it fell past the Zotero route and
-  Defuddle's extraction of "Just a moment…" counted as a successful clip. Anything under 512
-  characters of extracted text is refused: the tab is kept, and the popup's failure row reads
-  "too little content" with the character count and what to do about it. Where a known
-  interstitial signature matches too, the message says so outright. For agents, `tab_clip`
-  refuses the page with a new `thin-content` error while `tab_read` — which files and closes
-  nothing — still returns the text, with a `thin` note saying how little there was and
-  whether it looks like a challenge. ([#49](https://github.com/mlsimon734/tabglutton/issues/49))
-- Devour now dispatches up to three Zotero Connector saves at once instead of one at a time. That
-  is the save step only — waking each tab and asking the Connector to identify it are unchanged
-  and usually dominate a backlog run — and the speedup is reasoned from the serial timings rather
-  than measured against a live Connector. Everything the run reports is unchanged: same counts,
-  same per-tab failures, same order. The Obsidian handoff stays strictly serial, because it
-  borrows the OS clipboard.
-- **The agent bridge now obeys the "Route papers to Zotero" setting.** With that setting on,
-  `tab_clip` saved papers into Obsidian anyway, so an agent clearing a backlog quietly filed them
-  in the wrong place; it now runs the same routing the popup's Devour does, reports
-  `destination: "zotero"`, and closes the tab only once the Connector confirms the save. A
-  Connector that cannot take a routed tab fails that clip with `zotero-failed` and leaves the tab
-  open rather than falling back to Obsidian. Naming a `vault` in the call still overrides
-  everything, and the wire protocol is unchanged.
-- **A "Copy diagnostics" button on the options page**, under a new Troubleshooting heading.
-  One click puts a paste-ready block on the clipboard: extension version and build target,
-  engine and its full version, platform, tab and duplicate counts, the scope and clip
-  destination, which of the three optional permissions are actually held, the bridge's state,
-  and the last ten bridge failures with the ones that repeated collapsed into a count. It
-  carries no bridge token, no page addresses and no tab titles — the block is assembled from
-  a fixed set of counts and enum values rather than from a settings object, so there is
-  nothing in it to redact. The bridge error log is session-scoped, which on Chrome means it
-  is empty after the service worker has idled out.
+Two threads, and a fix from the security audit. Site rules stop being a built-in pair and
+become a system the user writes: editable and ordered, carrying a disposition beyond a
+subfolder — never devour, close without saving, always Zotero — and able to write their
+matches into the browser's own tab strip. Separately, Tabglutton now remembers what it has
+clipped, so a page already filed is marked wherever it turns up again and an agent stops
+paying to re-read it. Tab grouping needs the new `tabGroups` permission, which browsers do
+not surface in the install prompt.
+
+### Features
+
 - Site rules are user-editable on the options page — add, edit, remove, and reorder them;
   the old built-in GitHub/Social entries are now just the seed, and first match (top to
   bottom) wins. Patterns run through the same URL canonicalizer as Dedup and can pin a
@@ -61,15 +32,6 @@ All notable changes to Tabglutton are documented here.
   list parks sites that must never be reordered, and grouping never moves a tab between
   windows. Needs the new `tabGroups` permission, which browsers do not surface in the
   install prompt.
-- **The scrollbar in the Devour cockpit and the popup now spans the list instead of the
-  window.** It ran the full height of the viewport, starting level with — and behind — the
-  floating header rather than at the first row; in full screen, with no browser chrome above
-  it, it reached the top edge of the display. Both surfaces scroll a full-height container so
-  rows pass under the glass, and no engine can inset a native scrollbar to a shorter band, so
-  the native bar is now hidden on both and the thumb is drawn over the band between the
-  header and the action bar. It follows the chrome when the warning banner or the failures
-  panel changes its height, and it can be dragged. Scrolling by wheel, trackpad and keyboard
-  is unchanged.
 - **Tabglutton remembers what it has clipped.** Every successful clip — Devour, the bridge's
   `tab_clip`, Obsidian, a markdown file, or a Zotero save — is recorded under the same
   normalized URL dedup uses, so a page filed from a newsletter link is still recognised when
@@ -81,6 +43,60 @@ All notable changes to Tabglutton are documented here.
   note in the vault, which it now tells the extension about. Neither is a claim about what is
   on disk now; notes get moved and deleted. The memory holds 5000 pages, dropping the
   least recently clipped first.
+- **A "Copy diagnostics" button on the options page**, under a new Troubleshooting heading.
+  One click puts a paste-ready block on the clipboard: extension version and build target,
+  engine and its full version, platform, tab and duplicate counts, the scope and clip
+  destination, which of the three optional permissions are actually held, the bridge's state,
+  and the last ten bridge failures with the ones that repeated collapsed into a count. It
+  carries no bridge token, no page addresses and no tab titles — the block is assembled from
+  a fixed set of counts and enum values rather than from a settings object, so there is
+  nothing in it to redact. The bridge error log is session-scoped, which on Chrome means it
+  is empty after the service worker has idled out.
+
+### Changed
+
+- Devour now dispatches up to three Zotero Connector saves at once instead of one at a time. That
+  is the save step only — waking each tab and asking the Connector to identify it are unchanged
+  and usually dominate a backlog run — and the speedup is reasoned from the serial timings rather
+  than measured against a live Connector. Everything the run reports is unchanged: same counts,
+  same per-tab failures, same order. The Obsidian handoff stays strictly serial, because it
+  borrows the OS clipboard.
+
+### Fixed
+
+- **Gullet's clip verification stays inside the vault.** The note path `tab_clip` reports comes
+  off the browser connection, and it was joined onto the vault directory unchecked — so a
+  `../`-laden path had Gullet list a directory elsewhere on disk, stat and read any note by that
+  name in it, and report a verdict on what it found: a weak existence oracle for anything holding
+  that connection (`SECURITY-REVIEW.md` §7). A path that resolves outside the vault now answers `unknown` before
+  anything is read, the same soft contract every other "cannot check" in that module follows.
+  No in-vault clip verdicts differently.
+- **A clip that extracts almost nothing now keeps its tab instead of filing junk and closing
+  it.** Waking a backlog is the traffic pattern most likely to draw a bot check, and a
+  challenge served at the parked URL has no translator, so it fell past the Zotero route and
+  Defuddle's extraction of "Just a moment…" counted as a successful clip. Anything under 512
+  characters of extracted text is refused: the tab is kept, and the popup's failure row reads
+  "too little content" with the character count and what to do about it. Where a known
+  interstitial signature matches too, the message says so outright. For agents, `tab_clip`
+  refuses the page with a new `thin-content` error while `tab_read` — which files and closes
+  nothing — still returns the text, with a `thin` note saying how little there was and
+  whether it looks like a challenge. ([#49](https://github.com/mlsimon734/tabglutton/issues/49))
+- **The agent bridge now obeys the "Route papers to Zotero" setting.** With that setting on,
+  `tab_clip` saved papers into Obsidian anyway, so an agent clearing a backlog quietly filed them
+  in the wrong place; it now runs the same routing the popup's Devour does, reports
+  `destination: "zotero"`, and closes the tab only once the Connector confirms the save. A
+  Connector that cannot take a routed tab fails that clip with `zotero-failed` and leaves the tab
+  open rather than falling back to Obsidian. Naming a `vault` in the call still overrides
+  everything, and the wire protocol is unchanged.
+- **The scrollbar in the Devour cockpit and the popup now spans the list instead of the
+  window.** It ran the full height of the viewport, starting level with — and behind — the
+  floating header rather than at the first row; in full screen, with no browser chrome above
+  it, it reached the top edge of the display. Both surfaces scroll a full-height container so
+  rows pass under the glass, and no engine can inset a native scrollbar to a shorter band, so
+  the native bar is now hidden on both and the thumb is drawn over the band between the
+  header and the action bar. It follows the chrome when the warning banner or the failures
+  panel changes its height, and it can be dragged. Scrolling by wheel, trackpad and keyboard
+  is unchanged.
 
 ## [0.4.0](https://github.com/mlsimon734/tabglutton/compare/v0.3.1...v0.4.0) (2026-08-21)
 

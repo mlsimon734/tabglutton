@@ -1,6 +1,6 @@
 {
   "name": "tabglutton-gullet",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Tabglutton's agent bridge: an MCP server over stdio, a WebSocket hub on loopback.",
   "keywords": [
     "browser",
