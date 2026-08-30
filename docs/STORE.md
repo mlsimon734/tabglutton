@@ -2,39 +2,26 @@
 
 Listing copy, store-platform findings, and the image pipeline for Tabglutton on
 addons.mozilla.org (AMO) and the Chrome Web Store. Reference material, not a tracker: what
-is left to do on any given day belongs in an issue, not in checkboxes here that go stale
-between readings. Both stores are live at `0.3.1`: AMO, and the Chrome Web Store as
-item `dlploljcggbdcjcaiigmoagonmehglhi`, published 2026-08-17.
+is left to do on any given day belongs in an issue, and what each store currently serves is
+answered by `bun run status`, which reads AMO, the Chrome listing, and the npm registry
+directly. **Nothing in this file states a version, a count, or a store's current state.**
+Those expire silently between readings — this opening paragraph spent eight days telling
+everyone who read it that both stores served a version neither one had.
 
-▸ **Gullet's npm publish is gated on the extension being live, not the other way round.**
+▸ **A release goes to the stores first and to npm second, and a `BRIDGE_PROTO` bump is what
+makes that order load-bearing.** There is deliberately no downgrade path in the handshake —
+an attacker who can imitate the marker can also claim to be old — so a sidecar published
+ahead of the extension refuses the handshake for **every** installed user, and
 `bunx tabglutton-gullet` is what the options page, `gullet/README.md`, and the r/mcp launch
-post all tell people to run — and the package has never been published, so every one of
-those instructions 404s today.
+post all tell people to run. Ship the extension to both stores and let it roll out; only
+then publish `tabglutton-gullet` at the matching version. `release.yml` does the npm half
+automatically on the release tag once a repository variable is set — §6 is that setup, and
+the order to do it in.
 
-▸ **That gate closed again, and this is now the binding constraint on the first publish.**
-The pre-publish security audit found the protocol-2 token proof to be relayable and fixed it
-by bumping the wire protocol to **3** (`SECURITY-REVIEW.md`, `docs/BRIDGE.md` §Wire
-protocol). Both stores currently serve `0.3.1`, which is protocol 2. A sidecar published
-from `main` today would therefore refuse the handshake for **every** installed user — on
-purpose: there is deliberately no downgrade path, because an attacker who can imitate the
-marker can also claim to be old. So the order is fixed, and it is the reverse of the note
-above:
-
-1. Ship the extension carrying protocol 3 to **both** stores and let it roll out.
-2. Only then publish `tabglutton-gullet` at the matching version.
-
-Publishing the sidecar first would ship a package whose only documented use is broken for
-everyone who follows the instructions. Under the versioning rule in `AGENTS.md` a
-`BRIDGE_PROTO` bump is a minor, so that release is **0.4.0** on both halves.
-
-The publish itself is automated and switched off: `.github/workflows/release.yml` carries a
-`publish-npm` job that is skipped until a repository variable is flipped. §6 is the order to
-do it in.
-
-The two versions are deliberately kept equal — extension `0.3.1` ships with Gullet `0.3.1`
-— so "keep them on the same version" is a rule a user can actually follow. Encoding the
-wire protocol in the npm major was considered and dropped: the package was already `0.1.0`
-at protocol 2, and a version that tracks neither the product nor the protocol helps nobody.
+The two versions are deliberately kept equal, so "keep them on the same version" is a rule a
+user can actually follow. Encoding the wire protocol in the npm major was considered and
+dropped: the package was already `0.1.0` at protocol 2, and a version that tracks neither
+the product nor the protocol helps nobody.
 
 ---
 
@@ -757,16 +744,20 @@ implements the OIDC exchange, so the split is structural rather than a preferenc
 `>= 11.5.1` is the floor and the job installs it explicitly rather than trusting the runner's
 bundled version.
 
-**The job is off until a human turns it on.** It is skipped unless the repository variable
-`PUBLISH_GULLET_TO_NPM` is set to `true` — repo **Settings → Secrets and variables →
-Actions → Variables → New repository variable**. GitHub compares expression strings
-case-insensitively, so `True` counts as well; every other value, and an unset variable,
-leaves the job skipped. That flip happens once; every later release tag then publishes on
-its own.
+**A repository variable is the gate.** The job is skipped unless `PUBLISH_GULLET_TO_NPM`
+is set to `true` — repo **Settings → Secrets and variables → Actions → Variables**. GitHub
+compares expression strings case-insensitively, so `True` counts as well; every other value,
+and an unset variable, leaves the job skipped. The flip happens once and every later release
+tag then publishes on its own, so this is a switch to check when a tag produces no package —
+not a step in a release. `bun run status` says whether npm actually has the version.
 
-### The order for the first publish
+### How the first publish was done
 
-1. **Ship 0.4.0 to AMO and the Chrome Web Store, and let it roll out.** Non-negotiable, for
+A record, not a checklist — it has happened. Worth keeping because it is the order to
+repeat if the package ever has to be re-established, and because step 3 is where a typo
+costs a release.
+
+1. **Ship the extension to AMO and the Chrome Web Store, and let it roll out.** Non-negotiable, for
    the reason at the top of this file: `BRIDGE_PROTO` 3 has no downgrade path, so a sidecar
    that lands first refuses the handshake for every installed user. §7 is how both of those
    submissions are driven — `bun run sign:listed` and `bun run publish:chrome --publish`.
