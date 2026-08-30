@@ -352,7 +352,8 @@ the reason is behind the **"Why can't I submit?"** link, as with the blockers ab
 **Filling the justification then resets the data-usage certification**, so clearing this
 blocker immediately fails on gate 1 and reads like the fix not taking. Tick the three boxes
 again before saving. `tabGroups` ([#34](https://github.com/mlsimon734/tabglutton/issues/34))
-is the next permission due to walk into this.
+duly walked into it on 0.4.1, exactly as written here: the upload succeeded as a draft and
+`--publish-only` answered the same bare HTTP 400, with the reason again only behind the link.
 
 ### Single purpose statement
 
