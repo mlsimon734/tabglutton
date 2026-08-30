@@ -20,6 +20,7 @@
     "lint:ext": "bun run build:firefox && bunx web-ext lint --source-dir=dist-firefox",
     "lint": "bun run lint:js && bun run lint:ext",
     "check": "bun run typecheck && bun run format:check && bun run lint && bun run test",
+    "status": "bun scripts/status.ts",
     "start": "bun run build:firefox && bunx web-ext run --source-dir=dist-firefox --firefox=/Applications/Zen.app/Contents/MacOS/zen --firefox-profile=./.dev-profile --profile-create-if-missing --keep-profile-changes",
     "start:console": "bun run build:firefox && bunx web-ext run --source-dir=dist-firefox --firefox=/Applications/Zen.app/Contents/MacOS/zen --browser-console --firefox-profile=./.dev-profile --profile-create-if-missing --keep-profile-changes",
     "start:fresh": "bun run build:firefox && bunx web-ext run --source-dir=dist-firefox --firefox=/Applications/Zen.app/Contents/MacOS/zen",
