@@ -4,10 +4,32 @@ This proof of concept lets Tabglutton ask a separately built Zotero Connector to
 scholarly tabs. It is local development machinery, not a production integration: the published
 Connector does not expose this API yet.
 
-The patch is checked in so the experiment and a future upstream proposal are reproducible. It
+The patch is checked in so the experiment and the upstream proposal are reproducible. It
 cannot be applied automatically when Tabglutton is installed: browser-store extensions are signed,
 isolated packages, and one extension cannot rewrite another installed extension. Until Zotero ships
 the API, testing therefore requires a separately built, unpacked Connector as described below.
+
+## Upstream proposal
+
+Three attempts, in order, so the next person does not repeat the first two:
+
+- [zotero-connectors#60](https://github.com/zotero/zotero-connectors/issues/60) (2018) is
+  where this API was first asked for, by Tridactyl's maintainer rather than by us — the same
+  `onMessageExternal` shape, passing a tab id, with a whitelist offered against the security
+  objection. It was closed on the unrelated keyboard-shortcut question it had been filed
+  under, so the API was never answered either way.
+- [zotero-dev, 2026-08-17](https://groups.google.com/g/zotero-dev/c/Gd-U-z0rh10) — the
+  proposal as prose, linking the patch. No replies. It described a proof of concept that
+  accepted calls from any extension; the `externalAPI.allowedExtensions` gate landed after
+  it, in [#52](https://github.com/mlsimon734/tabglutton/pull/52), and is what the PR now
+  carries.
+- [zotero-connectors#637](https://github.com/zotero/zotero-connectors/pull/637) — the same
+  proposal as a reviewable diff, opened because the thread drew none. It answers the
+  `/connector/detect` question the zotero-dev post left open.
+
+Until it lands, **this repository's Zotero routing is shipped and inert** for anyone using a
+published Connector: the API answers nothing, so testing needs a separately built Connector
+as described below.
 
 ## What it proves
 
