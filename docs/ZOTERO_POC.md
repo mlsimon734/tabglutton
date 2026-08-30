@@ -40,11 +40,14 @@ Config Editor, so the patch adds no preferences UI.
 
 ## Build the patched Connector
 
-The checked-in patch applies to `zotero/zotero-connectors` master at commit `c279ccc`
-(2026-08-21). It was first written against `48ad1fe0` and no longer applies there; upstream moved
+The checked-in patch was written against `48ad1fe0` and no longer applies there; upstream moved
 `_browserAction` onto `Zotero.HostPermissions.checkChromiumActionPermissions` and added an
 `_ensureScriptsInjected` guard, and that guard has to return `false` too or an injection failure
-answers `saveTab` with `saved`.
+answers `saveTab` with `saved`. It was ported to `c279ccc` (2026-08-21) and last verified to apply
+unmodified at `97a8b413` (2026-08-27) — since the port, the touched files gained only an unrelated
+`PageSaving.onSaveAsWebpage` debug message and the unrelated `singleFileConfig` preference. Re-check
+with `git apply --check` against whatever master is rather than trusting the last SHA recorded
+here; upstream has broken it once already.
 
 ```sh
 git clone https://github.com/zotero/zotero-connectors.git
