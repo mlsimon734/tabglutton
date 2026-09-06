@@ -1,8 +1,13 @@
 // The duplicate notice itself: an extension page embedded in the corner of a
 // web page by src/dup-notice-page.ts, which sizes the frame to the pill here
 // and removes it on request. Being an extension page is what lets it talk to
-// the background directly — Dedup and Undo are the popup's own messages — and
-// draw with the shared tokens instead of a hand-copied palette.
+// the background directly and draw with the shared tokens instead of a
+// hand-copied palette.
+//
+// Talking to the background is not the same as being believed by it. This page
+// is web-accessible, so any site can embed a second copy of it; Dedup and Undo
+// therefore travel as `dup-notice-act` carrying the nonce the host content
+// script hands over, and an unproven one is refused.
 //
 // It never takes focus. It arrives while the user is doing something else on
 // the page, and a notice that steals the caret is worse than none.
@@ -10,6 +15,7 @@ import type { CloseDuplicatesResponse, ClosedTabRecord } from "../src/background
 import {
   DUP_NOTICE_LINGER_MS,
   dupNoticeText,
+  isDupNoticeHostMessage,
   type DupNoticeFrameMessage,
 } from "../src/dup-notice.js";
 
@@ -17,6 +23,8 @@ import {
 const UNDO_SEC = 6;
 /** How long a terminal line ("nothing to close", a failure) stays before the pill leaves. */
 const FAREWELL_MS = 2200;
+/** How long to wait for the host's nonce before treating this frame as unplaced. */
+const NONCE_WAIT_MS = 5000;
 
 const notice = document.getElementById("notice") as HTMLDivElement;
 const textEl = document.getElementById("text") as HTMLSpanElement;
@@ -40,11 +48,39 @@ new ResizeObserver(() => {
   post({ source: "tabglutton-dup-notice", type: "size", width: box.width, height: box.height });
 }).observe(notice);
 
+/**
+ * The proof that this frame is the one the background placed, handed over by
+ * the host content script out of the embedding page's reach. Without it the
+ * background refuses to act — see `DupNoticeHostMessage`. A page that embeds a
+ * copy of this notice can post a nonce of its own; it just will not be this one.
+ */
+const nonceReady = new Promise<string>((resolve) => {
+  window.addEventListener("message", (event) => {
+    // The parent is an arbitrary web page, so its origin cannot be checked
+    // here. Nothing is trusted on the strength of arriving: the background
+    // decides whether the nonce is real.
+    if (event.source !== window.parent) return;
+    if (isDupNoticeHostMessage(event.data)) resolve(event.data.nonce);
+  });
+  // A frame nobody hands a nonce to is one nobody placed — an embedded copy,
+  // most likely. It resolves empty rather than hanging, so the click ends in a
+  // refusal the user can see instead of a button stuck on "Closing…".
+  setTimeout(() => resolve(""), NONCE_WAIT_MS);
+});
+
 let gone = false;
+let undoTimer: ReturnType<typeof setInterval> | undefined;
 function dismiss(): void {
   if (gone) return;
   gone = true;
   linger.stop();
+  // Every exit runs through here, so the countdown is cleared in one place:
+  // its own terminal tick calls dismiss(), and an interval left running would
+  // otherwise only stop when the parent got around to removing the frame.
+  if (undoTimer !== undefined) {
+    clearInterval(undoTimer);
+    undoTimer = undefined;
+  }
   post({ source: "tabglutton-dup-notice", type: "dismiss" });
 }
 
@@ -101,7 +137,6 @@ async function send<T>(msg: unknown): Promise<T> {
 }
 
 let restorable: ClosedTabRecord[] = [];
-let undoTimer: ReturnType<typeof setInterval> | undefined;
 
 async function dedup(): Promise<void> {
   linger.disarm();
@@ -109,17 +144,27 @@ async function dedup(): Promise<void> {
   actBtn.textContent = "Closing…";
   let res: CloseDuplicatesResponse | undefined;
   try {
-    res = await send<CloseDuplicatesResponse>({ type: "close-duplicates" });
+    res = await send<CloseDuplicatesResponse>({
+      type: "dup-notice-act",
+      action: "close",
+      nonce: await nonceReady,
+    });
   } catch (err) {
-    console.warn("[tabglutton] duplicate notice: close-duplicates failed", err);
+    console.warn("[tabglutton] duplicate notice: close failed", err);
   }
   if (!res) {
     farewell("Couldn't close duplicates");
     return;
   }
-  if (res.closed === 0 || res.restorable.length === 0) {
+  if (res.closed === 0) {
     // The count was a snapshot; the tabs went some other way in the meantime.
     farewell("Nothing left to close");
+    return;
+  }
+  if (res.restorable.length === 0) {
+    // Closed, but nothing the undo log could describe — so the close is
+    // reported and no Undo is offered, rather than claiming nothing happened.
+    farewell(`${res.closed} closed`);
     return;
   }
   restorable = res.restorable;
@@ -142,13 +187,21 @@ async function dedup(): Promise<void> {
 }
 
 async function undo(): Promise<void> {
-  if (undoTimer !== undefined) clearInterval(undoTimer);
+  if (undoTimer !== undefined) {
+    clearInterval(undoTimer);
+    undoTimer = undefined;
+  }
   actBtn.disabled = true;
   actBtn.textContent = "Reopening…";
   try {
-    await send({ type: "reopen-tabs", records: restorable });
+    await send({
+      type: "dup-notice-act",
+      action: "undo",
+      nonce: await nonceReady,
+      records: restorable,
+    });
   } catch (err) {
-    console.warn("[tabglutton] duplicate notice: reopen-tabs failed", err);
+    console.warn("[tabglutton] duplicate notice: reopen failed", err);
   }
   dismiss();
 }

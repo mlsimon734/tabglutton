@@ -14,21 +14,30 @@
 // URL, so this file needs no polyfill on Chrome and bundles as one plain IIFE
 // for both targets.
 
-import { isDupNoticeFrameMessage } from "./dup-notice.js";
+import { isDupNoticeFrameMessage, type DupNoticeHostMessage } from "./dup-notice.js";
 
 declare global {
   interface Window {
-    __tabgluttonDupNotice?: { url: string };
+    __tabgluttonDupNotice?: { url: string; nonce: string };
+    /**
+     * Takes the previous notice down, listener included. Parked on the window
+     * because each injection is a fresh module instance: a module-level
+     * variable would not survive to see the frame it has to replace.
+     */
+    __tabgluttonDupNoticeTeardown?: () => void;
   }
 }
 
 const HOST_ID = "tabglutton-dup-notice";
 const INSET_PX = 20;
 
-function placeNotice(url: string): void {
+function placeNotice(url: string, nonce: string): void {
   // A second notice on the same page replaces the first rather than stacking:
   // the background only ever wants one on screen, and the memory it keeps is
-  // per pile, not per frame.
+  // per pile, not per frame. Through the teardown rather than the element, so
+  // the old frame's `message` listener goes with it — removing only the node
+  // would leave one dead closure per re-show bound to this window forever.
+  window.__tabgluttonDupNoticeTeardown?.();
   document.getElementById(HOST_ID)?.remove();
 
   const origin = new URL(url).origin;
@@ -64,6 +73,14 @@ function placeNotice(url: string): void {
     style.transition = "opacity 180ms cubic-bezier(0.2, 0.8, 0.2, 1)";
   }
 
+  const teardown = (): void => {
+    window.removeEventListener("message", onMessage);
+    frame.remove();
+    if (window.__tabgluttonDupNoticeTeardown === teardown) {
+      delete window.__tabgluttonDupNoticeTeardown;
+    }
+  };
+
   const onMessage = (event: MessageEvent): void => {
     // Both checks, not one: the page can post anything it likes on this
     // window, and only the frame we created, speaking from the extension's
@@ -76,13 +93,27 @@ function placeNotice(url: string): void {
       style.opacity = "1";
       return;
     }
-    window.removeEventListener("message", onMessage);
-    frame.remove();
+    teardown();
   };
   window.addEventListener("message", onMessage);
+  window.__tabgluttonDupNoticeTeardown = teardown;
+
+  // The nonce goes over this channel rather than in `frame.src`, which the
+  // embedding page can read straight out of the DOM. Targeted at the frame's
+  // own origin so a redirected frame could not receive it, and sent on `load`
+  // — the frame's module script runs before that, so its listener is up.
+  frame.addEventListener("load", () => {
+    const msg: DupNoticeHostMessage = {
+      source: "tabglutton-dup-notice-host",
+      type: "nonce",
+      nonce,
+    };
+    frame.contentWindow?.postMessage(msg, origin);
+  });
+
   (document.body ?? document.documentElement).append(frame);
 }
 
 const config = window.__tabgluttonDupNotice;
 delete window.__tabgluttonDupNotice;
-if (config?.url) placeNotice(config.url);
+if (config?.url) placeNotice(config.url, config.nonce);

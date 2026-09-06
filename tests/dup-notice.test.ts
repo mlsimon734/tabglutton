@@ -5,6 +5,7 @@ import {
   dupNoticeAfterReopen,
   dupNoticeText,
   isDupNoticeFrameMessage,
+  isDupNoticeHostMessage,
   isDupNoticeThreshold,
   planDupNotice,
   type DupNoticeMemory,
@@ -174,6 +175,39 @@ describe("isDupNoticeFrameMessage", () => {
     );
     expect(
       isDupNoticeFrameMessage({ source: "tabglutton-dup-notice", type: "size", width: "300" }),
+    ).toBe(false);
+  });
+});
+
+describe("isDupNoticeHostMessage", () => {
+  test("accepts the host's nonce hand-over", () => {
+    expect(
+      isDupNoticeHostMessage({
+        source: "tabglutton-dup-notice-host",
+        type: "nonce",
+        nonce: "6f1b0c2e",
+      }),
+    ).toBe(true);
+  });
+
+  // The frame's parent is an arbitrary web page whose origin cannot be checked,
+  // so this listener sees whatever that page decides to post. Shape is all it
+  // screens for — whether the nonce is the real one is the background's call.
+  test("rejects what a page could post in its place", () => {
+    expect(isDupNoticeHostMessage(null)).toBe(false);
+    expect(isDupNoticeHostMessage("nonce")).toBe(false);
+    expect(isDupNoticeHostMessage({ type: "nonce", nonce: "x" })).toBe(false);
+    expect(
+      isDupNoticeHostMessage({ source: "tabglutton-dup-notice", type: "nonce", nonce: "x" }),
+    ).toBe(false);
+    expect(
+      isDupNoticeHostMessage({ source: "tabglutton-dup-notice-host", type: "size", nonce: "x" }),
+    ).toBe(false);
+    expect(
+      isDupNoticeHostMessage({ source: "tabglutton-dup-notice-host", type: "nonce", nonce: "" }),
+    ).toBe(false);
+    expect(
+      isDupNoticeHostMessage({ source: "tabglutton-dup-notice-host", type: "nonce", nonce: 7 }),
     ).toBe(false);
   });
 });

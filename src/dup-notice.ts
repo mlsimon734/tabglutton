@@ -131,6 +131,40 @@ export interface DupNoticeDismissMessage {
 
 export type DupNoticeFrameMessage = DupNoticeSizeMessage | DupNoticeDismissMessage;
 
+/**
+ * The host content script's one message *into* the frame: the nonce that proves
+ * to the background that this frame is the one it placed.
+ *
+ * It exists because `notice/dup-notice.html` is a `web_accessible_resource`
+ * matched on every site, so any page may embed a second copy of the real notice
+ * — genuine extension UI, which no frame-busting can refuse — position it under
+ * a decoy button, and let a stray click drive Dedup. The nonce is the thing an
+ * embedding page cannot produce.
+ *
+ * It travels by `postMessage` and deliberately **not** in the frame's URL: the
+ * URL lands in the embedding page's DOM, where any script can read it, and the
+ * notice is shown on whatever page is *active* — which may well be the page
+ * trying this. The host runs in the isolated content-script world, so a nonce
+ * handed over this way is never in the page's reach. A page may of course post
+ * a nonce of its own invention; the background is what rejects it.
+ */
+export interface DupNoticeHostMessage {
+  source: "tabglutton-dup-notice-host";
+  type: "nonce";
+  nonce: string;
+}
+
+export function isDupNoticeHostMessage(data: unknown): data is DupNoticeHostMessage {
+  if (!data || typeof data !== "object") return false;
+  const msg = data as Partial<DupNoticeHostMessage>;
+  return (
+    msg.source === "tabglutton-dup-notice-host" &&
+    msg.type === "nonce" &&
+    typeof msg.nonce === "string" &&
+    msg.nonce.length > 0
+  );
+}
+
 export function isDupNoticeFrameMessage(data: unknown): data is DupNoticeFrameMessage {
   if (!data || typeof data !== "object") return false;
   const msg = data as Partial<DupNoticeFrameMessage>;

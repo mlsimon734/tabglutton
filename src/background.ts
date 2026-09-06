@@ -63,6 +63,18 @@ export type ReopenTabsMessage = {
   type: "reopen-tabs";
   records: ClosedTabRecord[];
 };
+/**
+ * The duplicate notice's own close/undo, which carry a nonce because the frame
+ * that sends them is embedded in an untrusted page. The popup's
+ * `close-duplicates` / `reopen-tabs` stay ungated: nothing a web page can drive
+ * reaches them, and only `notice/dup-notice.html` is web-accessible.
+ */
+export type DupNoticeActMessage = {
+  type: "dup-notice-act";
+  action: "close" | "undo";
+  nonce: string;
+  records?: ClosedTabRecord[];
+};
 export type OpenCockpitMessage = { type: "open-cockpit" };
 export type GetBridgeStatusMessage = { type: "get-bridge-status" };
 export type GetDiagnosticsMessage = { type: "get-diagnostics" };
@@ -75,6 +87,7 @@ export type IncomingMessage =
   | CloseTabsMessage
   | FocusTabMessage
   | ReopenTabsMessage
+  | DupNoticeActMessage
   | OpenCockpitMessage
   | GetBridgeStatusMessage
   | GetDiagnosticsMessage
@@ -371,6 +384,12 @@ async function refreshBadge(tabsHint?: Tab[]): Promise<void> {
 // ---------- duplicate notice ----------
 
 const DUP_NOTICE_MEMORY_KEY = "dupNoticeMemory";
+/**
+ * The nonce the current notice must quote to act. In `storage.session` for the
+ * same reason the memory is: this page dies between the notice appearing and
+ * the user clicking it.
+ */
+const DUP_NOTICE_NONCE_KEY = "dupNoticeNonce";
 const DUP_NOTICE_PAGE_URL = browser.runtime.getURL("notice/dup-notice.html");
 
 /**
@@ -428,15 +447,40 @@ function noticeDuplicates(seen: DupNoticeObservation): Promise<void> {
 /** Reopening is keeping — see `dupNoticeAfterReopen`. Runs ahead of the badge pass that follows. */
 function rememberReopenForDupNotice(): Promise<void> {
   return dupNoticeQueue(async () => {
+    await settingsReady;
+    // Off means untouched, the same rule `planDupNotice` follows. Arming the
+    // memory while the notice is disabled would otherwise suppress the first
+    // announcement after the user switches it on, for a pile still standing.
+    if (!settings.dupNoticeEnabled) return;
     const memory = await loadDupNoticeMemory();
     const next = dupNoticeAfterReopen(memory);
     if (!sameDupNoticeMemory(next, memory)) await saveDupNoticeMemory(next);
   });
 }
 
-/** Runs inside the tab; the companion file injection reads it back. */
-function setDupNoticeConfig(url: string): void {
-  (window as Window & { __tabgluttonDupNotice?: { url: string } }).__tabgluttonDupNotice = { url };
+/**
+ * Does this action come from the notice this background actually placed? Only
+ * that frame was handed the nonce, and it was handed it out of the embedding
+ * page's reach — see `DupNoticeHostMessage`.
+ */
+async function isDupNoticeNonce(nonce: unknown): Promise<boolean> {
+  if (typeof nonce !== "string" || nonce.length === 0) return false;
+  const stored = (await browser.storage.session.get(DUP_NOTICE_NONCE_KEY)) as Record<
+    string,
+    unknown
+  >;
+  return stored[DUP_NOTICE_NONCE_KEY] === nonce;
+}
+
+/**
+ * Runs inside the tab; the companion file injection reads it back. This lands
+ * in the isolated content-script world, not the page's, which is what lets the
+ * nonce cross without the page ever seeing it.
+ */
+function setDupNoticeConfig(url: string, nonce: string): void {
+  (
+    window as Window & { __tabgluttonDupNotice?: { url: string; nonce: string } }
+  ).__tabgluttonDupNotice = { url, nonce };
 }
 
 /**
@@ -451,12 +495,16 @@ function setDupNoticeConfig(url: string): void {
 async function showDupNotice(dupCount: number): Promise<boolean> {
   const [tab] = await browser.tabs.query({ active: true, lastFocusedWindow: true });
   if (tab?.id === undefined || !isHttpUrl(tab.url)) return false;
+  // The count may ride in the URL — the page it is shown on can see the pile
+  // for itself. The nonce may not, so it goes through the isolated world.
   const url = `${DUP_NOTICE_PAGE_URL}#count=${dupCount}`;
+  const nonce = crypto.randomUUID();
   try {
+    await browser.storage.session.set({ [DUP_NOTICE_NONCE_KEY]: nonce });
     await browser.scripting.executeScript({
       target: { tabId: tab.id },
       func: setDupNoticeConfig,
-      args: [url],
+      args: [url, nonce],
     });
     await browser.scripting.executeScript({
       target: { tabId: tab.id },
@@ -1384,6 +1432,58 @@ async function clipSelectedTabs(requestedTabIds: number[]): Promise<ClipSelected
   };
 }
 
+/**
+ * Close every duplicate but its group's keeper. Shared by the popup, the
+ * cockpit, and the duplicate notice, so one definition of "dedup" answers all
+ * three. `closed` counts tabs removed and `restorable` only the ones the undo
+ * log could describe, so a caller offering Undo has to read both.
+ */
+async function closeDuplicateTabs(): Promise<CloseDuplicatesResponse> {
+  const tabs = await queryScopedTabs();
+  const opts = normalizeOptsFrom(settings);
+  const groups = groupDuplicates(tabs, opts);
+  const restorable: ClosedTabRecord[] = [];
+  const closeIds: number[] = [];
+  for (const group of groups) {
+    const keeper = pickKeeper(group.tabs);
+    for (const t of group.tabs) {
+      if (t.id === undefined || t.id === keeper.id) continue;
+      closeIds.push(t.id);
+      const rec = tabToClosedRecord(t);
+      if (rec) restorable.push(rec);
+    }
+  }
+  if (closeIds.length) {
+    await browser.tabs.remove(closeIds);
+  }
+  return { closed: closeIds.length, restorable };
+}
+
+async function reopenClosedTabs(records: ClosedTabRecord[]): Promise<{ restored: number }> {
+  // Before the restores: the badge pass at the end would otherwise meet a
+  // re-armed memory with the pile back and, past the cooldown, announce the
+  // tabs the user just asked to keep.
+  await rememberReopenForDupNotice();
+  let restored = 0;
+  for (const rec of records) {
+    if (!rec || typeof rec.url !== "string") continue;
+    try {
+      await browser.tabs.create({
+        url: rec.url,
+        windowId: rec.windowId,
+        index: rec.index,
+        pinned: rec.pinned,
+        active: false,
+      });
+      restored += 1;
+    } catch (err) {
+      console.warn("[tabglutton] reopen failed for", rec.url, err);
+    }
+  }
+  await refreshBadge();
+  return { restored };
+}
+
 browser.runtime.onMessage.addListener(async (rawMsg: unknown): Promise<unknown> => {
   if (!rawMsg || typeof rawMsg !== "object") return undefined;
   const msg = rawMsg as IncomingMessage;
@@ -1405,30 +1505,8 @@ browser.runtime.onMessage.addListener(async (rawMsg: unknown): Promise<unknown> 
     }
     case "clip-selected-tabs":
       return clipSelectedTabs(Array.isArray(msg.tabIds) ? msg.tabIds : []);
-    case "close-duplicates": {
-      const tabs = await queryScopedTabs();
-      const opts = normalizeOptsFrom(settings);
-      const groups = groupDuplicates(tabs, opts);
-      const restorable: ClosedTabRecord[] = [];
-      const closeIds: number[] = [];
-      for (const group of groups) {
-        const keeper = pickKeeper(group.tabs);
-        for (const t of group.tabs) {
-          if (t.id === undefined || t.id === keeper.id) continue;
-          closeIds.push(t.id);
-          const rec = tabToClosedRecord(t);
-          if (rec) restorable.push(rec);
-        }
-      }
-      if (closeIds.length) {
-        await browser.tabs.remove(closeIds);
-      }
-      const response: CloseDuplicatesResponse = {
-        closed: closeIds.length,
-        restorable,
-      };
-      return response;
-    }
+    case "close-duplicates":
+      return closeDuplicateTabs();
     case "close-tabs": {
       const ids = Array.isArray(msg.tabIds) ? msg.tabIds : [];
       if (ids.length) {
@@ -1448,30 +1526,17 @@ browser.runtime.onMessage.addListener(async (rawMsg: unknown): Promise<unknown> 
       }
       return { ok: true };
     }
-    case "reopen-tabs": {
-      const records = Array.isArray(msg.records) ? msg.records : [];
-      // Before the restores: the badge pass at the end of this handler would
-      // otherwise meet a re-armed memory with the pile back and, past the
-      // cooldown, announce the tabs the user just asked to keep.
-      await rememberReopenForDupNotice();
-      let restored = 0;
-      for (const rec of records) {
-        if (!rec || typeof rec.url !== "string") continue;
-        try {
-          await browser.tabs.create({
-            url: rec.url,
-            windowId: rec.windowId,
-            index: rec.index,
-            pinned: rec.pinned,
-            active: false,
-          });
-          restored += 1;
-        } catch (err) {
-          console.warn("[tabglutton] reopen failed for", rec.url, err);
-        }
+    case "reopen-tabs":
+      return reopenClosedTabs(Array.isArray(msg.records) ? msg.records : []);
+    case "dup-notice-act": {
+      // The frame lives in a page nothing here controls, so it proves itself
+      // before it is allowed to close or restore anything.
+      if (!(await isDupNoticeNonce(msg.nonce))) {
+        console.warn("[tabglutton] duplicate notice: refused an unproven action");
+        return undefined;
       }
-      await refreshBadge();
-      return { restored };
+      if (msg.action === "close") return closeDuplicateTabs();
+      return reopenClosedTabs(Array.isArray(msg.records) ? msg.records : []);
     }
     case "open-cockpit": {
       await openCockpit();
