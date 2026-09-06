@@ -13,6 +13,7 @@
     "popup/lib.ts",
     "options/options.ts",
     "onboarding/onboarding.ts",
-    "redirect/obsidian-redirect.ts"
+    "redirect/obsidian-redirect.ts",
+    "notice/dup-notice.ts"
   ]
 }

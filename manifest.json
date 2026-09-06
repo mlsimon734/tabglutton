@@ -29,6 +29,12 @@
   "content_security_policy": {
     "extension_pages": "script-src 'self'; object-src 'self'"
   },
+  "web_accessible_resources": [
+    {
+      "resources": ["notice/dup-notice.html"],
+      "matches": ["*://*/*"]
+    }
+  ],
   "background": {
     "scripts": ["src/background.js"],
     "type": "module"

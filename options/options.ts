@@ -12,6 +12,7 @@ import {
   isBridgePort,
 } from "../src/bridge-protocol.js";
 import { renderDiagnostics, type DiagnosticsGrants } from "../src/diagnostics.js";
+import { DEFAULT_DUP_NOTICE_THRESHOLD, isDupNoticeThreshold } from "../src/dup-notice.js";
 import {
   BRIDGE_ORIGINS,
   CLIP_ORIGINS,
@@ -21,6 +22,8 @@ import {
   originsGrant,
   requestDownloads,
   requestOrigins,
+  SITES_REFUSED_FOR_NOTICE,
+  SITES_REVOKED_FOR_NOTICE,
 } from "../src/permissions.js";
 import {
   newRuleId,
@@ -58,6 +61,10 @@ const zoteroConnectorId = document.getElementById("zoteroConnectorId") as HTMLIn
 const vaultWarning = document.getElementById("vaultWarning") as HTMLParagraphElement;
 const downloadsWarning = document.getElementById("downloadsWarning") as HTMLParagraphElement;
 const scopeRadios = document.querySelectorAll<HTMLInputElement>('input[name="scope"]');
+const dupNoticeEnabled = document.getElementById("dupNoticeEnabled") as HTMLInputElement;
+const dupNoticeThreshold = document.getElementById("dupNoticeThreshold") as HTMLInputElement;
+const dupNoticeThresholdRow = document.getElementById("dupNoticeThresholdRow") as HTMLDivElement;
+const dupNoticeWarning = document.getElementById("dupNoticeWarning") as HTMLParagraphElement;
 const clipModeRadios = document.querySelectorAll<HTMLInputElement>('input[name="clipMode"]');
 const clipDestinationRadios = document.querySelectorAll<HTMLInputElement>(
   'input[name="clipDestination"]',
@@ -116,6 +123,19 @@ async function load(): Promise<void> {
   for (const radio of scopeRadios) {
     radio.checked = radio.value === settings.scope;
   }
+  dupNoticeEnabled.checked = settings.dupNoticeEnabled;
+  dupNoticeThreshold.value = String(settings.dupNoticeThreshold);
+  // The notice is injected into web pages, so it is only real while the site
+  // grant behind it is — and on Chrome that grant is optional and revocable.
+  // Same shape as the file destination below: revert, say why, persist, so the
+  // switch is off and clickable, which is the whole recovery path. Only for a
+  // grant seen to be missing; a check that threw is not evidence.
+  if (settings.dupNoticeEnabled && (await originsGrant(CLIP_ORIGINS)) === "missing") {
+    dupNoticeEnabled.checked = false;
+    setDupNoticeWarning(SITES_REVOKED_FOR_NOTICE);
+    await saveSettings({ dupNoticeEnabled: false });
+  }
+  updateDupNotice();
   for (const radio of clipModeRadios) {
     radio.checked = radio.value === settings.clipMode;
   }
@@ -187,6 +207,8 @@ async function save(): Promise<void> {
     stripFragment: stripFragment.checked,
     extraStripParams: parseParams(extraStripParams.value),
     scope,
+    dupNoticeEnabled: dupNoticeEnabled.checked,
+    dupNoticeThreshold: parseThreshold(dupNoticeThreshold.value),
     clipDestination,
     obsidianVault: obsidianVault.value.trim(),
     clippingsBaseFolder: clippingsBaseFolder.value.trim(),
@@ -215,6 +237,23 @@ function parsePort(raw: string): number {
   const value = raw.trim();
   const port = /^\d+$/.test(value) ? Number(value) : Number.NaN;
   return isBridgePort(port) ? port : DEFAULT_BRIDGE_PORT;
+}
+
+/** Fall back rather than persist a threshold no count could ever reach. */
+function parseThreshold(raw: string): number {
+  const value = raw.trim();
+  const threshold = /^\d+$/.test(value) ? Number(value) : Number.NaN;
+  return isDupNoticeThreshold(threshold) ? threshold : DEFAULT_DUP_NOTICE_THRESHOLD;
+}
+
+/** The threshold only means something while the notice is on. */
+function updateDupNotice(): void {
+  dupNoticeThresholdRow.hidden = !dupNoticeEnabled.checked;
+}
+
+/** Like `setDownloadsWarning`: never `hidden`, so it is a live region when the text lands. */
+function setDupNoticeWarning(message: string): void {
+  dupNoticeWarning.textContent = message;
 }
 
 function selectedClipDestination(): ClipDestination {
@@ -306,6 +345,32 @@ for (const radio of clipDestinationRadios) {
     })();
   });
 }
+
+// The notice is injected into whatever page the user is on, which on Chrome
+// needs the same site grant Devour asks for at its click — and this switch is
+// the one click the notice ever gets, since the background page that shows it
+// has no gesture. A refusal leaves the switch off rather than persisting a
+// notice that could only ever fail to appear.
+dupNoticeEnabled.addEventListener("change", () => {
+  void (async () => {
+    // First await in the handler; see requestOrigins on why nothing may precede it.
+    if (dupNoticeEnabled.checked && !(await requestOrigins(CLIP_ORIGINS))) {
+      dupNoticeEnabled.checked = false;
+      setDupNoticeWarning(SITES_REFUSED_FOR_NOTICE);
+      updateDupNotice();
+      return;
+    }
+    setDupNoticeWarning("");
+    updateDupNotice();
+    await save();
+  })();
+});
+dupNoticeThreshold.addEventListener("input", queueSave);
+// Snap what was typed to what was saved, so the field never shows a value the
+// notice is not actually using.
+dupNoticeThreshold.addEventListener("change", () => {
+  dupNoticeThreshold.value = String(parseThreshold(dupNoticeThreshold.value));
+});
 
 // `bridgeEnabled` is not in that list because switching it on is the one moment
 // we can ask for site access to the sidecar's loopback origin: Chrome requires a

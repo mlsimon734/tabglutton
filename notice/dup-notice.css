@@ -1,0 +1,103 @@
+@import url("../popup/tokens.css");
+
+/* The whole document is the pill. The embedding page sizes the frame to
+   `.notice`'s box, so the document shrink-wraps its content and never scrolls:
+   a scrollbar here would be a scrollbar inside a 36px pill. */
+html,
+body {
+  background: transparent;
+  overflow: hidden;
+}
+
+body {
+  display: inline-block;
+  line-height: 1;
+}
+
+/* The popup's toast, minus its glass. `backdrop-filter` samples the frame's own
+   document — not the page the frame floats over — so the material would have
+   nothing behind it to describe, and the opaque fallback tokens.css already
+   defines is the honest rendering. It inverts with the theme the same way:
+   ink pill on a light desk, paper pill on a dark one. */
+.notice {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  height: 36px;
+  padding: 0 5px 0 14px;
+  background: var(--ink);
+  color: var(--paper);
+  border-radius: var(--radius-pill);
+  box-shadow: inset 0 1px 0 var(--toast-rim);
+  font-size: var(--fs-small);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* Who is talking. Out of context on a web page that has to be said, and a
+   system-sans micro-label says it without spending the wordmark. */
+.brand {
+  font-size: var(--fs-micro);
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: var(--track-label);
+  opacity: 0.6;
+}
+
+.text {
+  font-weight: 500;
+}
+
+button {
+  font: inherit;
+  font-weight: 500;
+  color: inherit;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-pill);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition:
+    background var(--duration-fast) var(--easing-soft),
+    transform var(--duration-fast) var(--easing);
+}
+
+button:active:not(:disabled) {
+  transform: scale(0.97);
+}
+
+button:disabled {
+  opacity: 0.42;
+  cursor: default;
+}
+
+button:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--accent-ring);
+}
+
+/* Mixed from the text colour rather than a fixed white, so the fill reads on
+   both the ink pill and the paper one. */
+.act {
+  padding: 4px 12px;
+  font-size: var(--fs-small);
+  background: color-mix(in srgb, currentColor 14%, transparent);
+}
+
+.act:hover:not(:disabled) {
+  background: color-mix(in srgb, currentColor 22%, transparent);
+}
+
+.icon {
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  opacity: 0.7;
+}
+
+.icon:hover:not(:disabled) {
+  opacity: 1;
+  background: color-mix(in srgb, currentColor 14%, transparent);
+}

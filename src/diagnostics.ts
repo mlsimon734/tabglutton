@@ -157,6 +157,8 @@ export interface DiagnosticsBackgroundFacts {
   scope: ScopeMode;
   clipDestination: ClipDestination;
   zoteroRouting: boolean;
+  /** The in-page duplicate notice: whether it is on, and the badge count it fires at. */
+  dupNotice: { enabled: boolean; threshold: number };
   bridge: DiagnosticsBridgeFacts;
 }
 
@@ -251,6 +253,7 @@ export function renderDiagnostics(facts: DiagnosticsFacts, now: number): string 
     ),
     row("scope", bg.scope),
     row("clips", `${bg.clipDestination} · zotero routing ${bg.zoteroRouting ? "on" : "off"}`),
+    row("notice", bg.dupNotice.enabled ? `on at ${bg.dupNotice.threshold} duplicates` : "off"),
     row("bridge", bridgeLine(bg.bridge)),
   );
   // Its own heading rather than another padded row: the entries hang under it,

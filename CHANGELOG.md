@@ -2,6 +2,19 @@
 
 All notable changes to Tabglutton are documented here.
 
+## [0.4.2](https://github.com/mlsimon734/tabglutton/compare/v0.4.1...v0.4.2) (unreleased)
+
+- **An optional notice when duplicates pile up.** Switch it on under Deduplication in
+  Settings and pick a threshold, and once the badge count reaches it a small Tabglutton pill
+  appears in the corner of the page you are on — the count, a **Dedup** button, and Undo
+  after it — then takes itself down after fifteen seconds if left alone. It is a piece of the
+  extension's own UI inside the browser, never a system notification. One notice per pile: it
+  comes back only after the count has dropped below the threshold and climbed past it again,
+  at most every thirty minutes, and restoring closed tabs with Undo counts as keeping them.
+  Off by default. On Chrome the switch asks for site access, since the pill is placed on the
+  page; the manifest now lists the notice page under `web_accessible_resources` so a page
+  can embed it.
+
 ## [0.4.1](https://github.com/mlsimon734/tabglutton/compare/v0.4.0...v0.4.1) (2026-08-29)
 
 Two threads, and a fix from the security audit. Site rules stop being a built-in pair and

@@ -200,6 +200,13 @@ muted). All have hover / active / disabled / focus-visible (3px accent ring) sta
   theme and rides above `--chrome-bottom` rather than at a fixed offset, which the
   Devour-failures panel used to grow up behind. It was already floating over content, so
   glass costs it nothing structural.
+- Duplicate notice (`notice/`) — the toast's shape placed on someone else's page: an
+  extension-origin `<iframe>` pinned bottom-right, sized by the page to the pill inside it,
+  with a `TABGLUTTON` micro-label because out of context it has to say who is talking. Opaque
+  `--ink` on `--paper` rather than `--toast-glass`: `backdrop-filter` samples the frame's own
+  document, not the page beneath, so glass there would describe nothing. The frame is what
+  makes the tokens reachable at all — an in-page shadow-DOM overlay gets either inline styles
+  a strict `style-src` refuses or hand-copied hex. It never takes focus.
 - Chrome stacks — `.chrome` positions and insets; in the **popup** the stack owns the
   material (`.u-glass` + `.u-glass-top` / `.u-glass-bottom`), in the **cockpit** the capsules
   inside it do (`.u-glass-float` for the all-round rim, since a detached object shows all

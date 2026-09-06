@@ -103,6 +103,18 @@ export const DOWNLOADS_REVOKED =
   "Tabglutton no longer has permission to save downloads, so the destination is back on Obsidian. Choose Markdown files to grant it again.";
 
 /**
+ * What the options page says when the duplicate notice cannot have the site
+ * access it is drawn with. The notice is injected into the page the user is on,
+ * so it needs the same grant Devour does, and the switch is the one click it
+ * gets. Firefox carries the grant in `host_permissions` and only loses it from
+ * about:addons; Chrome asks at the switch, so switching on again re-asks there.
+ */
+export const SITES_REFUSED_FOR_NOTICE =
+  "Site access was declined, so the notice has no page to appear on — it stays off. Switch it on again to ask once more, or grant access to all sites from the browser's own extension settings.";
+export const SITES_REVOKED_FOR_NOTICE =
+  "Tabglutton no longer has access to sites, so the duplicate notice has no page to appear on and is off. Switch it on again to grant access.";
+
+/**
  * What the surfaces with no gesture say instead. Neither the background page
  * nor the bridge can ask for anything, so both name the one place that can —
  * and that name is only truthful because the options page reverts the
