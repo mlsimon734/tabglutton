@@ -2,6 +2,15 @@
 
 All notable changes to Tabglutton are documented here.
 
+## [0.4.2](https://github.com/mlsimon734/tabglutton/compare/v0.4.1...v0.4.2) (unreleased)
+
+- **YouTube clips carry the transcript.** The extractor now runs Defuddle's async path, which
+  fetches a video's caption track instead of stopping at the description: two talks that
+  clipped as 24 and 153 words now clip as 15,189 and 8,847, with timestamps. The same path
+  reads a Reddit comments page from its feed and a logged-out x.com status through oEmbed when
+  the page itself has nothing rendered, and falls back to the page as before when those
+  fetches fail. Everything else extracts exactly as it did.
+
 ## [0.4.1](https://github.com/mlsimon734/tabglutton/compare/v0.4.0...v0.4.1) (2026-08-29)
 
 Two threads, and a fix from the security audit. Site rules stop being a built-in pair and
