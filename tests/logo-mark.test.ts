@@ -2,9 +2,9 @@ import { describe, expect, test } from "bun:test";
 
 /**
  * The mark's geometry exists in four files, because nothing can share it: the popup,
- * cockpit, options, and onboarding fetch `icons/logo-mark.svg` at runtime; the promo tile
- * inlines it so the tile stays a single `file://`-renderable page; and the two app icons
- * duplicate it because an icon is rasterized standalone with no stylesheet.
+ * cockpit, options, onboarding, and duplicate notice fetch `icons/logo-mark.svg` at runtime;
+ * the promo tile inlines it so the tile stays a single `file://`-renderable page; and the
+ * two app icons duplicate it because an icon is rasterized standalone with no stylesheet.
  *
  * A drifted copy is invisible until someone compares a store listing against the product —
  * which is exactly how the icon came to be a different mark from the extension's own. So the

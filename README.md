@@ -58,6 +58,13 @@ with **Select all _n_** on the section rule — the last two put the copies in t
 selection, so they can be devoured into Obsidian instead of just closed. A toast offers
 Undo for ~6 seconds and restores tabs to their original positions.
 
+If you would rather be told than check the badge, Settings → Deduplication has an optional
+notice: once the count reaches a threshold you pick, a small Tabglutton pill appears in the
+corner of the page you are on with the count, a **Dedup** button, and the same Undo. It is
+in-browser UI, not a system notification, and it announces each pile once — it returns only
+after the count has dropped below the threshold and climbed back, at most every 30 minutes.
+Off by default.
+
 URLs are canonicalized first (`src/normalize.ts`): lowercased host, `www.` and trailing
 slash stripped, tracking params (`utm_*`, `fbclid`, `gclid`, `si`, …) dropped, remaining
 params sorted, and optionally the `#fragment` removed.

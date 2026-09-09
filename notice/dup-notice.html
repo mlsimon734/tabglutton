@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Tabglutton</title>
+    <link rel="stylesheet" href="dup-notice.css" />
+  </head>
+  <body>
+    <!-- Embedded in a web page by src/dup-notice-page.ts. The page sizes the
+         frame to this pill, so nothing here may grow past it. -->
+    <div id="notice" class="notice" role="status" aria-live="polite">
+      <span id="logo-mark" class="logo-mark" aria-hidden="true" title="Tabglutton"></span>
+      <span id="text" class="text"></span>
+      <button id="act" type="button" class="act" title="Close duplicate tabs">Dedup</button>
+      <button id="dismiss" type="button" class="icon" aria-label="Dismiss" title="Dismiss">
+        <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
+          <path
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.4"
+            stroke-linecap="round"
+            d="M4 4l8 8M12 4l-8 8"
+          />
+        </svg>
+      </button>
+    </div>
+    <script type="module" src="dup-notice.js"></script>
+  </body>
+</html>

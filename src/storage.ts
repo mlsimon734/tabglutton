@@ -4,6 +4,7 @@ import {
   isBridgePort,
   type ClipDestination,
 } from "./bridge-protocol.js";
+import { DEFAULT_DUP_NOTICE_THRESHOLD, isDupNoticeThreshold } from "./dup-notice.js";
 import type { NormalizeOpts } from "./normalize.js";
 import { sanitizeSiteRules, seedRules, type SiteRule } from "./site-rules.js";
 import { IS_CHROME } from "./target.js";
@@ -20,6 +21,14 @@ export interface Settings {
   extraStripParams: string[];
   scope: ScopeMode;
   heuristicWarning: boolean;
+  /**
+   * Drop a small notice into the corner of the current page once the badge
+   * count reaches `dupNoticeThreshold`. In-browser UI, never a system
+   * notification; off until the user asks. See `src/dup-notice.ts`.
+   */
+  dupNoticeEnabled: boolean;
+  /** Duplicate tabs — the badge's number — at which the notice appears. */
+  dupNoticeThreshold: number;
   /** Obsidian, or plain markdown files in the browser's download folder. */
   clipDestination: ClipDestination;
   obsidianVault: string;
@@ -71,6 +80,8 @@ const DEFAULTS: Readonly<Settings> = Object.freeze({
   // Chrome has no tab.hidden / workspaces — the "hidden-false" mode is meaningless there.
   scope: IS_CHROME ? "current-window" : "hidden-false",
   heuristicWarning: false,
+  dupNoticeEnabled: false,
+  dupNoticeThreshold: DEFAULT_DUP_NOTICE_THRESHOLD,
   clipDestination: "obsidian",
   obsidianVault: "",
   clippingsBaseFolder: "Clippings",
@@ -160,7 +171,20 @@ export async function loadSettings(): Promise<Settings> {
   // Sanitized, not trusted: rules are user-shaped data an old build (or a hand
   // edit) may have stored differently; absent storage gets the seed here.
   const siteRules = sanitizeSiteRules(stored.siteRules);
-  return { ...defaults(), ...stored, bridgePortMode, bridgePort, siteRules };
+  // Same treatment as the port: a stored value the notice could never act on
+  // (a hand edit, an older build) reads as the default rather than as a
+  // threshold of NaN that no count ever reaches.
+  const dupNoticeThreshold = isDupNoticeThreshold(stored.dupNoticeThreshold)
+    ? stored.dupNoticeThreshold
+    : DEFAULT_DUP_NOTICE_THRESHOLD;
+  return {
+    ...defaults(),
+    ...stored,
+    bridgePortMode,
+    bridgePort,
+    siteRules,
+    dupNoticeThreshold,
+  };
 }
 
 export async function saveSettings(patch: Partial<Settings>): Promise<void> {

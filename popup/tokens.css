@@ -83,6 +83,8 @@
   --glass-shade: rgba(27, 22, 20, 0.5);
   --toast-glass: rgba(27, 22, 20, 0.86);
   --toast-rim: rgba(255, 255, 255, 0.18);
+  /* The accent the *other* theme uses, for the mark drawn on the inverted pill. */
+  --toast-accent: #d89456;
   /* The inset field on a glass bar. It has to step *away* from the bar, and
      which direction that is flips with the theme: the light bar is deeper than
      its content so the well goes lighter, the dark bar is lighter so the well
@@ -197,6 +199,7 @@
     /* The toast inverts with the theme — light pill on dark. */
     --toast-glass: rgba(240, 230, 214, 0.88);
     --toast-rim: rgba(27, 22, 20, 0.1);
+    --toast-accent: #7a4a2c;
     --well: var(--bone);
   }
 }

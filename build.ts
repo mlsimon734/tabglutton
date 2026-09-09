@@ -79,6 +79,25 @@ async function buildOne(target: Target): Promise<void> {
   const clipJsPath = `${DIST}/src/clip-current.js`;
   writeFileSync(clipJsPath, escapeChromeUnsafeCodePoints(readFileSync(clipJsPath, "utf8")));
 
+  // The duplicate notice's content script. Also injected via executeScript, so
+  // it gets the same IIFE shape and the same code-point escape; unlike
+  // clip-current it touches no extension API, so one bundle serves both targets
+  // without a polyfill entry.
+  const noticeBuild = await Bun.build({
+    entrypoints: ["src/dup-notice-page.ts"],
+    outdir: `${DIST}/src`,
+    target: "browser",
+    format: "iife",
+    minify: true,
+    sourcemap: "external",
+  });
+  if (!noticeBuild.success) {
+    for (const log of noticeBuild.logs) console.error(log);
+    process.exit(1);
+  }
+  const noticeJsPath = `${DIST}/src/dup-notice-page.js`;
+  writeFileSync(noticeJsPath, escapeChromeUnsafeCodePoints(readFileSync(noticeJsPath, "utf8")));
+
   const onboardingEntry =
     target === "chrome"
       ? chromeBundleEntry(DIST, "onboarding", "../onboarding/onboarding.js")
@@ -134,6 +153,13 @@ async function buildOne(target: Target): Promise<void> {
   cpSync("onboarding/onboarding.html", `${DIST}/onboarding/onboarding.html`);
   cpSync("onboarding/onboarding.css", `${DIST}/onboarding/onboarding.css`);
 
+  // dup-notice.{html,css,js} — the frame the duplicate notice is drawn in,
+  // embedded into web pages by src/dup-notice-page.js. The .js is emitted by
+  // tsc (it imports shared modules the same way options does); copy the shell.
+  mkdirSync(`${DIST}/notice`, { recursive: true });
+  cpSync("notice/dup-notice.html", `${DIST}/notice/dup-notice.html`);
+  cpSync("notice/dup-notice.css", `${DIST}/notice/dup-notice.css`);
+
   // obsidian-redirect.{html,js} — the extension-origin launch page used by
   // openObsidianUrl on both engines. The .js is emitted by tsc; copy the HTML shell.
   mkdirSync(`${DIST}/redirect`, { recursive: true });
@@ -160,6 +186,7 @@ async function buildOne(target: Target): Promise<void> {
     injectPolyfillScript(`${DIST}/popup/popup.html`);
     injectPolyfillScript(`${DIST}/popup/devour.html`);
     injectPolyfillScript(`${DIST}/options/options.html`);
+    injectPolyfillScript(`${DIST}/notice/dup-notice.html`);
   }
 }
 

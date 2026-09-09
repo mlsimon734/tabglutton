@@ -22,6 +22,8 @@ describe("defaults()", () => {
       // Chrome forces current-window; Firefox/Zen uses the workspace heuristic.
       scope: IS_CHROME ? "current-window" : "hidden-false",
       heuristicWarning: false,
+      dupNoticeEnabled: false,
+      dupNoticeThreshold: 10,
       clipDestination: "obsidian",
       obsidianVault: "",
       clippingsBaseFolder: "Clippings",
@@ -42,6 +44,11 @@ describe("defaults()", () => {
 
   test("onboardingComplete defaults to false (first-run flow gate)", () => {
     expect(defaults().onboardingComplete).toBe(false);
+  });
+
+  // In-browser UI on someone's page, so it is asked for rather than assumed.
+  test("the duplicate notice is off until the user opts in", () => {
+    expect(defaults().dupNoticeEnabled).toBe(false);
   });
 
   test("the agent bridge is off until the user opts in", () => {
@@ -116,6 +123,8 @@ describe("normalizeOptsFrom()", () => {
       extraStripParams: ["campaign", "ref_x"],
       scope: "current-window",
       heuristicWarning: true,
+      dupNoticeEnabled: true,
+      dupNoticeThreshold: 5,
       clipDestination: "obsidian",
       obsidianVault: "v",
       clippingsBaseFolder: "Inbox",

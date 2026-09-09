@@ -23,6 +23,7 @@ function backgroundFacts(
     scope: "hidden-false",
     clipDestination: "obsidian",
     zoteroRouting: false,
+    dupNotice: { enabled: false, threshold: 10 },
     bridge: {
       enabled: true,
       hasToken: true,
@@ -161,6 +162,7 @@ describe("renderDiagnostics", () => {
         "tabs         412 in scope of 1207 open · 37 duplicates · 3 windows",
         "scope        hidden-false",
         "clips        obsidian · zotero routing off",
+        "notice       off",
         "bridge       on · automatic port · idle · tab load off",
         "bridge errors (3, oldest first)",
         "  9m ago  handshake-timeout 4589 (x3)",

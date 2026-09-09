@@ -232,6 +232,25 @@ input::placeholder {
   margin-top: 0;
 }
 
+/* A warning hanging under a whole row rather than inside a control. Empty, it
+   costs nothing, for the same live-region reason as the destination notice. */
+.setting-note {
+  margin: 0;
+  padding: 0 4px;
+}
+
+.setting-note:not(:empty) {
+  padding-top: var(--space-3);
+}
+
+/* A number that is a setting, not a field the user writes prose into: narrow,
+   right-aligned, and tabular so a threshold does not jiggle as it is typed. */
+.number-field {
+  width: 96px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
 /* The destination notice stays in the DOM even with nothing to say, so it is a
    live region by the time it has something — `hidden` would take it out of the
    accessibility tree and the announcement with it. With no content it has no

@@ -76,6 +76,50 @@
             </label>
           </div>
         </div>
+
+        <div class="setting">
+          <div class="setting-text">
+            <strong>Notice when duplicates pile up</strong>
+            <small>
+              Drops a small Tabglutton pill into the corner of the page you're on once the badge
+              count reaches the threshold, with a Dedup button right there. Never a system
+              notification. Shown once per pile — it comes back only after the count has dropped
+              below the threshold and climbed past it again, at most every 30 minutes.
+            </small>
+          </div>
+          <div class="setting-control">
+            <label class="switch">
+              <input type="checkbox" id="dupNoticeEnabled" />
+              <span class="switch-track" aria-hidden="true">
+                <span class="switch-thumb"></span>
+              </span>
+            </label>
+          </div>
+        </div>
+
+        <div class="setting" id="dupNoticeThresholdRow">
+          <div class="setting-text">
+            <strong>Threshold</strong>
+            <small>Duplicate tabs — the number on the badge — at which the notice appears.</small>
+          </div>
+          <div class="setting-control">
+            <!-- Bounds mirror isDupNoticeThreshold() in src/dup-notice.ts; HTML cannot
+                 import, and the save re-checks, so this is a hint only. -->
+            <input
+              type="number"
+              id="dupNoticeThreshold"
+              class="number-field"
+              min="1"
+              max="9999"
+              step="1"
+              aria-label="Duplicate tabs before the notice appears"
+            />
+          </div>
+        </div>
+        <!-- Never `hidden`: a role="status" that is hidden until it has text is
+             not a live region when the text arrives. Empty, it collapses to
+             nothing (see the :empty rule in options.css). -->
+        <p id="dupNoticeWarning" class="vault-warning setting-note" role="status"></p>
       </section>
 
       <section>

@@ -4,6 +4,16 @@ All notable changes to Tabglutton are documented here.
 
 ## [0.4.2](https://github.com/mlsimon734/tabglutton/compare/v0.4.1...v0.4.2) (unreleased)
 
+- **An optional notice when duplicates pile up.** Switch it on under Deduplication in
+  Settings and pick a threshold, and once the badge count reaches it a small Tabglutton pill
+  appears in the corner of the page you are on — the count, a **Dedup** button, and Undo
+  after it — then takes itself down after fifteen seconds if left alone. It is a piece of the
+  extension's own UI inside the browser, never a system notification. One notice per pile: it
+  comes back only after the count has dropped below the threshold and climbed past it again,
+  at most every thirty minutes, and restoring closed tabs with Undo counts as keeping them.
+  Off by default. On Chrome the switch asks for site access, since the pill is placed on the
+  page; the manifest now lists the notice page under `web_accessible_resources` so a page
+  can embed it.
 - **YouTube clips carry the transcript.** The extractor now runs Defuddle's async path, which
   fetches a video's caption track instead of stopping at the description: two talks that
   clipped as 24 and 153 words now clip as 15,189 and 8,847, with timestamps. The same path
