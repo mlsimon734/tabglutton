@@ -22,13 +22,13 @@ and capturing the signal in it. Three jobs today:
 - **Devour** — read selected tabs through Defuddle, file them into an Obsidian vault as
   markdown notes with frontmatter, then close them. The full-screen **Devour cockpit**
   (queue + inspector + keyboard nav) is the workspace for this.
-- **(Planned) Triage / agenda** — a per-tab disposition layer over the vocabulary site
-  rules already speak, so noisy one-off tabs can be cleared fast: the extension proposes,
-  the user approves a batch. Deterministic first, from signals the extension already holds;
-  a model fills only what nothing else has an opinion about, and only if it earns the place
-  ([#71](https://github.com/mlsimon734/tabglutton/issues/71),
-  [#72](https://github.com/mlsimon734/tabglutton/issues/72),
-  [#73](https://github.com/mlsimon734/tabglutton/issues/73)). The deeper
+- **(Planned) Digest** — the fate for the tabs a feed session leaves unresolved: an agent
+  reads them, the shortlist stays open in its own tab group, the rest close behind a
+  verdict per item that lives in the browser (a fate ledger the cockpit renders) and,
+  optionally, mirrors into the vault. The extension proposes and applies fates; the agent
+  only reads and reports. Deterministic signals first (rules, duplicates, clip memory,
+  provenance), a read only for what nothing else has an opinion about. The whole plan,
+  its sequence, and its experiments are in [`ROADMAP.md`](ROADMAP.md). The deeper
   "map-reduce" synthesis (linking high-signal clippings across the knowledge base) runs
   separately as a Claude Code job inside the user's Obsidian vault ("Hyphae").
 
