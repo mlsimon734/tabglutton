@@ -24,7 +24,7 @@ body {
   align-items: center;
   gap: 10px;
   height: 36px;
-  padding: 0 5px 0 14px;
+  padding: 0 5px 0 12px;
   background: var(--ink);
   color: var(--paper);
   border-radius: var(--radius-pill);
@@ -34,14 +34,21 @@ body {
   white-space: nowrap;
 }
 
-/* Who is talking. Out of context on a web page that has to be said, and a
-   system-sans micro-label says it without spending the wordmark. */
-.brand {
-  font-size: var(--fs-micro);
-  font-weight: 500;
-  text-transform: uppercase;
-  letter-spacing: var(--track-label);
-  opacity: 0.6;
+/* Who is talking. Out of context on a web page that has to be said, and the
+   mark says it without spending the wordmark. Tinted with the inverted theme's
+   accent — caramel on the ink pill, terracotta on the paper one — because the
+   pill itself is the other theme's substrate. */
+.logo-mark {
+  width: 20px;
+  height: 20px;
+  color: var(--toast-accent);
+  flex-shrink: 0;
+}
+
+.logo-mark svg {
+  display: block;
+  width: 100%;
+  height: 100%;
 }
 
 .text {

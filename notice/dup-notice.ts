@@ -27,6 +27,7 @@ const FAREWELL_MS = 2200;
 const NONCE_WAIT_MS = 5000;
 
 const notice = document.getElementById("notice") as HTMLDivElement;
+const logoMarkEl = document.getElementById("logo-mark") as HTMLElement | null;
 const textEl = document.getElementById("text") as HTMLSpanElement;
 const actBtn = document.getElementById("act") as HTMLButtonElement;
 const dismissBtn = document.getElementById("dismiss") as HTMLButtonElement;
@@ -214,5 +215,22 @@ document.addEventListener("keydown", (event) => {
   if (event.key === "Escape") dismiss();
 });
 
+async function loadLogoMark(): Promise<void> {
+  if (!logoMarkEl) return;
+  try {
+    const res = await fetch(browser.runtime.getURL("icons/logo-mark.svg"));
+    if (!res.ok) return;
+    const text = await res.text();
+    const doc = new DOMParser().parseFromString(text, "image/svg+xml");
+    const svg = doc.documentElement;
+    if (svg && svg.nodeName.toLowerCase() === "svg") {
+      logoMarkEl.replaceChildren(document.importNode(svg, true));
+    }
+  } catch (err) {
+    console.warn("[tabglutton] logo load failed", err);
+  }
+}
+
 textEl.textContent = dupNoticeText(Number.isFinite(count) ? count : 0);
+void loadLogoMark();
 linger.start();
