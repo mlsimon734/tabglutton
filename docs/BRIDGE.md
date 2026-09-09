@@ -23,14 +23,18 @@ bridge (badge states, consent surfaces) belongs in DESIGN.md when it lands.
 ## Why
 
 The user's job should be _foraging_ — browsing, opening whatever looks interesting — not
-_triage_. Today Devour makes triage fast but still manual. The bridge inverts it: an agent
-reads the open-tab backlog, surfaces the high-signal pieces, files keepers into Obsidian
-via the existing clip pipeline, and proposes closures. The human browses; the agent
-digests.
+_triage_. Today Devour makes triage fast but still manual. The bridge lets an agent
+read the backlog and propose a fate per tab — dropped, kept, or filed into Obsidian
+through the existing clip pipeline — separating quality from immediate relevance the way
+`PRODUCT.md` §Product Purpose lays out. Active working tabs need protecting too: their
+purpose cannot be read off content quality. Success is fewer decisions and less browser
+clutter, with a result the user trusts.
 
-This is the "Triage / agenda" line in PRODUCT.md, resolved: the engine is not an in-
-extension model, it is an external agent given a narrow tab API. Intelligence stays in the
-agent (prompts, skills, the user's vault context); the extension stays hands and eyes.
+The bridge is shipped; the judgment is not in it. Intelligence stays in the external agent
+(prompts, skills, the user's goals and vault context); the extension stays hands and eyes.
+The digest surface planned in [`ROADMAP.md`](ROADMAP.md) — a fate ledger, verdicts read in
+the browser, a vault mirror by setting — keeps the same split: the agent reads and reports,
+the extension proposes and applies.
 
 ## Trust boundary (non-goals)
 
@@ -949,10 +953,13 @@ _proved_. Anything still unproven has moved to Open questions, where it gets rea
    neither stealing focus, both then readable through Defuddle, nothing else altered. The
    fixtures being tabs Zen had discarded on its own is what also finally exercised the Gecko
    `tab-discarded` path, which phase 1 could only manufacture on Chrome.
-3. **Curation workflow** — next, and deliberately not in this repo: a `/triage-tabs` skill
-   living with the agent. Metadata cut → read survivors → digest note in Obsidian ("12
-   high-signal, 40 clipped, 180 proposed closures — approve?"). Closure stays behind human
-   approval.
+3. **Curation workflow** — next: a `/digest` skill shipped inside the Gullet package
+   ([#79](https://github.com/mlsimon734/tabglutton/issues/79)), driving the six tools that
+   exist. Metadata cut → read the survivors → a shortlist kept open and a remainder proposed
+   for closure behind a one-line verdict each, so review does not recreate the per-tab
+   decision. Closure stays behind human approval. The vault note is a mirror by setting, on
+   by default, not the product; the by-hand experiment that measures shortlist overlap and regretted
+   closes is `ROADMAP.md` §Experiments before code.
 
 ## Open questions
 
