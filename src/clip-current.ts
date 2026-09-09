@@ -84,13 +84,20 @@ void (async () => {
       url: location.href,
       markdown: true,
       separateMarkdown: true,
-      useAsync: false,
     });
+    // `parseAsync`, not `parse`: the extractors that fetch only run on the
+    // async path, and the snapshot above is a detached document (no
+    // `defaultView`), so every extractor's "am I in a browser window" test says
+    // no. That sends YouTube to its caption tracks (the point), Reddit comments
+    // pages to old.reddit / the Atom feed, and x.com with no rendered tweet to
+    // oEmbed; a fetch that throws falls back to the sync parse, and every other
+    // site parses exactly as before. Measured: docs/ENGINEERING.md §Async
+    // extraction.
     msg = {
       type: "clip-current-result",
       requestId,
       ok: true,
-      payload: payloadFrom(defuddle.parse()),
+      payload: payloadFrom(await defuddle.parseAsync()),
     };
   } catch (err) {
     msg = {
