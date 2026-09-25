@@ -158,8 +158,10 @@ and Chrome have no workspaces, so they use current-window scope directly.
 
 No analytics, no telemetry, no remote server, no account. Page content is extracted
 in-page and goes exactly two places: your Obsidian vault, and — only if you turn the bridge
-on — a loopback socket to an MCP server running on your own machine. The extension
-requests no permissions beyond what dedup and clipping need.
+on — a loopback socket to an MCP server running on your own machine. Anything an agent
+reads over that socket goes wherever _that_ agent sends it, typically its model provider;
+the bridge is how you hand pages to a tool you already trust, not a channel of ours. The
+extension requests no permissions beyond what dedup and clipping need.
 
 ## Settings
 
