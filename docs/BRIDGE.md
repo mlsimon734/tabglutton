@@ -118,8 +118,8 @@ There is no user-visible application and no manual step per session:
 3. **Connect**: the extension holds a connection to that hub whenever its background page
    is awake, so by session start it is usually already there. Otherwise its reconnect loop
    finds the port: a ~3s HTTP probe loop while awake, with a 30s alarm as the backstop that
-   survives page suspension — probing is free where dialling is not (see the reconnect
-   notes in AGENTS.md).
+   survives page suspension — probing is free where dialling is not (see
+   `docs/ENGINEERING.md` §FailDelay).
 4. **Session end**: agent exits → its peer detaches → the hub tells the extension no
    sessions remain → the extension stops holding its page awake. The hub keeps listening,
    and exits by itself after six idle hours.
@@ -777,7 +777,7 @@ condition `probeHeuristic` in `background.ts` was written to detect (`allInWindo
 === visibleInWindow.length`) is simply true here. Both readings hoisted the same
 `windowId`, so this is one window enumerating differently, not a second window appearing.
 
-This is accepted behaviour, not a bug to fix: Zen exposes no workspace API (see AGENTS.md),
+This is accepted behaviour, not a bug to fix: Zen exposes no workspace API (see `docs/LAUNCH.md`),
 and active-workspace scope is the reasonable contract. What was wrong was the _claim_ —
 `tabs_list` told agents `hidden: true` meant "another workspace", so an agent seeing 160
 tabs would report them as the user's whole backlog with no hedge, and `matched` reads as
@@ -896,7 +896,7 @@ Strategy, in order:
   its `fetch` handler never runs and it logs nothing; the extension sees only close code
   **1015**. The connection fails invisibly from both ends. The manifest now declares
   `"script-src 'self'; object-src 'self'"` — the same policy minus that directive. This
-  cost most of a debugging session; it is recorded in AGENTS.md too.
+  cost most of a debugging session; it is recorded in `docs/ENGINEERING.md` §Extension CSP too.
 - ▸ **`sessions` was not needed.** The plan was to restore through `sessions.restore` where
   available, falling back to the log. But matching a recently-closed session to a log entry
   is only possible by URL, which is ambiguous with duplicate tabs — the exact case this
@@ -928,8 +928,8 @@ _proved_. Anything still unproven has moved to Open questions, where it gets rea
    reopens private, a partial undo keeps its failures for a retry, and regenerating the token
    drops the live socket instead of letting it keep serving. The same scripts against pre-fix
    code fail 6 checks on Chrome and 11 on Zen — they discriminate, rather than merely passing.
-   Two engine differences fell out of that run and live in AGENTS.md: uncommitted navigations
-   have no recoverable URL on Gecko, and Zen mirrors essential tabs into every window, so
+   Two engine differences fell out of that run: uncommitted navigations have no recoverable
+   URL on Gecko (`docs/ENGINEERING.md` §Uncommitted URLs), and Zen mirrors essential tabs into every window, so
    "this window's tabs" is a bigger batch there than it looks.
 2. **v1.1 `tabs_load`** — shipped, verified on **both** engines. Chrome
    150.0.7871.187 over CDP against the merged bridge, 23 checks: `tabs_load` wakes a
@@ -1110,7 +1110,7 @@ NS_ERROR_SOCKET_CREATE_FAILED` bursts: Firefox's Push service, no Tabglutton
   completion event would name an id `ensureTabReady` is not watching and the wait would
   time out on a tab that had in fact loaded. It does not. Verified on **Chrome
   150.0.7871.187** over CDP against extension 0.1.3: `chrome.tabs.discard(1700729749)`
-  returned id `1700729751` (churn confirmed, as AGENTS.md records), `tabs_load` on
+  returned id `1700729751` (churn confirmed, as `docs/LAUNCH.md` records), `tabs_load` on
   `1700729751` answered `1 ready, 0 pending, 0 failed` in 34–47ms across four runs, the id
   survived the wake every time, and a subsequent `tab_read` extracted the page. The
   re-read-before-answering path in `ensureTabReady` is therefore belt-and-braces on Chrome
@@ -1121,7 +1121,7 @@ NS_ERROR_SOCKET_CREATE_FAILED` bursts: Firefox's Push service, no Tabglutton
   (auto-close known-noise domains, auto-close anything clipped), scheduled runs.
 - Zen `NativeMessagingHosts` path (only matters for the deferred daemon mode).
 - Whether `tabs_list` should expose Zen workspace _names_ (no API today; `hidden` is the
-  only signal — see the workspace-heuristic notes in AGENTS.md).
+  only signal — see the workspace-heuristic notes in `docs/LAUNCH.md`).
 - ~~Whether the idle reconnect loop keeps the Firefox event page from ever suspending.~~
   **Measured: it does not, and the page suspends on schedule even while connected.**
   Firefox 134.0.2, extension 0.3.1, connected to a detached hub with no session attached:
