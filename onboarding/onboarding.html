@@ -25,7 +25,11 @@
         <h2 class="section-title"><span class="step-ordinal">Step 1</span> — Welcome</h2>
         <p>Tabglutton helps you tame a bloated tab bar with two tools:</p>
         <ul>
-          <li><strong>Dedup</strong> closes exact-duplicate tabs.</li>
+          <li>
+            <strong>Dedup</strong> closes tabs that show the same page, even when their URLs differ
+            only by tracking parameters (<code>utm_…</code>, <code>fbclid</code>) or a
+            <code>#fragment</code>. One copy of each stays open.
+          </li>
           <li>
             <strong>Devour</strong> reads selected tabs through Defuddle, files each one as a
             markdown note with frontmatter, then closes the tab. You pick where those notes go next
@@ -113,10 +117,6 @@
             <em>before</em> clicking <strong>Open Link</strong>. Without that checkbox, the prompt
             re-fires every clip.
           </p>
-          <p>
-            If nothing visible happens but Obsidian focuses, you've already approved
-            <code>obsidian://</code> previously — you're set.
-          </p>
         </div>
         <div id="step3-chrome" hidden>
           <p>
@@ -132,20 +132,21 @@
           <p>
             When the prompt appears,
             <strong
-              >tick "Always allow {URL} to open links of this type in the associated app"</strong
+              >tick the "Always allow … to open links of this type in the associated app"
+              checkbox</strong
             >
             <em>before</em> clicking <strong>Open Obsidian</strong>. Without that checkbox, Chrome
             re-fires the prompt for every clip.
-          </p>
-          <p>
-            If nothing visible happens but Obsidian focuses, you've already approved
-            <code>obsidian://</code> previously — you're set.
           </p>
         </div>
         <p class="link-row">
           <a id="approveLink" class="primary-link" target="_blank" rel="noopener">
             Open my Obsidian vault now
           </a>
+        </p>
+        <p>
+          If nothing visible happens but Obsidian focuses, you've already approved
+          <code>obsidian://</code> previously — you're set.
         </p>
         <details id="firefoxStep3Help" class="muted-note">
           <summary>Didn't see anything happen?</summary>
@@ -181,7 +182,8 @@
           These folders are relative to your browser's download folder.
         </p>
         <p class="muted-note">
-          Built-in rules only for now — a custom rules editor is on the roadmap.
+          These are the starting rules. Edit them or add your own under
+          <strong>Site rules</strong> in settings.
         </p>
       </section>
 
