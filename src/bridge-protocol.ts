@@ -530,6 +530,7 @@ export const BRIDGE_METHODS = [
   "tab_clip",
   "tabs_close",
   "undo_close",
+  "digest_report",
 ] as const;
 
 export type BridgeMethod = (typeof BRIDGE_METHODS)[number];
@@ -552,8 +553,13 @@ export function isBridgeMethod(value: unknown): value is BridgeMethod {
  * A separate list keeps that distinction structural rather than a guard someone
  * later reads as redundant, and leaves `route`'s "the method list is the tool
  * list" invariant literally true.
+ *
+ * `digest_mirror` is the same kind of fact: whether a digest's note reached the
+ * disk, which only Gullet — the party that wrote it — can say. A model able to
+ * send it could mark a note written that never was, and switch off the retry a
+ * failed mirror earns.
  */
-export const BRIDGE_SIDECAR_METHODS = ["clip_confirm"] as const;
+export const BRIDGE_SIDECAR_METHODS = ["clip_confirm", "digest_mirror"] as const;
 
 export type BridgeSidecarMethod = (typeof BRIDGE_SIDECAR_METHODS)[number];
 
@@ -1110,6 +1116,140 @@ export interface UndoCloseResult {
   failed: number;
 }
 
+// --- Digest ----------------------------------------------------------------
+//
+// An agent's reading of a sitting, reported for the user to act on. The report
+// is a claim, not a command: receiving it stores it and nothing else — nothing
+// is grouped or closed until the user clicks in the full view's Digest panel.
+// Every string in it is web-derived text relayed by a model that read untrusted
+// pages, which is why the parser below normalizes all of it and why nothing
+// renders it as anything but text.
+
+/**
+ * What the agent thinks should happen to one item.
+ *
+ * - `worth-it` — the user would reopen it or act on it; kept, and offered for
+ *   a "Worth your time" tab group.
+ * - `file` — reference material to keep but not reopen. Display only in this
+ *   slice: there is no bulk File action (deferred with its own design).
+ * - `close` — read, judged, and offered for one undoable close.
+ * - `could-not-read` — the reading never reached the content; left open.
+ */
+export const DIGEST_FATES = ["worth-it", "file", "close", "could-not-read"] as const;
+export type DigestFate = (typeof DIGEST_FATES)[number];
+
+/** Why a `could-not-read` item could not be read. Required for that fate, refused for the others. */
+export const DIGEST_UNREADABLE = [
+  "thin",
+  "login-wall",
+  "bot-check",
+  "no-transcript",
+  "pdf-viewer",
+  "discarded",
+  "other",
+] as const;
+export type DigestUnreadable = (typeof DIGEST_UNREADABLE)[number];
+
+export interface DigestReportItem {
+  /**
+   * The tab the agent read, from `tabs_list`. Identity is this id **and** the
+   * URL together: an item acts on a tab only when both still agree, or when the
+   * URL alone names exactly one tab in the same window (see `src/digest.ts`).
+   */
+  tabId: number;
+  /** The tab's page, http(s) — what `tabs_list` showed. */
+  url: string;
+  title: string;
+  fate: DigestFate;
+  /** worth-it: a paragraph. Every other fate: one line. */
+  reason: string;
+  /** One line quoted from the page. */
+  quote?: string;
+  /** Which of the user's interests it matched. */
+  interest?: string;
+  /** http(s): a link post's outbound target (reddit), when it differs from `url`. */
+  link?: string;
+  unreadable?: DigestUnreadable;
+}
+
+/**
+ * Who wrote the report, as Gullet heard it from the MCP client's own
+ * `initialize`. Gullet overwrites anything a model sends here, so this is the
+ * harness naming itself — still self-reported, and labelled so wherever shown.
+ */
+export interface DigestReporter {
+  client?: string;
+  clientVersion?: string;
+  gullet?: string;
+}
+
+export interface DigestReportParams {
+  /** `sources` are the sitting's feed hostnames. */
+  sitting?: { label?: string; sources?: string[] };
+  items: DigestReportItem[];
+  reporter?: DigestReporter;
+}
+
+/**
+ * Whether the digest's markdown note reached the disk. Gullet writes it (the
+ * browser cannot see a vault) and reports back through `digest_mirror`, so a
+ * fresh digest is `pending` until it does. A re-sent identical report retries
+ * only `pending` or `failed`.
+ */
+export type DigestMirrorState =
+  | { state: "pending" }
+  | { state: "written"; file: string; at: number }
+  | { state: "failed"; reason: string; at: number }
+  | { state: "off"; at: number };
+
+/** One item as the note is written from it: the agent's claims only. */
+export type DigestNoteItem = Omit<DigestReportItem, "tabId">;
+
+/**
+ * The stored digest, as Gullet needs it to write the note. Generated from the
+ * structured record the extension kept, never from anything the agent wrote as
+ * markdown. `firstAccessed`/`lastAccessed` are browser facts (the matched tabs'
+ * `lastAccessed`), kept apart from the agent's claims.
+ */
+export interface DigestNoteSource {
+  id: string;
+  receivedAt: number;
+  reporter: DigestReporter;
+  sitting: { label?: string; sources: string[]; firstAccessed?: number; lastAccessed?: number };
+  items: DigestNoteItem[];
+}
+
+export interface DigestReportResult {
+  digestId: string;
+  /** `duplicate`: an identical report is already held, and nothing was stored twice. */
+  stored: "new" | "duplicate";
+  counts: Record<DigestFate, number>;
+  /**
+   * Item indices whose `tabId` was not open on that `url` when the report
+   * arrived. Stored anyway — the panel says so on the row, and an action later
+   * refuses rather than guesses.
+   */
+  unmatched?: number[];
+  mirror: DigestMirrorState;
+  /**
+   * Where the note goes when Gullet's config names no absolute folder: the
+   * user's configured Obsidian vault, present only when clips go to Obsidian and
+   * one is set. Gullet strips it (and `note`) before the agent sees the result.
+   */
+  vault?: string;
+  note: DigestNoteSource;
+  /** One sentence for the agent to relay. */
+  next: string;
+}
+
+/** Gullet → extension: what became of the note. See `DigestMirrorState`. */
+export interface DigestMirrorParams {
+  digestId: string;
+  state: "written" | "failed" | "off";
+  file?: string;
+  reason?: string;
+}
+
 // --- Parsing ---------------------------------------------------------------
 
 /** Plain-object guard. Shared: both ends narrow untrusted JSON this way. */
@@ -1301,4 +1441,245 @@ export function parseUndoCloseParams(raw: unknown): UndoCloseParams {
     badRequest("batchId must be a string");
   }
   return batchId === undefined ? {} : { batchId };
+}
+
+/**
+ * Every limit `digest_report` enforces. Over-long fields are **refused**, never
+ * truncated: the agent re-sends, and nothing it wrote is silently cut. The
+ * per-fate reason caps turn "a paragraph for the shortlist, one line for the
+ * rest" into a structural rule rather than a prompt hope.
+ */
+export const DIGEST_LIMITS = {
+  items: 150,
+  /** UTF-8 bytes of the whole params object as JSON. */
+  paramsBytes: 200_000,
+  url: 2048,
+  title: 300,
+  reasonWorthIt: 800,
+  reason: 240,
+  quote: 300,
+  interest: 80,
+  label: 80,
+  sources: 8,
+  reporterField: 60,
+} as const;
+
+// C0 and C1 controls, and the bidi embeddings, overrides, isolates and marks
+// (U+202A-202E, U+2066-2069, U+200E/F). Stripping bidi stops a title from
+// visually reordering the host printed beside it.
+// oxlint-disable-next-line no-control-regex
+const DIGEST_STRIP = /[\u0000-\u001f\u007f-\u009f‎‏‪-‮⁦-⁩]/g;
+
+/**
+ * One line of inert text: trimmed, controls and bidi characters removed, and
+ * every whitespace run — newlines included — collapsed to a single space.
+ * Collapsing newlines is what makes heading, fence, and frontmatter injection
+ * into the mirrored note structurally impossible rather than escaped. Tabs and
+ * newlines become spaces before the strip, so words never fuse.
+ */
+export function sanitizeDigestText(value: string): string {
+  return value.replace(/\s+/g, " ").replace(DIGEST_STRIP, "").replace(/ {2,}/g, " ").trim();
+}
+
+const SOURCE_HOST = /^[a-z0-9.-]{1,253}$/i;
+
+function digestString(
+  obj: Record<string, unknown>,
+  key: string,
+  where: string,
+  max: number,
+  required: boolean,
+): string | undefined {
+  const raw = obj[key];
+  if (raw === undefined) {
+    if (required) badRequest(`${where}.${key} is required`);
+    return undefined;
+  }
+  if (typeof raw !== "string") badRequest(`${where}.${key} must be a string`);
+  const value = sanitizeDigestText(raw);
+  if (value.length > max) {
+    badRequest(
+      `${where}.${key} is ${value.length} characters; the limit is ${max}. Shorten it and send the report again.`,
+    );
+  }
+  return value;
+}
+
+function digestUrl(
+  obj: Record<string, unknown>,
+  key: string,
+  where: string,
+  required: boolean,
+): string | undefined {
+  const value = digestString(obj, key, where, DIGEST_LIMITS.url, required);
+  if (value === undefined) return undefined;
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    badRequest(`${where}.${key} is not a URL`);
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    badRequest(`${where}.${key} must be an http or https URL`);
+  }
+  return value;
+}
+
+function parseDigestItem(raw: unknown, index: number): DigestReportItem {
+  const where = `items[${index}]`;
+  const obj = asRecord(raw);
+  if (!obj) badRequest(`${where} must be an object`);
+  const tabId = obj.tabId;
+  if (typeof tabId !== "number" || !Number.isInteger(tabId)) {
+    badRequest(`${where}.tabId must be an integer`);
+  }
+  const fate = obj.fate;
+  if (typeof fate !== "string" || !(DIGEST_FATES as readonly string[]).includes(fate)) {
+    badRequest(`${where}.fate must be one of ${DIGEST_FATES.join(", ")}`);
+  }
+  const itemFate = fate as DigestFate;
+  const unreadable = obj.unreadable;
+  if (itemFate === "could-not-read") {
+    if (
+      typeof unreadable !== "string" ||
+      !(DIGEST_UNREADABLE as readonly string[]).includes(unreadable)
+    ) {
+      badRequest(
+        `${where}.unreadable is required for could-not-read, one of ${DIGEST_UNREADABLE.join(", ")}`,
+      );
+    }
+  } else if (unreadable !== undefined) {
+    badRequest(`${where}.unreadable is only for fate could-not-read`);
+  }
+  const reasonMax = itemFate === "worth-it" ? DIGEST_LIMITS.reasonWorthIt : DIGEST_LIMITS.reason;
+  const reason = digestString(obj, "reason", where, reasonMax, true) as string;
+  if (!reason) badRequest(`${where}.reason must not be empty`);
+  const quote = digestString(obj, "quote", where, DIGEST_LIMITS.quote, false);
+  const interest = digestString(obj, "interest", where, DIGEST_LIMITS.interest, false);
+  const link = digestUrl(obj, "link", where, false);
+  return {
+    tabId,
+    url: digestUrl(obj, "url", where, true) as string,
+    title: digestString(obj, "title", where, DIGEST_LIMITS.title, true) as string,
+    fate: itemFate,
+    reason,
+    ...(quote ? { quote } : {}),
+    ...(interest ? { interest } : {}),
+    ...(link ? { link } : {}),
+    ...(itemFate === "could-not-read" ? { unreadable: unreadable as DigestUnreadable } : {}),
+  };
+}
+
+/**
+ * Narrow and normalize a `digest_report`, refusing with `bad-request` naming
+ * the item index and field. Pure, shared, and the only gate: the extension
+ * stores exactly what this returns.
+ *
+ * Two items may name the same page — a user can hold two tabs on one URL —
+ * but not the same tab. A repeated `tabId` is the one duplicate refused, since
+ * an item is accounted for exactly once and a tab is acted on at most once.
+ *
+ * `reporter` passes through, truncated rather than refused, because Gullet
+ * writes it, not the model; Gullet overwrites whatever arrived there.
+ */
+export function parseDigestReportParams(raw: unknown): DigestReportParams {
+  const obj = asRecord(raw);
+  if (!obj) badRequest("params must be an object");
+  const bytes = new TextEncoder().encode(JSON.stringify(obj)).length;
+  if (bytes > DIGEST_LIMITS.paramsBytes) {
+    badRequest(
+      `The report is ${bytes} bytes; the limit is ${DIGEST_LIMITS.paramsBytes}. Shorten the reasons rather than splitting the report — one sitting is one report.`,
+    );
+  }
+  const rawItems = obj.items;
+  if (!Array.isArray(rawItems) || rawItems.length === 0) {
+    badRequest("items must be a non-empty array");
+  }
+  if (rawItems.length > DIGEST_LIMITS.items) {
+    badRequest(`items has ${rawItems.length} entries; the limit is ${DIGEST_LIMITS.items}`);
+  }
+  const items = rawItems.map(parseDigestItem);
+  const seen = new Map<number, number>();
+  items.forEach((item, index) => {
+    const first = seen.get(item.tabId);
+    if (first !== undefined) {
+      badRequest(
+        `items[${index}].tabId repeats items[${first}].tabId (${item.tabId}); account for each tab exactly once`,
+      );
+    }
+    seen.set(item.tabId, index);
+  });
+
+  const params: DigestReportParams = { items };
+  if (obj.sitting !== undefined) {
+    const sitting = asRecord(obj.sitting);
+    if (!sitting) badRequest("sitting must be an object");
+    const label = digestString(sitting, "label", "sitting", DIGEST_LIMITS.label, false);
+    let sources: string[] | undefined;
+    if (sitting.sources !== undefined) {
+      const list = sitting.sources;
+      if (!Array.isArray(list) || list.some((s) => typeof s !== "string")) {
+        badRequest("sitting.sources must be an array of hostnames");
+      }
+      if (list.length > DIGEST_LIMITS.sources) {
+        badRequest(
+          `sitting.sources has ${list.length} entries; the limit is ${DIGEST_LIMITS.sources}`,
+        );
+      }
+      sources = (list as string[]).map((s, i) => {
+        const host = s.trim().toLowerCase();
+        if (!SOURCE_HOST.test(host)) badRequest(`sitting.sources[${i}] must be a bare hostname`);
+        return host;
+      });
+    }
+    params.sitting = {
+      ...(label ? { label } : {}),
+      ...(sources && sources.length > 0 ? { sources } : {}),
+    };
+  }
+  const reporter = asRecord(obj.reporter);
+  if (reporter) {
+    const field = (key: keyof DigestReporter): string | undefined => {
+      const value = reporter[key];
+      if (typeof value !== "string") return undefined;
+      const clean = sanitizeDigestText(value).slice(0, DIGEST_LIMITS.reporterField);
+      return clean || undefined;
+    };
+    const client = field("client");
+    const clientVersion = field("clientVersion");
+    const gullet = field("gullet");
+    params.reporter = {
+      ...(client ? { client } : {}),
+      ...(clientVersion ? { clientVersion } : {}),
+      ...(gullet ? { gullet } : {}),
+    };
+  }
+  return params;
+}
+
+export function parseDigestMirrorParams(raw: unknown): DigestMirrorParams {
+  const obj = asRecord(raw) ?? {};
+  const digestId = obj.digestId;
+  if (typeof digestId !== "string" || !/^[0-9a-f]{32}$/.test(digestId)) {
+    badRequest("digestId must be a digest id");
+  }
+  const state = obj.state;
+  if (state !== "written" && state !== "failed" && state !== "off") {
+    badRequest(`state must be "written", "failed", or "off"`);
+  }
+  const text = (key: "file" | "reason"): string | undefined => {
+    const value = obj[key];
+    if (value === undefined) return undefined;
+    if (typeof value !== "string") badRequest(`${key} must be a string`);
+    return sanitizeDigestText(value).slice(0, 400) || undefined;
+  };
+  const file = text("file");
+  const reason = text("reason");
+  if (state === "written" && !file) badRequest("file is required when state is written");
+  return {
+    digestId,
+    state,
+    ...(file ? { file } : {}),
+    ...(reason ? { reason } : {}),
+  };
 }

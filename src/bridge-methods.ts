@@ -536,6 +536,9 @@ export class BridgeMethodRunner {
         return this.undoClose(params);
       case "clip_confirm":
         return this.clipConfirm(params);
+      case "digest_report":
+      case "digest_mirror":
+        fail("bad-request", `Unknown method ${method}.`);
     }
   }
 
