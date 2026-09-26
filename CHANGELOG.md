@@ -31,6 +31,12 @@ All notable changes to Tabglutton are documented here.
   calls Dedup "exact-duplicate", shows a literal `{URL}` on Chrome, or says a rules editor is
   still to come. The window title and button labels say "full view" rather than "cockpit".
 
+- **Closing a tab from its row is immediate, and never needs a second click.** The row
+  used to stay until the whole list had been rebuilt — about a quarter of a second on a
+  backlog of a few thousand tabs — and on Firefox and Zen a click that landed while that
+  rebuild ran was lost. The row now goes as soon as the tab has closed, and the list never
+  rebuilds while the mouse button is down, in both the toolbar popup and the Devour page.
+
 ## [0.4.1](https://github.com/mlsimon734/tabglutton/compare/v0.4.0...v0.4.1) (2026-08-29)
 
 Two threads, and a fix from the security audit. Site rules stop being a built-in pair and

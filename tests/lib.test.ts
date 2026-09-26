@@ -5,6 +5,7 @@ import {
   clipMarkTitle,
   clipSummary,
   computeDedupCount,
+  createPressGate,
   extraTabIds,
   RAIL_MIN_THUMB,
   railScrollTop,
@@ -434,5 +435,60 @@ describe("wheelPixels", () => {
   test("a page delta is a viewport each", () => {
     expect(wheelPixels(1, 2, 800)).toBe(800);
     expect(wheelPixels(-2, 2, 640)).toBe(-1280);
+  });
+});
+
+describe("createPressGate", () => {
+  function manual() {
+    const tasks: (() => void)[] = [];
+    const gate = createPressGate((fn) => tasks.push(fn));
+    const flush = () => {
+      for (const fn of tasks.splice(0)) fn();
+    };
+    return { gate, flush, tasks };
+  }
+
+  test("runs at once when no pointer is down", () => {
+    const { gate, tasks } = manual();
+    const ran: string[] = [];
+    gate.run(() => ran.push("a"));
+    expect(ran).toEqual(["a"]);
+    expect(tasks).toHaveLength(0);
+  });
+
+  test("holds work during a press and runs it in order a task after the release", () => {
+    const { gate, flush } = manual();
+    const ran: string[] = [];
+    gate.press();
+    gate.run(() => ran.push("drop row"));
+    gate.run(() => ran.push("rebuild"));
+    expect(ran).toEqual([]);
+    gate.release();
+    // Not inside the release itself: the release's click must dispatch first.
+    expect(ran).toEqual([]);
+    flush();
+    expect(ran).toEqual(["drop row", "rebuild"]);
+  });
+
+  test("a press that beats the scheduled task holds the work again", () => {
+    const { gate, flush } = manual();
+    const ran: string[] = [];
+    gate.press();
+    gate.run(() => ran.push("a"));
+    gate.release();
+    gate.press();
+    gate.run(() => ran.push("b"));
+    flush();
+    expect(ran).toEqual([]);
+    gate.release();
+    flush();
+    expect(ran).toEqual(["a", "b"]);
+  });
+
+  test("a release with nothing held schedules nothing", () => {
+    const { gate, tasks } = manual();
+    gate.press();
+    gate.release();
+    expect(tasks).toHaveLength(0);
   });
 });
