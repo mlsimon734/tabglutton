@@ -389,6 +389,39 @@ button.primary:disabled .count-badge {
   line-height: 1.4;
 }
 
+/* The warning's slot and shape, not its colour: a digest waiting is news, not a
+   fault. */
+.digest-ready {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--fs-small);
+  color: var(--ink-soft);
+  background: var(--hover);
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--radius-2);
+  padding: 4px 4px 4px 10px;
+  line-height: 1.4;
+  font-variant-numeric: tabular-nums;
+}
+
+.digest-ready[hidden] {
+  display: none;
+}
+
+.digest-ready-text {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.digest-ready button {
+  padding: 3px 12px;
+  font-size: var(--fs-small);
+}
+
 /* ---------- main ---------- */
 
 main {

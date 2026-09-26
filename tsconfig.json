@@ -26,6 +26,7 @@
     "src/**/*.ts",
     "popup/popup.ts",
     "popup/devour.ts",
+    "popup/digest-panel.ts",
     "popup/lib.ts",
     "options/options.ts",
     "onboarding/onboarding.ts",

@@ -610,6 +610,7 @@ export interface DigestSummary {
 export interface DigestView {
   id: string;
   receivedAt: number;
+  openedAt?: number;
   reporter: DigestReporter;
   sitting: DigestRecord["sitting"];
   mirror: DigestMirrorState;
@@ -687,6 +688,7 @@ export function buildDigestView(
   return {
     id: record.id,
     receivedAt: record.receivedAt,
+    ...(record.openedAt !== undefined ? { openedAt: record.openedAt } : {}),
     reporter: record.reporter,
     sitting: record.sitting,
     mirror: record.mirror,

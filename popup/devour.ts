@@ -8,6 +8,7 @@ import type {
   PopupTab,
 } from "../src/background.js";
 import { planGrouping, plannedTabCount, type GroupingPlan } from "../src/grouping.js";
+import { DigestPanel } from "./digest-panel.js";
 import { clipMarkFor } from "../src/clip-memory.js";
 import { openOptionsUi } from "../src/open-options.js";
 import { CLIP_ORIGINS, DOWNLOADS_GONE, requestOrigins } from "../src/permissions.js";
@@ -56,6 +57,8 @@ interface CockpitState {
   stickyOrder: string[] | null;
   /** The grouping plan on preview. Apply sends exactly this; Cancel drops it. */
   groupPlan: GroupingPlan | null;
+  /** The queue of tabs, or an agent's digest (`#digest`). */
+  view: "tabs" | "digest";
 }
 
 interface ToastState {
@@ -63,6 +66,8 @@ interface ToastState {
   remainingSec: number;
   restorable: ClosedTabRecord[];
   intervalId: ReturnType<typeof setInterval> | null;
+  /** Replaces the Dedup reopen. Absent with no `restorable` means no Undo at all. */
+  onUndo?: () => void;
 }
 
 const TOAST_DURATION_SEC = 6;
@@ -101,6 +106,9 @@ const groupPreviewListEl = document.getElementById("group-preview-list") as HTML
 const groupPreviewNoteEl = document.getElementById("group-preview-note") as HTMLParagraphElement;
 const groupApplyBtn = document.getElementById("group-apply") as HTMLButtonElement;
 const groupCancelBtn = document.getElementById("group-cancel") as HTMLButtonElement;
+const viewSwitchEl = document.getElementById("view-switch") as HTMLDivElement;
+const digestEl = document.getElementById("digest") as HTMLDivElement;
+const digestUnseenEl = document.getElementById("digest-unseen") as HTMLSpanElement;
 
 const state: CockpitState = {
   scopedTabs: [],
@@ -115,7 +123,48 @@ const state: CockpitState = {
   focusedTabId: null,
   stickyOrder: null,
   groupPlan: null,
+  view: location.hash === "#digest" ? "digest" : "tabs",
 };
+
+const digestPanel = new DigestPanel(digestEl, {
+  toast: (text, undo) => showMessageToast(text, undo),
+  onList: () => renderViewSwitch(),
+});
+
+/**
+ * The switch appears once there is a digest to switch to, and stays while the
+ * Digest view is showing so there is always a way back.
+ */
+function renderViewSwitch(): void {
+  viewSwitchEl.hidden = !digestPanel.hasDigests && state.view !== "digest";
+  for (const btn of viewSwitchEl.querySelectorAll<HTMLButtonElement>(".seg-btn")) {
+    const on = btn.dataset.view === state.view;
+    btn.classList.toggle("is-on", on);
+    btn.setAttribute("aria-pressed", String(on));
+  }
+  const unseen = digestPanel.unseen;
+  digestUnseenEl.hidden = unseen === 0 || state.view === "digest";
+  digestUnseenEl.textContent = String(unseen);
+}
+
+function setView(view: "tabs" | "digest"): void {
+  state.view = view;
+  const digest = view === "digest";
+  document.body.classList.toggle("digest-mode", digest);
+  digestEl.hidden = !digest;
+  groupsEl.hidden = digest;
+  if (digest) {
+    emptyEl.hidden = true;
+    discardGroupPreview();
+  }
+  const hash = digest ? "#digest" : "";
+  if (location.hash !== hash) {
+    history.replaceState(null, "", `${location.pathname}${location.search}${hash}`);
+  }
+  digestPanel.setActive(digest);
+  renderViewSwitch();
+  render();
+}
 
 function renderWarning(): void {
   const s = state.settings;
@@ -455,7 +504,11 @@ function renderToast(): void {
     return;
   }
   toastEl.hidden = false;
-  toastTextEl.textContent = `${state.toast.text} · Undo (${state.toast.remainingSec})`;
+  const undoable = state.toast.onUndo !== undefined || state.toast.restorable.length > 0;
+  toastUndoBtn.hidden = !undoable;
+  toastTextEl.textContent = undoable
+    ? `${state.toast.text} · Undo (${state.toast.remainingSec})`
+    : state.toast.text;
 }
 
 function renderFailureRow(f: ClipFailure): HTMLLIElement {
@@ -884,6 +937,12 @@ function currentGroups(): TabGroup[] {
 
 function render(): void {
   renderWarning();
+  renderToast();
+  if (state.view === "digest") {
+    // The queue's controls act on a selection the digest does not have.
+    document.body.classList.remove("inspecting");
+    return;
+  }
   renderClipFilter();
   const groups = currentGroups();
   if (state.stickyOrder === null) {
@@ -1095,6 +1154,28 @@ function clearToast(): void {
   renderToast();
 }
 
+/** A result line from the Digest panel, with its own Undo when one applies. */
+function showMessageToast(text: string, onUndo?: () => void): void {
+  clearToast();
+  const toast: ToastState = {
+    text,
+    remainingSec: TOAST_DURATION_SEC,
+    restorable: [],
+    intervalId: null,
+    ...(onUndo ? { onUndo } : {}),
+  };
+  state.toast = toast;
+  renderToast();
+  toast.intervalId = setInterval(() => {
+    toast.remainingSec -= 1;
+    if (toast.remainingSec <= 0) {
+      clearToast();
+      return;
+    }
+    renderToast();
+  }, 1000);
+}
+
 function showUndoToast(closed: number, restorable: ClosedTabRecord[]): void {
   if (!restorable.length) return;
   clearToast();
@@ -1134,6 +1215,12 @@ async function runDedup(): Promise<void> {
 
 async function undoDedup(): Promise<void> {
   if (!state.toast) return;
+  const onUndo = state.toast.onUndo;
+  if (onUndo) {
+    clearToast();
+    onUndo();
+    return;
+  }
   const records = state.toast.restorable;
   clearToast();
   await sendMessage({ type: "reopen-tabs", records });
@@ -1181,7 +1268,7 @@ document.addEventListener("keydown", (e) => {
   const inField = tag === "INPUT" || tag === "TEXTAREA" || target?.isContentEditable;
 
   if (e.key === "/" && !e.metaKey && !e.ctrlKey && !e.altKey) {
-    if (inField) return;
+    if (inField || state.view === "digest") return;
     e.preventDefault();
     filterInput.focus();
     filterInput.select();
@@ -1193,6 +1280,12 @@ document.addEventListener("keydown", (e) => {
   }
   if (inField) return;
   if (e.metaKey || e.ctrlKey || e.altKey) return;
+  if (state.view === "digest") {
+    // `d` and `x` are not bound here, so a stray key cannot close a section.
+    if (target?.tagName === "BUTTON" && e.key === "Enter") return;
+    if (digestPanel.handleKey(e.key)) e.preventDefault();
+    return;
+  }
 
   switch (e.key) {
     case "j":
@@ -1288,6 +1381,8 @@ browser.runtime.onMessage.addListener((raw: unknown): void => {
   const msg = raw as { type?: string; completed?: number; total?: number };
   if (msg.type === "refresh-cockpit") {
     void refresh();
+  } else if (msg.type === "digests-changed") {
+    void digestPanel.refresh();
   } else if (
     msg.type === "clip-progress" &&
     typeof msg.completed === "number" &&
@@ -1321,5 +1416,18 @@ void refresh().then(() => {
 });
 
 document.addEventListener("visibilitychange", () => {
-  if (!document.hidden) void refresh();
+  if (document.hidden) return;
+  void refresh();
+  void digestPanel.refresh();
 });
+
+viewSwitchEl.addEventListener("click", (e) => {
+  const btn = (e.target as HTMLElement).closest<HTMLButtonElement>(".seg-btn");
+  const next = btn?.dataset.view;
+  if (next === "tabs" || next === "digest") setView(next);
+});
+// `openCockpit("digest")` on a reused tab changes only the hash.
+window.addEventListener("hashchange", () => {
+  setView(location.hash === "#digest" ? "digest" : "tabs");
+});
+setView(state.view);

@@ -1417,3 +1417,290 @@ body.initial-load .section-head {
     display: none;
   }
 }
+
+/* ---------- digest ---------- */
+
+/* Digest mode swaps the queue for the agent's report. Everything that acts on a
+   queue selection goes, and so does the inspector: the digest is one document,
+   read top to bottom, with an action per section. */
+.kbd-legend-digest,
+.digest[hidden] {
+  display: none;
+}
+
+body.digest-mode .header-search,
+body.digest-mode #clip-filter,
+body.digest-mode .selection-summary,
+body.digest-mode #select-all,
+body.digest-mode .action-cluster,
+body.digest-mode .kbd-legend-tabs,
+body.digest-mode #group-preview,
+body.digest-mode #devour-failures,
+body.digest-mode .inspector {
+  display: none;
+}
+
+body.digest-mode .kbd-legend-digest {
+  display: inline-flex;
+}
+
+/* The legend is the bar's only capsule in digest mode, so it drops the gap it
+   kept from the action cluster. */
+body.digest-mode .kbd-legend {
+  margin-left: 0;
+}
+
+.digest-doc {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+}
+
+.digest-head {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: 0 10px 0 8px;
+}
+
+.digest-titlebar {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-4);
+}
+
+.digest-title {
+  margin: 0;
+  font-size: var(--fs-display);
+  font-weight: 600;
+  letter-spacing: var(--track-display);
+  color: var(--ink);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.digest-meta {
+  flex: 1;
+  font-size: var(--fs-small);
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.digest-earlier {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--fs-small);
+  color: var(--muted);
+}
+
+.digest-earlier select {
+  font: inherit;
+  color: var(--ink);
+  background: var(--paper-raised);
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--radius-2);
+  padding: 4px 8px;
+  max-width: 320px;
+}
+
+.digest-provenance,
+.digest-mirror {
+  margin: 0;
+  font-size: var(--fs-small);
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.digest-provenance strong {
+  font-weight: 600;
+  color: var(--ink-soft);
+}
+
+.digest-caution {
+  color: var(--ink-soft);
+}
+
+.digest-mirror .mono {
+  font-family: var(--font-mono);
+  font-size: var(--fs-tiny);
+  color: var(--ink-soft);
+  overflow-wrap: anywhere;
+}
+
+.digest-mirror.is-failed {
+  color: var(--danger);
+}
+
+.digest-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+/* The rule carries its count and its one action; the note between them says
+   what the last action did, or what the section is for. */
+.digest-section .section-head {
+  align-items: center;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.digest-section .section-head > .count-badge {
+  background: var(--hover-strong);
+  color: var(--muted);
+}
+
+.digest-rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* A `.tab` row with a body that can hold a paragraph: four columns (favicon,
+   body, status, controls), aligned to the top so a clamped reason does not
+   float the favicon to the middle of it. */
+.digest-row.tab {
+  grid-template-columns: 22px minmax(0, 1fr) auto auto;
+  align-items: start;
+  cursor: default;
+}
+
+.digest-row .favicon {
+  margin-top: 1px;
+}
+
+.digest-row.is-gone .favicon,
+.digest-row.is-gone .tab-title {
+  opacity: 0.6;
+}
+
+.digest-body {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.digest-line {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.digest-line .tab-title {
+  min-width: 0;
+}
+
+/* Parsed from the URL by the extension, never taken from the agent: the one
+   fact on the row a hostile title cannot choose. */
+.digest-host {
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: var(--fs-tiny);
+  color: var(--muted);
+}
+
+/* One line for every fate but the shortlist, which gets four. The row never
+   grows on hover; the full text is in the tooltip. */
+.digest-reason {
+  margin: 0;
+  font-size: var(--fs-small);
+  line-height: 1.45;
+  color: var(--ink-soft);
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 1;
+  line-clamp: 1;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+
+.digest-reason.is-long {
+  -webkit-line-clamp: 4;
+  line-clamp: 4;
+}
+
+.digest-extras {
+  margin: 0;
+  font-size: var(--fs-tiny);
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.digest-extras q {
+  color: var(--ink-soft);
+}
+
+.digest-extras .mono {
+  font-family: var(--font-mono);
+}
+
+.digest-marks {
+  padding-top: 2px;
+}
+
+.digest-status {
+  font-size: var(--fs-tiny);
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.digest-status.is-done {
+  font-size: var(--fs-micro);
+  font-weight: 600;
+  letter-spacing: var(--track-label);
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+.digest-status.is-moved {
+  font-size: var(--fs-micro);
+  font-weight: 600;
+  letter-spacing: var(--track-label);
+  text-transform: uppercase;
+  color: var(--ink-soft);
+}
+
+.digest-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+/* The section control is revealed like the row's other actions, on hover and
+   focus, so a list of twenty rows is not twenty control strips. */
+.digest-fate.seg {
+  height: 28px;
+}
+
+.digest-fate button.seg-btn {
+  padding: 0 9px;
+  font-size: var(--fs-tiny);
+}
+
+.digest-actions .digest-show {
+  padding: 4px 10px;
+  font-size: var(--fs-small);
+}
+
+.digest-undo {
+  flex: none;
+}
+
+@media (max-width: 980px) {
+  .digest-row.tab {
+    grid-template-columns: 22px minmax(0, 1fr) auto;
+  }
+
+  .digest-actions {
+    grid-column: 2 / -1;
+    opacity: 1;
+  }
+}

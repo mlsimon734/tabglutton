@@ -6,6 +6,8 @@ import type {
   GetScopedTabsResponse,
   PopupTab,
 } from "../src/background.js";
+import { freshDigest } from "../src/digest.js";
+import type { GetDigestsResponse } from "../src/digest-actions.js";
 import { openOptionsUi } from "../src/open-options.js";
 import { CLIP_ORIGINS, DOWNLOADS_GONE, requestOrigins } from "../src/permissions.js";
 import { pickRule } from "../src/site-rules.js";
@@ -75,6 +77,9 @@ const devourFailuresCountEl = document.getElementById("devour-failures-count") a
 const devourFailuresListEl = document.getElementById("devour-failures-list") as HTMLUListElement;
 const devourRetryAllBtn = document.getElementById("devour-retry-all") as HTMLButtonElement;
 const devourDismissBtn = document.getElementById("devour-dismiss") as HTMLButtonElement;
+const digestReadyEl = document.getElementById("digest-ready") as HTMLDivElement;
+const digestReadyTextEl = document.getElementById("digest-ready-text") as HTMLSpanElement;
+const digestOpenBtn = document.getElementById("digest-open") as HTMLButtonElement;
 
 const state: PopupState = {
   scopedTabs: [],
@@ -717,9 +722,24 @@ async function undoDedup(): Promise<void> {
   await refresh();
 }
 
-async function openCockpit(): Promise<void> {
-  await sendMessage({ type: "open-cockpit" });
+async function openCockpit(view?: "digest"): Promise<void> {
+  await sendMessage({ type: "open-cockpit", ...(view ? { view } : {}) });
   window.close();
+}
+
+/**
+ * "Digest ready" while the newest digest is unopened and under a week old. The
+ * badge stays the duplicate count: it already means one thing, and the
+ * duplicate notice keys on it.
+ */
+async function renderDigestReady(): Promise<void> {
+  const res = await sendMessage<GetDigestsResponse>({ type: "get-digests" });
+  const digest = res ? freshDigest(res.list, Date.now()) : null;
+  digestReadyEl.hidden = digest === null;
+  if (!digest) return;
+  const parts = ["Digest ready", `${digest.items} ${digest.items === 1 ? "tab" : "tabs"}`];
+  if (digest.worthIt > 0) parts.push(`${digest.worthIt} worth your time`);
+  digestReadyTextEl.textContent = parts.join(" · ");
 }
 
 dedupBtn.addEventListener("click", () => void runDedup());
@@ -732,6 +752,7 @@ optionsBtn.addEventListener("click", () => {
   })();
 });
 cockpitBtn.addEventListener("click", () => void openCockpit());
+digestOpenBtn.addEventListener("click", () => void openCockpit("digest"));
 filterInput.addEventListener("input", () => {
   state.filter = filterInput.value;
   state.stickyOrder = null;
@@ -822,6 +843,7 @@ mountScrollRail(document.getElementById("scroll-rail"), [
   document.querySelector<HTMLElement>("main"),
 ]);
 document.body.classList.add("initial-load");
+void renderDigestReady();
 void refresh().then(() => {
   requestAnimationFrame(() => {
     requestAnimationFrame(() => {
