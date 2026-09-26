@@ -28,7 +28,12 @@ body {
   background: var(--ink);
   color: var(--paper);
   border-radius: var(--radius-pill);
-  box-shadow: inset 0 1px 0 var(--toast-rim);
+  /* A hairline ring in the pill's own text colour, so its edge holds on a page
+     the same value as the pill — the paper pill on a white page, the ink pill
+     on a dark one — where the frame's drop shadow alone let it dissolve. */
+  box-shadow:
+    inset 0 1px 0 var(--toast-rim),
+    inset 0 0 0 1px color-mix(in srgb, currentColor 22%, transparent);
   font-size: var(--fs-small);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
@@ -85,16 +90,18 @@ button:focus-visible {
   box-shadow: 0 0 0 3px var(--accent-ring);
 }
 
-/* Mixed from the text colour rather than a fixed white, so the fill reads on
-   both the ink pill and the paper one. */
+/* The primary action, so it takes the accent — the inverted theme's, like the
+   mark, because the pill is the other theme's substrate. Its label is the
+   pill's own fill colour, which is what reads on that accent in both themes. */
 .act {
   padding: 4px 12px;
   font-size: var(--fs-small);
-  background: color-mix(in srgb, currentColor 14%, transparent);
+  background: var(--toast-accent);
+  color: var(--ink);
 }
 
 .act:hover:not(:disabled) {
-  background: color-mix(in srgb, currentColor 22%, transparent);
+  background: color-mix(in srgb, var(--toast-accent) 85%, var(--paper));
 }
 
 .icon {

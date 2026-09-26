@@ -345,8 +345,10 @@ code {
 
 /* ---------- link + rules list ---------- */
 
-.link-row {
-  margin: var(--space-5) 0 var(--space-2);
+/* Scoped under `.panel` so it outranks `.panel p`, which was zeroing the top
+   margin and sitting the button flush against the paragraph above it. */
+.panel .link-row {
+  margin: var(--space-5) 0 var(--space-4);
 }
 
 .primary-link {

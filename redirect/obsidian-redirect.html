@@ -3,8 +3,16 @@
   <head>
     <meta charset="utf-8" />
     <title>Opening Obsidian…</title>
+    <link rel="stylesheet" href="obsidian-redirect.css" />
   </head>
   <body>
+    <main class="handoff">
+      <h1 class="title">Tabglutton</h1>
+      <p class="status">Opening Obsidian…</p>
+      <!-- The launch itself happens in obsidian-redirect.ts; this link is only
+           the way out when the browser blocks or drops it. -->
+      <p class="fallback" hidden>Nothing happened? <a id="fallbackLink">Open it in Obsidian</a></p>
+    </main>
     <script type="module" src="obsidian-redirect.js"></script>
   </body>
 </html>
