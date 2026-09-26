@@ -3,6 +3,7 @@ import {
   createRpcHandler,
   MCP_LATEST_PROTOCOL,
   negotiateProtocol,
+  parseClientInfo,
   serveStdio,
   type McpServerOptions,
   type McpToolResult,
@@ -131,6 +132,27 @@ describe("initialize", () => {
       serverInfo: { name: "gullet", version: "0.1.0" },
       instructions: "how to use me",
     });
+  });
+});
+
+describe("clientInfo", () => {
+  test("is captured from initialize, cleaned and capped", async () => {
+    const seen: unknown[] = [];
+    const handle = createRpcHandler({ ...server(), onClientInfo: (info) => seen.push(info) });
+    await handle({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: { clientInfo: { name: "claude-code\n", version: "2.1.3" } },
+    });
+    await handle({ jsonrpc: "2.0", id: 2, method: "initialize", params: {} });
+    expect(seen).toEqual([{ name: "claude-code", version: "2.1.3" }, null]);
+  });
+
+  test("parseClientInfo drops a nameless or non-string client", () => {
+    expect(parseClientInfo({ name: 5 })).toBeNull();
+    expect(parseClientInfo({ name: "x".repeat(100) })).toEqual({ name: "x".repeat(60) });
+    expect(parseClientInfo(undefined)).toBeNull();
   });
 });
 

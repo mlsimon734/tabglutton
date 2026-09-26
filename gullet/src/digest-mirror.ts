@@ -16,6 +16,8 @@ import { randomBytes } from "node:crypto";
 import { link, mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import { isAbsolute, join, resolve, sep } from "node:path";
 import {
+  asRecord,
+  DIGEST_FATES,
   digestCounts,
   type DigestNoteItem,
   type DigestNoteSource,
@@ -45,6 +47,40 @@ export type DigestMirror = (
   note: DigestNoteSource,
   vault: string | undefined,
 ) => Promise<DigestMirrorOutcome>;
+
+/**
+ * The stored digest the extension hands back, checked before a note is written
+ * from it. It came from our own extension, so this guards against version skew
+ * and a malformed reply rather than an adversary — but it is a file write, and
+ * the check is cheap.
+ */
+export function isDigestNoteSource(value: unknown): value is DigestNoteSource {
+  const o = asRecord(value);
+  const sitting = asRecord(o?.sitting);
+  const reporter = asRecord(o?.reporter);
+  return (
+    o !== null &&
+    typeof o.id === "string" &&
+    /^[0-9a-f]{32}$/.test(o.id) &&
+    typeof o.receivedAt === "number" &&
+    reporter !== null &&
+    sitting !== null &&
+    Array.isArray(sitting.sources) &&
+    sitting.sources.every((s) => typeof s === "string") &&
+    Array.isArray(o.items) &&
+    o.items.length > 0 &&
+    o.items.every((raw) => {
+      const item = asRecord(raw);
+      return (
+        item !== null &&
+        typeof item.url === "string" &&
+        typeof item.title === "string" &&
+        typeof item.reason === "string" &&
+        (DIGEST_FATES as readonly unknown[]).includes(item.fate)
+      );
+    })
+  );
+}
 
 // --- encoding -----------------------------------------------------------------
 

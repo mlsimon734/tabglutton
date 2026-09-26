@@ -43,6 +43,7 @@ describe("tool definitions", () => {
       "tab_clip",
       "tabs_close",
       "undo_close",
+      "digest_report",
     ]);
   });
 
@@ -57,6 +58,9 @@ describe("tool definitions", () => {
     // Loading acts on a page, so it is not read-only — but it removes nothing.
     expect(byName.get("tabs_load")?.annotations?.readOnlyHint).toBe(false);
     expect(byName.get("tabs_load")?.annotations?.destructiveHint).toBe(false);
+    // A digest is stored and shown; nothing is removed on receipt.
+    expect(byName.get("digest_report")?.annotations?.destructiveHint).toBe(false);
+    expect(byName.get("digest_report")?.annotations?.readOnlyHint).toBe(false);
   });
 
   test("every schema is a closed object, so bad arguments surface at the client", () => {
@@ -902,5 +906,122 @@ describe("tabs_list with a browser that fails", () => {
     const result = await call("tabs_list", {});
     expect(result.isError).toBe(true);
     expect(payload(result)).toMatchObject({ error: "internal" });
+  });
+});
+
+describe("digest_report", () => {
+  const ID = "0123456789abcdef0123456789abcdef";
+  const note = {
+    id: ID,
+    receivedAt: 1,
+    reporter: {},
+    sitting: { sources: [] },
+    items: [{ url: "https://a.test/", title: "A", fate: "close", reason: "r" }],
+  };
+  const report = {
+    items: [{ tabId: 1, url: "https://a.test/", title: "A", fate: "close", reason: "r" }],
+  };
+  const stored = (mirror: unknown) => ({
+    digestId: ID,
+    stored: "new",
+    counts: { "worth-it": 0, file: 0, close: 1, "could-not-read": 0 },
+    mirror,
+    vault: "Main",
+    note,
+    next: "Open the full view.",
+  });
+
+  test("reporter comes from the MCP client, never from the model", async () => {
+    const { call, sent } = caller([zen], () => stored({ state: "written", file: "/x.md", at: 1 }), {
+      clientInfo: () => ({ name: "claude-code", version: "2.1.3" }),
+    });
+    await call("digest_report", { ...report, reporter: { client: "Trusted Harness" } });
+    expect(sent[0]?.method).toBe("digest_report");
+    expect((sent[0]?.params as { reporter?: unknown } | undefined)?.reporter).toEqual({
+      client: "claude-code",
+      clientVersion: "2.1.3",
+      gullet: expect.any(String),
+    });
+  });
+
+  test("a pending mirror is written, reported back, and Gullet-only fields are stripped", async () => {
+    const mirrored: Array<[unknown, unknown]> = [];
+    const { call, sent } = caller(
+      [zen],
+      (s) => (s.method === "digest_report" ? stored({ state: "pending" }) : { recorded: true }),
+      {
+        mirrorDigest: async (source, vault) => {
+          mirrored.push([source, vault]);
+          return { state: "written", file: "/vault/Digests/n.md", existed: false };
+        },
+      },
+    );
+    const result = payload(await call("digest_report", report)) as Record<string, unknown>;
+    expect(mirrored).toEqual([[note, "Main"]]);
+    expect(result.mirror).toEqual({ state: "written", file: "/vault/Digests/n.md" });
+    expect(result.note).toBeUndefined();
+    expect(result.vault).toBeUndefined();
+    expect(result.digestId).toBe(ID);
+    await Promise.resolve();
+    expect(sent.map((x) => x.method)).toEqual(["digest_report", "digest_mirror"]);
+    expect(sent[1]?.params).toEqual({
+      digestId: ID,
+      state: "written",
+      file: "/vault/Digests/n.md",
+    });
+  });
+
+  test("a written mirror is not written again; a failed one is retried", async () => {
+    let calls = 0;
+    const mirrorDigest = async () => {
+      calls += 1;
+      return { state: "failed" as const, reason: "no vault" };
+    };
+    const written = caller([zen], () => stored({ state: "written", file: "/x.md", at: 1 }), {
+      mirrorDigest,
+    });
+    const first = payload(await written.call("digest_report", report)) as Record<string, unknown>;
+    expect(calls).toBe(0);
+    expect(first.mirror).toEqual({ state: "written", file: "/x.md", at: 1 });
+
+    const failed = caller(
+      [zen],
+      (s) => (s.method === "digest_report" ? stored({ state: "failed", reason: "x", at: 1 }) : {}),
+      { mirrorDigest },
+    );
+    const second = payload(await failed.call("digest_report", report)) as Record<string, unknown>;
+    expect(calls).toBe(1);
+    expect(second.mirror).toEqual({ state: "failed", reason: "no vault" });
+  });
+
+  test("an old extension's Unknown method is surfaced verbatim, and nothing is written", async () => {
+    let calls = 0;
+    const { call } = caller(
+      [zen],
+      () => {
+        throw new BridgeRequestError("bad-request", "Unknown method digest_report.");
+      },
+      {
+        mirrorDigest: async () => {
+          calls += 1;
+          return { state: "off" };
+        },
+      },
+    );
+    const result = await call("digest_report", report);
+    expect(result.isError).toBe(true);
+    expect(payload(result)).toEqual({
+      error: "bad-request",
+      message: "Unknown method digest_report.",
+    });
+    expect(calls).toBe(0);
+  });
+
+  test("an agent cannot call digest_mirror", async () => {
+    const { call, sent } = caller([zen], () => ({}));
+    const result = await call("digest_mirror", { digestId: ID, state: "written", file: "/x" });
+    expect(result.isError).toBe(true);
+    expect(JSON.stringify(payload(result))).toContain("Unknown tool digest_mirror");
+    expect(sent).toEqual([]);
   });
 });
