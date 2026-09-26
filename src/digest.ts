@@ -10,6 +10,7 @@
 import {
   asRecord,
   DIGEST_FATES,
+  digestCounts,
   DIGEST_UNREADABLE,
   tabDomain,
   type DigestFate,
@@ -21,6 +22,8 @@ import {
 } from "./bridge-protocol.js";
 import { normalizeUrl, type NormalizeOpts } from "./normalize.js";
 import type { UndoBatch } from "./undo-log.js";
+
+export { digestCounts };
 
 export const DIGESTS_KEY = "digests";
 export const DIGEST_STORE_VERSION = 1;
@@ -112,14 +115,6 @@ export function actionFate(action: DigestAction): DigestFate {
 
 export function effectiveFate(item: Pick<DigestItemRecord, "fate" | "userFate">): DigestFate {
   return item.userFate ?? item.fate;
-}
-
-export function digestCounts(
-  items: ReadonlyArray<{ fate: DigestFate }>,
-): Record<DigestFate, number> {
-  const counts = { "worth-it": 0, file: 0, close: 0, "could-not-read": 0 };
-  for (const item of items) counts[item.fate] += 1;
-  return counts;
 }
 
 // --- identity ---------------------------------------------------------------

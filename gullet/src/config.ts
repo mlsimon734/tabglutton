@@ -9,6 +9,7 @@ import {
   errorMessage,
   isBridgePort,
 } from "../../src/bridge-protocol.js";
+import { DEFAULT_DIGEST_MIRROR, type DigestMirrorConfig } from "./digest-mirror.js";
 
 export type TokenResolver = () => Promise<string>;
 
@@ -31,6 +32,11 @@ type TokenConfig = {
    * nothing but a spawn should ever produce one.
    */
   detachedHub: boolean;
+  /**
+   * Where `digest_report` writes its note, and whether it does. On by default,
+   * into `Digests/` in the vault the extension files clips into.
+   */
+  digestMirror: DigestMirrorConfig;
 };
 
 export type GulletConfig =
@@ -81,6 +87,7 @@ interface FileConfig {
   tokenFile?: string;
   tokenCommand?: string;
   detach?: boolean;
+  digestMirror?: DigestMirrorConfig;
 }
 
 export interface TokenCommandResult {
@@ -120,6 +127,7 @@ export async function loadConfig(
     // A detached hub never spawns another one; it *is* the answer.
     detach: (flags.detach ?? fileConfig.detach ?? true) && flags.detachedHub !== true,
     detachedHub: flags.detachedHub ?? false,
+    digestMirror: fileConfig.digestMirror ?? DEFAULT_DIGEST_MIRROR,
   };
 
   // The spawner hands the token over stdin rather than argv, which `ps` would
@@ -152,7 +160,7 @@ export async function loadConfig(
   return assembleConfig(selection, mode, "", tokenFileResolver(tokenFile, runtime.cwd, runtime));
 }
 
-type HubMode = Pick<TokenConfig, "detach" | "detachedHub">;
+type HubMode = Pick<TokenConfig, "detach" | "detachedHub" | "digestMirror">;
 
 function assembleConfig(
   selection: "auto" | number,
@@ -271,7 +279,7 @@ async function readFileConfig(path: string, runtime: ConfigRuntime): Promise<Fil
     );
   }
 
-  const allowed = new Set(["port", "tokenFile", "tokenCommand", "detach"]);
+  const allowed = new Set(["port", "tokenFile", "tokenCommand", "detach", "digestMirror"]);
   const unknown = Object.keys(parsedConfig).find((key) => !allowed.has(key));
   if (unknown !== undefined) throw new ConfigError(`Unknown key "${unknown}" in ${path}.`);
 
@@ -297,12 +305,48 @@ async function readFileConfig(path: string, runtime: ConfigRuntime): Promise<Fil
     }
     config.detach = parsedConfig.detach;
   }
+  if (parsedConfig.digestMirror !== undefined) {
+    config.digestMirror = parseDigestMirrorConfig(parsedConfig.digestMirror, path);
+  }
   config.tokenFile = nonEmptyString("tokenFile", "path");
   config.tokenCommand = nonEmptyString("tokenCommand", "command");
   if (config.tokenFile !== undefined && config.tokenCommand !== undefined) {
     throw new ConfigError(`${path} must choose either "tokenFile" or "tokenCommand", not both.`);
   }
   return config;
+}
+
+/**
+ * `{ enabled?, folder? }`. A relative folder lives in the vault and may not climb
+ * out of it; an absolute one is used as given. `~/` is the home directory.
+ */
+function parseDigestMirrorConfig(raw: unknown, path: string): DigestMirrorConfig {
+  const obj = asRecord(raw);
+  if (!obj) throw new ConfigError(`"digestMirror" in ${path} must be an object.`);
+  const unknown = Object.keys(obj).find((key) => key !== "enabled" && key !== "folder");
+  if (unknown !== undefined) {
+    throw new ConfigError(`Unknown key "digestMirror.${unknown}" in ${path}.`);
+  }
+  if (obj.enabled !== undefined && typeof obj.enabled !== "boolean") {
+    throw new ConfigError(`"digestMirror.enabled" in ${path} must be true or false.`);
+  }
+  let folder = DEFAULT_DIGEST_MIRROR.folder;
+  if (obj.folder !== undefined) {
+    if (typeof obj.folder !== "string" || obj.folder.trim() === "") {
+      throw new ConfigError(`"digestMirror.folder" in ${path} must be a non-empty path.`);
+    }
+    folder = obj.folder.trim();
+    if (folder === "~" || folder.startsWith("~/")) folder = join(homedir(), folder.slice(1));
+    if (!isAbsolute(folder)) {
+      folder = folder.replace(/^\/+|\/+$/g, "");
+      if (folder === "" || folder.split(/[\\/]/).some((part) => part === "..")) {
+        throw new ConfigError(
+          `"digestMirror.folder" in ${path} must stay inside the vault, or be an absolute path.`,
+        );
+      }
+    }
+  }
+  return { enabled: obj.enabled ?? DEFAULT_DIGEST_MIRROR.enabled, folder };
 }
 
 /**

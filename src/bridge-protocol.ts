@@ -1242,6 +1242,15 @@ export interface DigestReportResult {
   next: string;
 }
 
+/** How many items the agent gave each fate. */
+export function digestCounts(
+  items: ReadonlyArray<{ fate: DigestFate }>,
+): Record<DigestFate, number> {
+  const counts = { "worth-it": 0, file: 0, close: 0, "could-not-read": 0 };
+  for (const item of items) counts[item.fate] += 1;
+  return counts;
+}
+
 /** What `digest_report` tells the agent to tell the user. */
 export const DIGEST_REPORT_NEXT =
   "The digest is in Tabglutton's full view, under Digest (the popup shows a Digest ready line). Nothing was grouped or closed: the user decides from there.";

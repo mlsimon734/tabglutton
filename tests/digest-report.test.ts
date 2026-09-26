@@ -151,7 +151,7 @@ describe("parseDigestReportParams", () => {
     expect(only?.quote).toBe("abcd");
     // NEL is a C1 control, not JS whitespace: removed, not spaced.
     expect(sanitizeDigestText("a\u0085b")).toBe("ab");
-    expect(sanitizeDigestText("a b")).toBe("a b");
+    expect(sanitizeDigestText("a\u2028b")).toBe("a b");
   });
 
   test("an empty reason is refused", () => {
