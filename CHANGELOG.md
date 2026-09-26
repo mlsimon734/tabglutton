@@ -2,6 +2,29 @@
 
 All notable changes to Tabglutton are documented here.
 
+## [0.5.0](https://github.com/mlsimon734/tabglutton/compare/v0.4.2...v0.5.0) (unreleased)
+
+- **Digests land in Tabglutton, and you act on them there.** An agent running the digest
+  skill (it ships with Gullet) now reads a sitting's tabs and reports its verdicts through a
+  new `digest_report` tool instead of writing notes and closing tabs itself. The full view
+  gains a **Tabs | Digest** switch: the Digest side shows the report in four sections (worth
+  your time, file for reference, close, could not read), each row with the agent's reason.
+  **Keep in a group** puts the open shortlist into a "Worth your time" tab group in its
+  window; **Close** closes the close section as one batch, and **Undo** brings it back, from
+  the toast or later from the section head. Move a row between sections with 1–4 before
+  acting. Pinned, active, and hidden tabs are left alone, and a row whose tab has changed or
+  can't be told apart from another copy is refused rather than guessed at. The popup shows a
+  **Digest ready** line until you have opened it. Nothing about the report is trusted: the
+  panel shows who says they reported it, and renders every word as plain text.
+- **Gullet writes each digest's note to your vault.** One markdown note per digest, in
+  `Digests/` of the vault you clip to (or any folder, with `digestMirror` in Gullet's
+  config), written straight to disk and exactly once however often the agent retries.
+  Agent text in it is escaped, so a hostile page title cannot become a link, an embed, or a
+  Dataview query. Turn it off with `"digestMirror": { "enabled": false }`.
+- **Update both halves together.** `digest_report` needs this version of the extension and of
+  Gullet; the skill tells the user to update when the extension doesn't know the tool. The
+  bridge protocol is unchanged, so no running hub has to be stopped.
+
 ## [0.4.2](https://github.com/mlsimon734/tabglutton/compare/v0.4.1...v0.4.2) (unreleased)
 
 - **An optional notice when duplicates pile up.** Switch it on under Deduplication in
