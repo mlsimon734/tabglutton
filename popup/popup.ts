@@ -15,6 +15,7 @@ import {
   clipSummary,
   computeDedupCount,
   createPressGate,
+  dropClosedRows,
   extraTabIds,
   hostInitial,
   markdownForTabs,
@@ -500,17 +501,14 @@ async function focusTab(tabId: number): Promise<void> {
   window.close();
 }
 
-/** Take closed tabs' rows out in place; see devour.ts `dropClosedRows`. */
-function dropClosedRows(tabIds: number[]): void {
-  const closed = new Set(tabIds);
-  state.scopedTabs = state.scopedTabs.filter((t) => !closed.has(t.id));
-  for (const id of tabIds) groupsEl.querySelector(`.tab[data-tab-id="${id}"]`)?.remove();
-}
-
 async function closeTabs(tabIds: number[]): Promise<void> {
   if (!tabIds.length) return;
   const res = await sendMessage<{ closed: number }>({ type: "close-tabs", tabIds });
-  if (res) listGate.run(() => dropClosedRows(tabIds));
+  if (res) {
+    listGate.run(() => {
+      state.scopedTabs = dropClosedRows(state.scopedTabs, groupsEl, tabIds);
+    });
+  }
   for (const id of tabIds) state.selected.delete(id);
   await refresh();
 }

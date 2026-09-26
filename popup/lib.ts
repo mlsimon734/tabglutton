@@ -413,6 +413,18 @@ export function createPressGate(
   };
 }
 
+/**
+ * Take closed tabs' rows out of `list` in place and return `tabs` without them.
+ * Call it only once the browser has closed the tabs: it is the list catching
+ * up, not an optimistic hide. The full rebuild that follows fixes counts and
+ * sections, and on a large backlog it takes hundreds of ms. §Row close.
+ */
+export function dropClosedRows(tabs: PopupTab[], list: HTMLElement, tabIds: number[]): PopupTab[] {
+  const closed = new Set(tabIds);
+  for (const id of tabIds) list.querySelector(`.tab[data-tab-id="${id}"]`)?.remove();
+  return tabs.filter((t) => !closed.has(t.id));
+}
+
 /** Wire a gate to the page's pointer: any press holds, a release or lost focus lets go. */
 export function trackPress(gate: PressGate): void {
   document.addEventListener("pointerdown", () => gate.press(), true);

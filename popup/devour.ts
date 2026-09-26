@@ -25,6 +25,7 @@ import {
   clipSummary,
   computeDedupCount,
   createPressGate,
+  dropClosedRows,
   extraTabIds,
   hostInitial,
   hostOf,
@@ -919,21 +920,14 @@ async function refresh(): Promise<void> {
   listGate.run(render);
 }
 
-/**
- * Take closed tabs' rows out in place. The browser has already closed them, so
- * this is the list catching up, not a guess; the full rebuild that follows
- * fixes counts and sections, and can take hundreds of ms on a large backlog.
- */
-function dropClosedRows(tabIds: number[]): void {
-  const closed = new Set(tabIds);
-  state.scopedTabs = state.scopedTabs.filter((t) => !closed.has(t.id));
-  for (const id of tabIds) groupsEl.querySelector(`.tab[data-tab-id="${id}"]`)?.remove();
-}
-
 async function closeTabs(tabIds: number[]): Promise<void> {
   if (!tabIds.length) return;
   const res = await sendMessage<{ closed: number }>({ type: "close-tabs", tabIds });
-  if (res) listGate.run(() => dropClosedRows(tabIds));
+  if (res) {
+    listGate.run(() => {
+      state.scopedTabs = dropClosedRows(state.scopedTabs, groupsEl, tabIds);
+    });
+  }
   for (const id of tabIds) state.selected.delete(id);
   if (state.focusedTabId !== null && tabIds.includes(state.focusedTabId)) {
     state.focusedTabId = null;
