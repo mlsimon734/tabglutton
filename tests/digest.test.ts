@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { displayUrl } from "../src/normalize.js";
 import {
   buildDigestView,
   digestId,
@@ -196,6 +197,20 @@ describe("observeReport", () => {
     expect(observed.items[2]?.anchor).toBeUndefined();
     expect("tabId" in (observed.items[0] ?? {})).toBe(false);
   });
+
+  test("a listing-clipped URL matches the tab it names, and only that one", () => {
+    const long = `https://www.search.test/q?${"x".repeat(300)}`;
+    const shown = displayUrl(long);
+    expect(shown.endsWith("…")).toBe(true);
+    const item = { tabId: 7, url: shown, title: "Q", fate: "close" as const, reason: "r" };
+    const observed = observeReport([item], [tab(7, long)], opts);
+    expect(observed.unmatched).toEqual([]);
+    expect(observed.items[0]).toMatchObject({ url: long, anchor: { windowId: 1 } });
+    // Same clipped form, but the agent named a different tab: not a match.
+    const wrongId = observeReport([{ ...item, tabId: 8 }], [tab(7, long)], opts);
+    expect(wrongId.unmatched).toEqual([0]);
+    expect(wrongId.items[0]?.url).toBe(shown);
+  });
 });
 
 describe("planDigestAction and recheck", () => {
@@ -276,6 +291,14 @@ describe("close and undo state come from the undo log", () => {
     const close = r.closes[0];
     expect(close && findCloseBatch(r, close, log, opts)?.id).toBe("ours");
     expect(digestUndoState(r, log, opts)?.batchId).toBe("ours");
+  });
+
+  test("a finished close that closed nothing never claims a later batch", () => {
+    const r = record(items, { closes: [{ startedAt: 1500, at: 1510, outcomes: [] }] });
+    const log = [batch("an-agent-close", ["https://a.test/"], 1600)];
+    const close = r.closes[0];
+    expect(close && findCloseBatch(r, close, log, opts)).toBeNull();
+    expect(digestUndoState(r, log, opts)).toBeNull();
   });
 
   test("the newest restorable close wins, and history is capped", () => {

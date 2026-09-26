@@ -308,6 +308,9 @@ const nodeFs: DigestMirrorFs = {
   unlink: (path) => unlink(path),
 };
 
+/** What `link` answers on a file system that has no hard links. */
+const NO_HARD_LINKS = new Set(["EPERM", "ENOTSUP", "EOPNOTSUPP", "ENOSYS", "EXDEV"]);
+
 /** Same-named notes tried before giving up: `name.md`, `name 2.md`, … */
 const NAME_ATTEMPTS = 20;
 
@@ -340,7 +343,14 @@ export async function writeDigestNote(
     const temp = join(dir, `.${base}.${randomBytes(6).toString("hex")}.tmp`);
     await fs.write(temp, content);
     try {
-      await fs.link(temp, file);
+      try {
+        await fs.link(temp, file);
+      } catch (err) {
+        if (!NO_HARD_LINKS.has(String((err as { code?: unknown }).code))) throw err;
+        // exFAT, some SMB shares, FUSE mounts: no hard links. An exclusive
+        // create still never overwrites; it only gives up the atomicity.
+        await fs.write(file, content);
+      }
       return { file, existed: false };
     } catch (err) {
       if ((err as { code?: unknown }).code !== "EEXIST") throw err;

@@ -235,6 +235,32 @@ describe("writing", () => {
     expect((await readdir(dir)).filter((f) => f.endsWith(".tmp"))).toEqual([]);
   });
 
+  test("without hard links the note is still created once, never overwritten", async () => {
+    const files = new Map<string, string>();
+    const fs = {
+      mkdir: async () => {},
+      read: async (path: string) => files.get(path) ?? null,
+      write: async (path: string, content: string) => {
+        if (files.has(path)) throw Object.assign(new Error("exists"), { code: "EEXIST" });
+        files.set(path, content);
+      },
+      link: async () => {
+        throw Object.assign(new Error("no links"), { code: "ENOTSUP" });
+      },
+      unlink: async (path: string) => {
+        files.delete(path);
+      },
+    };
+    const content = markdownForDigest(note());
+    const first = await writeDigestNote("/v", "n", content, ID, fs);
+    expect(first).toEqual({ file: "/v/n.md", existed: false });
+    expect(await writeDigestNote("/v", "n", content, ID, fs)).toEqual({
+      file: "/v/n.md",
+      existed: true,
+    });
+    expect([...files.keys()]).toEqual(["/v/n.md"]);
+  });
+
   test("the mirror resolves the vault, or says why it cannot", async () => {
     const vaults = async () => new Map([["test", dir]]);
     expect(await mirrorDirectory({ enabled: true, folder: "Digests" }, "test", vaults)).toEqual({

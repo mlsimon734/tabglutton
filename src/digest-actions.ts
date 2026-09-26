@@ -6,7 +6,6 @@
 // (docs/ENGINEERING.md §Undo invariants).
 
 import {
-  BridgeRequestError,
   DIGEST_FATES,
   type DigestFate,
   type TabsCloseResult,
@@ -220,12 +219,13 @@ export class DigestActions {
       let result: TabsCloseResult | null = null;
       try {
         result = await this.deps.closeTabs(ids);
-      } catch (err) {
-        // `tabs_close` throws when nothing at all could be closed: every id gone
-        // (`not-found`) or every removal refused. Neither closed anything.
-        const gone = err instanceof BridgeRequestError && err.code === "not-found";
+      } catch {
+        // `tabs_close` throws when nothing at all could be closed. Its code does
+        // not say which tabs are gone — `not-found` also covers tabs that have
+        // not committed a URL yet — so ask the browser, tab by tab.
         for (const t of targets) {
-          outcomes.push({ index: t.index, outcome: gone ? "gone" : "failed" });
+          const still = await this.deps.getTab(t.tabId).catch(() => null);
+          outcomes.push({ index: t.index, outcome: still ? "failed" : "gone" });
         }
       }
       if (result) {
@@ -290,6 +290,9 @@ export class DigestActions {
       await this.deps.focusTab(row.tabId);
       return { ok: true };
     }
+    // A still-clipped URL (an item that never matched its tab) is not an
+    // address; opening it would load a page that does not exist.
+    if (row.url.endsWith("…")) return { ok: false };
     let url: URL;
     try {
       url = new URL(row.url);

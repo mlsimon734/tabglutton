@@ -20,7 +20,7 @@ import {
   type DigestReportParams,
   type DigestReporter,
 } from "./bridge-protocol.js";
-import { normalizeUrl, type NormalizeOpts } from "./normalize.js";
+import { displayUrl, normalizeUrl, type NormalizeOpts } from "./normalize.js";
 import type { UndoBatch } from "./undo-log.js";
 
 export { digestCounts };
@@ -226,14 +226,21 @@ export function observeReport(
   let first: number | undefined;
   let last: number | undefined;
   const records = items.map((item, index): DigestItemRecord => {
-    const { tabId, ...claims } = item;
+    const { tabId, ...rest } = item;
     const tab = byId.get(tabId);
     const key = urlKey(item.url, opts);
-    const open = tab !== undefined && key !== null && urlKey(tab.url, opts) === key;
-    if (!open || !tab) {
+    const exact = tab !== undefined && key !== null && urlKey(tab.url, opts) === key;
+    // A listing clips a long URL, and the agent hands it back as it saw it. For
+    // the tab it named, and only that one, the clipped form is recognised and
+    // the stored URL becomes the tab's own, so matching, fallback, and Show all
+    // work from the whole address afterwards.
+    const clipped =
+      !exact && tab !== undefined && item.url.endsWith("…") && displayUrl(tab.url) === item.url;
+    if (!tab || !(exact || clipped)) {
       unmatched.push(index);
-      return { ...claims, tabIdHint: tabId, observed: { open: false } };
+      return { ...rest, tabIdHint: tabId, observed: { open: false } };
     }
+    const claims = clipped ? { ...rest, url: tab.url } : rest;
     const seen = tab.lastAccessed;
     if (seen !== undefined && seen > 0) {
       first = first === undefined ? seen : Math.min(first, seen);
@@ -335,7 +342,8 @@ export function recheckTarget(
 
 /**
  * The undo batch a close wrote, found in the undo log. By id when the digest
- * recorded one; otherwise — the write after the close was lost — by shape: the
+ * recorded one; otherwise, only while the record is still the bare intent (the
+ * write after the close was lost), by shape: the
  * earliest batch written after the close started whose every entry is one of
  * this digest's pages. The undo log is the only authority on what is still
  * restorable.
@@ -347,6 +355,10 @@ export function findCloseBatch(
   opts: NormalizeOpts,
 ): UndoBatch | null {
   if (close.batchId !== undefined) return log.find((b) => b.id === close.batchId) ?? null;
+  // A finished record without a batch closed nothing; only the intent record,
+  // whose follow-up write was lost, is looked for by shape. Otherwise a later
+  // agent close of the same pages would be offered as this digest's Undo.
+  if (close.at !== undefined) return null;
   const pages = new Set(
     record.items.map((item) => urlKey(item.url, opts)).filter((k) => k !== null),
   );

@@ -191,15 +191,30 @@ describe("digest actions", () => {
     expect(h.closed).toEqual([[1]]);
   });
 
-  test("tabs_close refusing every id closes nothing and says gone", async () => {
-    seed([item(1, "https://a.test/", "close")]);
-    const h = harness([tab(1, "https://a.test/")], {
+  test("tabs_close refusing every id closes nothing; the browser says which are gone", async () => {
+    seed([item(1, "https://a.test/", "close"), item(2, "https://b.test/", "close")]);
+    const h = harness([tab(1, "https://a.test/"), tab(2, "https://b.test/")], {
+      // `not-found` also means "none has committed a URL yet", so the code
+      // alone cannot say gone.
       closeTabs: async () => {
-        throw new BridgeRequestError("not-found", "None of the given tab ids exist.");
+        throw new BridgeRequestError(
+          "not-found",
+          "None of the given tabs have committed a URL yet.",
+        );
       },
     });
+    let checks = 0;
+    const planned = h.deps.getTab;
+    h.deps.getTab = async (id) => {
+      checks++;
+      // The recheck before closing sees both; afterwards tab 1 has gone.
+      return checks > 2 && id === 1 ? null : planned(id);
+    };
     const res = await new DigestActions(h.deps).act(ID, "close");
-    expect(res.ok && res.outcomes).toEqual([{ index: 0, outcome: "gone" }]);
+    expect(res.ok && res.outcomes).toEqual([
+      { index: 0, outcome: "gone" },
+      { index: 1, outcome: "failed" },
+    ]);
     // The intent was written first, and the batch-less record stands.
     expect(stored().closes[0]?.batchId).toBeUndefined();
   });
