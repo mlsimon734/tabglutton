@@ -370,6 +370,57 @@ export async function sendMessage<T>(msg: unknown): Promise<T | undefined> {
   }
 }
 
+export type PressGate = {
+  press(): void;
+  release(): void;
+  /** Run `fn` now, or right after the release when a pointer is down. */
+  run(fn: () => void): void;
+};
+
+/**
+ * Holds list rewrites that arrive from async work while a pointer is pressed.
+ * A click fires only when press and release land on the same element, so a
+ * rebuild in between replaces the button under the cursor and the click is lost
+ * without a trace — measured as the row × needing a second click once a list
+ * rebuild takes longer than the gap between clicks. Held work runs on
+ * `schedule`, a task after the release, so the release's own click is
+ * dispatched first. §Row close.
+ */
+export function createPressGate(
+  schedule: (fn: () => void) => void = (fn) => void setTimeout(fn, 0),
+): PressGate {
+  let pressed = false;
+  let held: (() => void)[] = [];
+  return {
+    press() {
+      pressed = true;
+    },
+    release() {
+      pressed = false;
+      if (!held.length) return;
+      const due = held;
+      held = [];
+      schedule(() => {
+        // Input can outrun a timer: a press that landed first holds these again.
+        if (pressed) held = [...due, ...held];
+        else for (const fn of due) fn();
+      });
+    },
+    run(fn) {
+      if (pressed) held.push(fn);
+      else fn();
+    },
+  };
+}
+
+/** Wire a gate to the page's pointer: any press holds, a release or lost focus lets go. */
+export function trackPress(gate: PressGate): void {
+  document.addEventListener("pointerdown", () => gate.press(), true);
+  document.addEventListener("pointerup", () => gate.release(), true);
+  document.addEventListener("pointercancel", () => gate.release(), true);
+  window.addEventListener("blur", () => gate.release());
+}
+
 /**
  * Publish the floating chrome stacks' heights onto `root` as `--chrome-top` /
  * `--chrome-bottom`, so the scroll region can pad itself clear of bars it

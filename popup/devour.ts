@@ -24,6 +24,7 @@ import {
   clipMarkTitle,
   clipSummary,
   computeDedupCount,
+  createPressGate,
   extraTabIds,
   hostInitial,
   hostOf,
@@ -35,6 +36,7 @@ import {
   type TabGroup,
   mountScrollRail,
   trackChromeHeights,
+  trackPress,
   trackScrollLift,
   visibleGroups,
   visibleTabIds,
@@ -101,6 +103,9 @@ const groupPreviewListEl = document.getElementById("group-preview-list") as HTML
 const groupPreviewNoteEl = document.getElementById("group-preview-note") as HTMLParagraphElement;
 const groupApplyBtn = document.getElementById("group-apply") as HTMLButtonElement;
 const groupCancelBtn = document.getElementById("group-cancel") as HTMLButtonElement;
+
+/** Holds async list rewrites while a pointer is down (lib.ts `createPressGate`). */
+const listGate = createPressGate();
 
 const state: CockpitState = {
   scopedTabs: [],
@@ -910,12 +915,25 @@ async function refresh(): Promise<void> {
   if (state.focusedTabId !== null && !live.has(state.focusedTabId)) {
     state.focusedTabId = null;
   }
-  render();
+  // The rebuild lands whenever the round trip does; never under a pressed button.
+  listGate.run(render);
+}
+
+/**
+ * Take closed tabs' rows out in place. The browser has already closed them, so
+ * this is the list catching up, not a guess; the full rebuild that follows
+ * fixes counts and sections, and can take hundreds of ms on a large backlog.
+ */
+function dropClosedRows(tabIds: number[]): void {
+  const closed = new Set(tabIds);
+  state.scopedTabs = state.scopedTabs.filter((t) => !closed.has(t.id));
+  for (const id of tabIds) groupsEl.querySelector(`.tab[data-tab-id="${id}"]`)?.remove();
 }
 
 async function closeTabs(tabIds: number[]): Promise<void> {
   if (!tabIds.length) return;
-  await sendMessage({ type: "close-tabs", tabIds });
+  const res = await sendMessage<{ closed: number }>({ type: "close-tabs", tabIds });
+  if (res) listGate.run(() => dropClosedRows(tabIds));
   for (const id of tabIds) state.selected.delete(id);
   if (state.focusedTabId !== null && tabIds.includes(state.focusedTabId)) {
     state.focusedTabId = null;
@@ -1298,6 +1316,7 @@ browser.runtime.onMessage.addListener((raw: unknown): void => {
 });
 
 void loadLogoMark();
+trackPress(listGate);
 trackChromeHeights(
   document.body,
   document.getElementById("chrome-top"),

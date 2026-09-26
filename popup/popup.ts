@@ -14,6 +14,7 @@ import { IS_CHROME } from "../src/target.js";
 import {
   clipSummary,
   computeDedupCount,
+  createPressGate,
   extraTabIds,
   hostInitial,
   markdownForTabs,
@@ -25,6 +26,7 @@ import {
   type TabGroup,
   mountScrollRail,
   trackChromeHeights,
+  trackPress,
   visibleGroups,
   visibleTabIds,
 } from "./lib.js";
@@ -75,6 +77,9 @@ const devourFailuresCountEl = document.getElementById("devour-failures-count") a
 const devourFailuresListEl = document.getElementById("devour-failures-list") as HTMLUListElement;
 const devourRetryAllBtn = document.getElementById("devour-retry-all") as HTMLButtonElement;
 const devourDismissBtn = document.getElementById("devour-dismiss") as HTMLButtonElement;
+
+/** Holds async list rewrites while a pointer is down (lib.ts `createPressGate`). */
+const listGate = createPressGate();
 
 const state: PopupState = {
   scopedTabs: [],
@@ -486,7 +491,8 @@ async function refresh(): Promise<void> {
   for (const id of state.selected) {
     if (!live.has(id)) state.selected.delete(id);
   }
-  render();
+  // The rebuild lands whenever the round trip does; never under a pressed button.
+  listGate.run(render);
 }
 
 async function focusTab(tabId: number): Promise<void> {
@@ -494,9 +500,17 @@ async function focusTab(tabId: number): Promise<void> {
   window.close();
 }
 
+/** Take closed tabs' rows out in place; see devour.ts `dropClosedRows`. */
+function dropClosedRows(tabIds: number[]): void {
+  const closed = new Set(tabIds);
+  state.scopedTabs = state.scopedTabs.filter((t) => !closed.has(t.id));
+  for (const id of tabIds) groupsEl.querySelector(`.tab[data-tab-id="${id}"]`)?.remove();
+}
+
 async function closeTabs(tabIds: number[]): Promise<void> {
   if (!tabIds.length) return;
-  await sendMessage({ type: "close-tabs", tabIds });
+  const res = await sendMessage<{ closed: number }>({ type: "close-tabs", tabIds });
+  if (res) listGate.run(() => dropClosedRows(tabIds));
   for (const id of tabIds) state.selected.delete(id);
   await refresh();
 }
@@ -813,6 +827,7 @@ async function loadLogoMark(): Promise<void> {
 
 void renderShortcutHint();
 void loadLogoMark();
+trackPress(listGate);
 trackChromeHeights(
   document.body,
   document.getElementById("chrome-top"),
