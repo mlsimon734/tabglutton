@@ -20,6 +20,16 @@ All notable changes to Tabglutton are documented here.
   reads a Reddit comments page from its feed and a logged-out x.com status through oEmbed when
   the page itself has nothing rendered, and falls back to the page as before when those
   fetches fail. Everything else extracts exactly as it did.
+- **Design polish.** The full view at narrow widths (under 980px) now stacks the inspector
+  under the queue instead of squeezing both into two columns. The Obsidian handoff page
+  follows the theme instead of flashing white, and says what it is doing, with a link to open
+  the note by hand if the launch is blocked. Off toggles in Settings are visible (3:1 against
+  the page and the track in both themes), its buttons take the same pill shape as everywhere
+  else, and the Gullet link stops rendering in default blue. The duplicate notice's **Dedup**
+  button takes the accent, and the pill keeps its edge on pages the same colour as it. Long
+  duplicate URLs in the popup end in an ellipsis instead of being cut off. Setup no longer
+  calls Dedup "exact-duplicate", shows a literal `{URL}` on Chrome, or says a rules editor is
+  still to come. The window title and button labels say "full view" rather than "cockpit".
 
 ## [0.4.1](https://github.com/mlsimon734/tabglutton/compare/v0.4.0...v0.4.1) (2026-08-29)
 

@@ -1385,9 +1385,14 @@ body.initial-load .section-head {
 
 /* One column, and the scroll moves out to `.cockpit-main` so the queue and the
    inspector travel together as one document. The chrome stays fixed — content
-   still passes under it, which is the whole arrangement. */
+   still passes under it, which is the whole arrangement.
+   `body.inspecting` is listed so this outranks the two-column rule above; at
+   `.cockpit-main` alone it lost on specificity and the inspector kept its
+   column at 900px, squeezing the queue and splitting the action capsule
+   across the gap. */
 @media (max-width: 980px) {
-  .cockpit-main {
+  .cockpit-main,
+  body.inspecting .cockpit-main {
     grid-template-columns: 1fr;
     overflow-y: auto;
     padding-block: calc(var(--chrome-top) + var(--space-5))

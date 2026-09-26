@@ -512,9 +512,6 @@ body.initial-load .section-head {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
 }
 
 /* A duplicate set is headed by the canonical URL its copies share, so it reads

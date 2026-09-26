@@ -161,9 +161,11 @@ async function buildOne(target: Target): Promise<void> {
   cpSync("notice/dup-notice.css", `${DIST}/notice/dup-notice.css`);
 
   // obsidian-redirect.{html,js} — the extension-origin launch page used by
-  // openObsidianUrl on both engines. The .js is emitted by tsc; copy the HTML shell.
+  // openObsidianUrl on both engines. The .js is emitted by tsc; copy the HTML shell
+  // and its stylesheet.
   mkdirSync(`${DIST}/redirect`, { recursive: true });
   cpSync("redirect/obsidian-redirect.html", `${DIST}/redirect/obsidian-redirect.html`);
+  cpSync("redirect/obsidian-redirect.css", `${DIST}/redirect/obsidian-redirect.css`);
 
   mkdirSync(`${DIST}/THIRD_PARTY_LICENSES`, { recursive: true });
   cpSync("node_modules/defuddle/LICENSE", `${DIST}/THIRD_PARTY_LICENSES/defuddle-LICENSE.txt`);

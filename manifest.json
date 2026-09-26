@@ -70,7 +70,7 @@
       "suggested_key": {
         "default": "Alt+Shift+D"
       },
-      "description": "Open Tabglutton Devour cockpit"
+      "description": "Open Tabglutton's full view in a tab"
     }
   }
 }

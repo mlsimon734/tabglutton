@@ -5,6 +5,13 @@
 // neither engine can attach a rememberable per-origin grant to it.
 const target = decodeURIComponent(window.location.hash.slice(1));
 if (target.startsWith("obsidian://")) {
+  // The manual way out if the browser blocks or drops the launch below. It is
+  // a click on the same URL from the same page, so it asks under the same origin.
+  const link = document.getElementById("fallbackLink");
+  if (link instanceof HTMLAnchorElement) {
+    link.href = target;
+    link.parentElement?.removeAttribute("hidden");
+  }
   window.location.replace(target);
 }
 

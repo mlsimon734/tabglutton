@@ -1,0 +1,45 @@
+@import url("../popup/tokens.css");
+
+/* A handoff page, usually closed before anyone sees it. It carries the tokens
+   so the dark theme does not flash white, and says what it is doing — with a
+   manual link — for the time the browser blocks the launch and leaves it open. */
+body {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  background: var(--bone);
+}
+
+.handoff {
+  text-align: center;
+  padding: var(--space-6);
+}
+
+.title {
+  margin: 0 0 var(--space-3);
+  font-family: var(--font-display);
+  font-size: var(--fs-hero);
+  font-weight: 400;
+  letter-spacing: var(--track-hero);
+  line-height: 1;
+  color: var(--ink);
+}
+
+.status {
+  margin: 0;
+  font-size: var(--fs-lead);
+  color: var(--ink-soft);
+}
+
+.fallback {
+  margin: var(--space-4) 0 0;
+  font-size: var(--fs-small);
+  color: var(--muted);
+}
+
+.fallback a {
+  color: var(--accent);
+  text-decoration: underline;
+  text-decoration-color: var(--accent-ring);
+  text-underline-offset: 3px;
+}
