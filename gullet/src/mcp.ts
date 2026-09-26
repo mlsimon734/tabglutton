@@ -40,6 +40,31 @@ export interface McpServerOptions {
   instructions?: string;
   tools: readonly McpTool[];
   call: (name: string, args: Record<string, unknown>) => Promise<McpToolResult>;
+  /**
+   * The client's `clientInfo` from `initialize`, as it named itself — or null
+   * when it sent none. The harness's word, not the model's: nothing a model
+   * puts in tool arguments reaches this.
+   */
+  onClientInfo?: (info: { name: string; version?: string } | null) => void;
+}
+
+/** Longest client name or version kept. Anything past it is not identification. */
+const CLIENT_INFO_MAX = 60;
+
+export function parseClientInfo(raw: unknown): { name: string; version?: string } | null {
+  const info = asRecordOrNull(raw);
+  const clean = (value: unknown): string =>
+    typeof value === "string"
+      ? value
+          // oxlint-disable-next-line no-control-regex
+          .replace(/[\u0000-\u001f\u007f-\u009f]/g, "")
+          .trim()
+          .slice(0, CLIENT_INFO_MAX)
+      : "";
+  const name = clean(info?.name);
+  if (!name) return null;
+  const version = clean(info?.version);
+  return version ? { name, version } : { name };
 }
 
 interface JsonRpcResponse {
@@ -87,6 +112,7 @@ export function createRpcHandler(
 
     switch (method) {
       case "initialize":
+        options.onClientInfo?.(parseClientInfo(asRecord(req.params).clientInfo));
         return reply(id, {
           protocolVersion: negotiateProtocol(asRecord(req.params).protocolVersion),
           capabilities: { tools: { listChanged: false } },

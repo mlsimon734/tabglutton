@@ -7,8 +7,14 @@ import { ConfigError, loadConfig, USAGE } from "./config.js";
 import { detachedHubLogPath, runDetachedHub } from "./detached.js";
 import { serveStdio } from "./mcp.js";
 import { createClipVerifier } from "./clip-verify.js";
+import { createDigestMirror } from "./digest-mirror.js";
 import { createObsidianVaultLookup, createObsidianVaultPathLookup } from "./obsidian-vaults.js";
-import { createToolCaller, GULLET_INSTRUCTIONS, GULLET_TOOLS } from "./tools.js";
+import {
+  createToolCaller,
+  GULLET_INSTRUCTIONS,
+  GULLET_TOOLS,
+  type McpClientInfo,
+} from "./tools.js";
 import { GULLET_VERSION } from "./version.js";
 
 export async function main(
@@ -81,7 +87,10 @@ export async function main(
   process.on("SIGTERM", shutdown);
 
   const knownObsidianVaults = createObsidianVaultLookup();
-  const verifyClip = createClipVerifier(createObsidianVaultPathLookup());
+  const vaultPaths = createObsidianVaultPathLookup();
+  const verifyClip = createClipVerifier(vaultPaths);
+  const mirrorDigest = createDigestMirror(config.digestMirror, vaultPaths);
+  let clientInfo: McpClientInfo | null = null;
 
   await serveStdio({
     // What the agent sees, and what namespaces its tools. Users know this thing
@@ -90,6 +99,9 @@ export async function main(
     version: GULLET_VERSION,
     instructions: GULLET_INSTRUCTIONS,
     tools: GULLET_TOOLS,
+    onClientInfo: (info) => {
+      clientInfo = info;
+    },
     call: createToolCaller({
       // The first-call wait lives inside the backend, identically for both roles.
       connections: () => backend.connections(),
@@ -100,6 +112,8 @@ export async function main(
       knownObsidianVaults,
       verifyClip,
       rivalHubs: () => backend.rivalHubs(),
+      clientInfo: () => clientInfo,
+      mirrorDigest,
     }),
   });
 

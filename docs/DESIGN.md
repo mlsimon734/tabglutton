@@ -207,6 +207,18 @@ muted). All have hover / active / disabled / focus-visible (3px accent ring) sta
   document, not the page beneath, so glass there would describe nothing. The frame is what
   makes the tokens reachable at all — an in-page shadow-DOM overlay gets either inline styles
   a strict `style-src` refuses or hand-copied hex. It never takes focus.
+- Digest panel (`popup/digest-panel.ts`, the full view's **Digest** side of the `Tabs | Digest`
+  seg) — an agent's report, so it is written in the tab list's vocabulary rather than a new
+  one: fate sections reuse `.section-head` (uppercase label, `.count-badge`, a result line
+  in the note slot) and rows reuse `.tab` with the letter-fallback favicon. One primary
+  action per section: **Keep in a group** is `.primary` (accent, the only fill on the
+  page), **Close n** is `.danger`, and once an action has run its button gives way to the
+  result line and a `.quiet` Undo. Row status sits in `.tab-marks`: `is-done` (accent,
+  uppercase micro) for what happened, muted sentence case for anything left alone and
+  why. The provenance line says who reported it and that the reading is untrusted; agent
+  text is plain text only, so a hostile title reads as its markup. The popup's
+  `#digest-ready` line is a bordered strip above the list with one `Open`, and disappears
+  once the panel has been opened.
 - Chrome stacks — `.chrome` positions and insets; in the **popup** the stack owns the
   material (`.u-glass` + `.u-glass-top` / `.u-glass-bottom`), in the **cockpit** the capsules
   inside it do (`.u-glass-float` for the all-round rim, since a detached object shows all
