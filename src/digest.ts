@@ -596,6 +596,11 @@ export interface DigestItemView {
   unmatchedAtReport: boolean;
   /** What the latest action for this item's section did to it. */
   outcome?: DigestItemOutcome;
+  /**
+   * An action already took this row — grouped, or closed and still gone — so
+   * it cannot be moved to another section.
+   */
+  locked: boolean;
 }
 
 export interface DigestSummary {
@@ -681,6 +686,7 @@ export function buildDigestView(
       ...(tab?.favIconUrl ? { favIconUrl: tab.favIconUrl } : {}),
       unmatchedAtReport: !item.observed.open,
       ...(outcome ? { outcome } : {}),
+      locked: outcome === "grouped" || (outcome === "closed" && !tab),
     };
   });
   return {

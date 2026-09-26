@@ -1242,6 +1242,10 @@ export interface DigestReportResult {
   next: string;
 }
 
+/** What `digest_report` tells the agent to tell the user. */
+export const DIGEST_REPORT_NEXT =
+  "The digest is in Tabglutton's full view, under Digest (the popup shows a Digest ready line). Nothing was grouped or closed: the user decides from there.";
+
 /** Gullet → extension: what became of the note. See `DigestMirrorState`. */
 export interface DigestMirrorParams {
   digestId: string;

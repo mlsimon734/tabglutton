@@ -1,4 +1,4 @@
-// Extension-side implementations of the five bridge methods (see docs/BRIDGE.md).
+// Extension-side implementations of the bridge methods (see docs/BRIDGE.md).
 // Everything that touches the real page — extraction, the Obsidian handoff — is
 // injected as a dependency by background.ts, which already owns that machinery;
 // this module only adds the tab/undo-log surface the agent sees.
@@ -14,8 +14,11 @@ import { markdownForClip, OBSIDIAN_HANDOFF_GAP_MS, resolveClipRequest } from "./
 import type { ClipPayload } from "./clip-format.js";
 import {
   BridgeRequestError,
+  DIGEST_REPORT_NEXT,
   errorMessage,
   parseClipConfirmParams,
+  parseDigestMirrorParams,
+  parseDigestReportParams,
   parseTabClipParams,
   parseTabReadParams,
   parseTabsCloseParams,
@@ -29,6 +32,7 @@ import {
   type BridgeWireMethod,
   type ClipMark,
   type ClosedTabEntry,
+  type DigestReportResult,
   type FileClipResult,
   type ObsidianClipResult,
   type TabClipParams,
@@ -49,6 +53,8 @@ import {
   type ClipMemory,
   type ClipTarget,
 } from "./clip-memory.js";
+import { digestCounts, digestId, noteSourceFor, observeReport } from "./digest.js";
+import { announceDigestsChanged, insertDigest, toLiveTab, updateDigest } from "./digest-store.js";
 import type { NormalizeOpts } from "./normalize.js";
 import { getFilePlatformOnce } from "./platform.js";
 import { createTaskQueue, delay } from "./serialize.js";
@@ -290,7 +296,7 @@ function hasTabId(tab: browser.tabs.Tab): tab is browser.tabs.Tab & { id: number
 
 // `browser.tabs.query({})` with no filter is broken on Zen
 // (zen-browser/desktop#11210), so "all windows" is assembled window by window.
-async function queryAllTabs(): Promise<browser.tabs.Tab[]> {
+export async function queryAllTabs(): Promise<browser.tabs.Tab[]> {
   const windows = await browser.windows.getAll();
   const perWindow = await Promise.all(
     windows.map(async (w) => (w.id === undefined ? [] : browser.tabs.query({ windowId: w.id }))),
@@ -298,7 +304,7 @@ async function queryAllTabs(): Promise<browser.tabs.Tab[]> {
   return perWindow.flat();
 }
 
-async function readUndoLog(): Promise<UndoBatch[]> {
+export async function readUndoLog(): Promise<UndoBatch[]> {
   const stored = await browser.storage.local.get(UNDO_LOG_KEY);
   return parseUndoLog((stored as Record<string, unknown>)[UNDO_LOG_KEY]);
 }
@@ -537,8 +543,9 @@ export class BridgeMethodRunner {
       case "clip_confirm":
         return this.clipConfirm(params);
       case "digest_report":
+        return this.digestReport(params);
       case "digest_mirror":
-        fail("bad-request", `Unknown method ${method}.`);
+        return this.digestMirror(params);
     }
   }
 
@@ -556,6 +563,83 @@ export class BridgeMethodRunner {
     const { url } = parseClipConfirmParams(raw);
     await this.noteClip(url, "verified", "obsidian");
     return { recorded: true };
+  }
+
+  /**
+   * Store an agent's digest for the user to act on — and do nothing else.
+   * Nothing is grouped, filed, or closed here; that waits for a click in the
+   * full view's Digest panel, which re-resolves every item at that moment.
+   *
+   * Identical reports are one digest (`digestId` is a content hash), so a report
+   * re-sent after a timeout answers `duplicate` with the mirror state it already
+   * has, and Gullet re-attempts only a mirror that never landed.
+   */
+  private async digestReport(raw: unknown): Promise<DigestReportResult> {
+    const params = parseDigestReportParams(raw);
+    const id = await digestId(params);
+    const settings = this.deps.getSettings();
+    const opts = normalizeOptsFrom(settings);
+    // Observed outside the lock: a listing is the slow part, and nothing about
+    // it depends on what the store holds.
+    const live = (await queryAllTabs()).map((tab) => toLiveTab(tab)).filter((tab) => tab !== null);
+    const { record, stored } = await insertDigest(id, () => {
+      const observed = observeReport(params.items, live, opts);
+      const label = params.sitting?.label;
+      return {
+        id,
+        receivedAt: Date.now(),
+        reporter: params.reporter ?? {},
+        sitting: {
+          ...(label ? { label } : {}),
+          sources: params.sitting?.sources ?? [],
+          ...(observed.firstAccessed !== undefined
+            ? { firstAccessed: observed.firstAccessed }
+            : {}),
+          ...(observed.lastAccessed !== undefined ? { lastAccessed: observed.lastAccessed } : {}),
+        },
+        items: observed.items,
+        closes: [],
+        mirror: { state: "pending" },
+      };
+    });
+    if (stored === "new") announceDigestsChanged();
+
+    const unmatched = record.items.flatMap((item, index) => (item.observed.open ? [] : [index]));
+    const vault = settings.obsidianVault.trim();
+    return {
+      digestId: record.id,
+      stored,
+      counts: digestCounts(record.items),
+      ...(unmatched.length > 0 ? { unmatched } : {}),
+      mirror: record.mirror,
+      // The note follows the user's own choice of destination: a vault is
+      // offered only when clips go to Obsidian. Gullet's config can name an
+      // absolute folder instead, which needs no vault at all.
+      ...(settings.clipDestination === "obsidian" && vault ? { vault } : {}),
+      note: noteSourceFor(record),
+      next: DIGEST_REPORT_NEXT,
+    };
+  }
+
+  /**
+   * Gullet wrote the digest's note, or could not. Sidecar-only (see
+   * `BRIDGE_SIDECAR_METHODS`): the one party that can see the disk is the one
+   * that says so. An unknown digest is not an error — it may have been pruned.
+   */
+  private async digestMirror(raw: unknown): Promise<{ recorded: boolean }> {
+    const params = parseDigestMirrorParams(raw);
+    const at = Date.now();
+    const updated = await updateDigest(params.digestId, (record) => ({
+      ...record,
+      mirror:
+        params.state === "written"
+          ? { state: "written", file: params.file ?? "", at }
+          : params.state === "failed"
+            ? { state: "failed", reason: params.reason ?? "unknown", at }
+            : { state: "off", at },
+    }));
+    if (updated) announceDigestsChanged();
+    return { recorded: updated !== null };
   }
 
   private async tabsList(raw: unknown): Promise<TabsListResult> {
