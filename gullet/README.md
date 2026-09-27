@@ -135,6 +135,19 @@ Automatic mode uses the ordered candidate set shared with the extension: `4589`,
 `17483`, `27613`, and `24193`. It discovers an existing same-token hub before binding, so
 multiple Claude Code and Codex sessions converge even if an earlier candidate later frees up.
 
+Each `digest_report` is also written as a markdown note, by Gullet, straight to disk:
+into `Digests/` in the Obsidian vault Tabglutton files clips into, named
+`<date> <feed hosts>.md`. The note is written once — a re-sent report finds its own note by
+the `digest_id` in its frontmatter — and never overwrites a note that is already there.
+`digestMirror` in `config.json` turns it off or moves it; an absolute `folder` needs no vault
+at all, which is the way to keep digests when clips go to the download folder:
+
+```jsonc
+{
+  "digestMirror": { "enabled": true, "folder": "Digests" },
+}
+```
+
 Diagnostics go to **stderr**; stdout is the MCP transport and carries nothing else.
 
 ### The background hub
@@ -159,14 +172,15 @@ hub's diagnostics then come out on that process's stderr with everything else.
 
 ## Tools
 
-| Tool         | What it does                                                                                                                                                                                    |
-| ------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `tabs_list`  | Metadata for every open tab — id, title, url, `lastAccessed`, `discarded`, `pinned`, `active`, window, and `hidden` on Firefox/Zen. No page content, so it stays cheap across hundreds of tabs. |
-| `tabs_load`  | Reloads discarded tabs so they can be read, ≤20 per call, a few at a time. Off by default — see below.                                                                                          |
-| `tab_read`   | Extracts one loaded tab as clean markdown via Defuddle.                                                                                                                                         |
-| `tab_clip`   | Files a tab exactly as the popup's Devour does — into Obsidian or as a markdown file, per your setting. Reports which, and who confirmed it. Optionally closes it after.                        |
-| `tabs_close` | Closes tabs. Records the batch first and returns a `batchId`.                                                                                                                                   |
-| `undo_close` | Reopens a recorded batch.                                                                                                                                                                       |
+| Tool            | What it does                                                                                                                                                                                                                           |
+| --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `tabs_list`     | Metadata for every open tab — id, title, url, `lastAccessed`, `discarded`, `pinned`, `active`, window, and `hidden` on Firefox/Zen. No page content, so it stays cheap across hundreds of tabs.                                        |
+| `tabs_load`     | Reloads discarded tabs so they can be read, ≤20 per call, a few at a time. Off by default — see below.                                                                                                                                 |
+| `tab_read`      | Extracts one loaded tab as clean markdown via Defuddle.                                                                                                                                                                                |
+| `tab_clip`      | Files a tab exactly as the popup's Devour does — into Obsidian or as a markdown file, per your setting. Reports which, and who confirmed it. Optionally closes it after.                                                               |
+| `tabs_close`    | Closes tabs. Records the batch first and returns a `batchId`.                                                                                                                                                                          |
+| `undo_close`    | Reopens a recorded batch.                                                                                                                                                                                                              |
+| `digest_report` | Hands Tabglutton an agent's verdict on a sitting's tabs (worth your time / file / close / could not read). Stored and shown in the full view's Digest panel; nothing is closed on receipt. Gullet writes the digest as a note (below). |
 
 Deliberately absent: navigate, click, type, evaluate. The agent can read what you already
 chose to open, file it, and clean up — it cannot act as you. Adding anything richer means

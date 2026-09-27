@@ -5,12 +5,20 @@
 // break the Firefox background, which tsc emits unbundled — the bare specifier
 // is unresolvable in a Firefox module service worker and aborts registration.
 import { BridgeClient, type BridgeStatus } from "./bridge-client.js";
-import { BridgeMethodRunner, isHttpUrl } from "./bridge-methods.js";
-import type { ClipMark } from "./bridge-protocol.js";
+import { BridgeMethodRunner, isHttpUrl, queryAllTabs, readUndoLog } from "./bridge-methods.js";
+import type { ClipMark, TabsCloseResult, UndoCloseResult } from "./bridge-protocol.js";
 import { getBrowserInfoOnce } from "./browser-info.js";
 import { clipDownloadPath, saveClipFile, type SavedClipFile } from "./clip-file.js";
 import { thinClipVerdict, type ClipGuardReason, type ThinClipVerdict } from "./clip-guard.js";
 import type { DiagnosticsBackgroundFacts } from "./diagnostics.js";
+import { isSenderPage } from "./digest.js";
+import {
+  DigestActions,
+  isDigestMutation,
+  liveTabById,
+  type DigestMessage,
+} from "./digest-actions.js";
+import { toLiveTab } from "./digest-store.js";
 import {
   dupNoticeAfterReopen,
   planDupNotice,
@@ -75,7 +83,8 @@ export type DupNoticeActMessage = {
   nonce: string;
   records?: ClosedTabRecord[];
 };
-export type OpenCockpitMessage = { type: "open-cockpit" };
+/** `view: "digest"` opens (or switches a reused tab) straight to the Digest panel. */
+export type OpenCockpitMessage = { type: "open-cockpit"; view?: "digest" };
 export type GetBridgeStatusMessage = { type: "get-bridge-status" };
 export type GetDiagnosticsMessage = { type: "get-diagnostics" };
 export type ApplyGroupingMessage = { type: "apply-grouping"; groups: PlannedGroup[] };
@@ -91,7 +100,8 @@ export type IncomingMessage =
   | OpenCockpitMessage
   | GetBridgeStatusMessage
   | GetDiagnosticsMessage
-  | ApplyGroupingMessage;
+  | ApplyGroupingMessage
+  | DigestMessage;
 
 /**
  * Everything the diagnostics block needs that only this page knows — the bridge
@@ -103,6 +113,8 @@ export type GetDiagnosticsResponse = DiagnosticsBackgroundFacts;
 export interface ApplyGroupingResponse {
   /** Tabs actually placed into a group. */
   grouped: number;
+  /** Their ids — the Digest panel reports per item. */
+  groupedIds: number[];
   /** Browser groups created or added to. */
   groupsTouched: number;
   /**
@@ -252,6 +264,8 @@ interface ClipCurrentResultMessage extends ClipCurrentResponse {
   type: "clip-current-result";
   requestId?: string;
 }
+
+const COCKPIT_URL = browser.runtime.getURL("popup/devour.html");
 
 let settings: Settings = defaults();
 /**
@@ -1484,76 +1498,132 @@ async function reopenClosedTabs(records: ClosedTabRecord[]): Promise<{ restored:
   return { restored };
 }
 
-browser.runtime.onMessage.addListener(async (rawMsg: unknown): Promise<unknown> => {
-  if (!rawMsg || typeof rawMsg !== "object") return undefined;
-  const msg = rawMsg as IncomingMessage;
-  switch (msg.type) {
-    case "clip-current-result":
-      return finishClipResult(msg);
-    case "get-scoped-tabs": {
-      const tabs = (await queryScopedTabs()).filter(tabInScope);
-      // Both read once for the whole listing, not once per tab.
-      const memory = await loadClipMemory();
-      const opts = normalizeOptsFrom(settings);
-      const response: GetScopedTabsResponse = {
-        tabs: tabs
-          .map((t) => tabToPopupTab(t, memory, opts))
-          .sort((a, b) => (a.windowId ?? 0) - (b.windowId ?? 0) || a.index - b.index),
-        settings,
-      };
-      return response;
-    }
-    case "clip-selected-tabs":
-      return clipSelectedTabs(Array.isArray(msg.tabIds) ? msg.tabIds : []);
-    case "close-duplicates":
-      return closeDuplicateTabs();
-    case "close-tabs": {
-      const ids = Array.isArray(msg.tabIds) ? msg.tabIds : [];
-      if (ids.length) {
-        await browser.tabs.remove(ids);
-      }
-      return { closed: ids.length };
-    }
-    case "apply-grouping":
-      return applyGrouping(Array.isArray(msg.groups) ? msg.groups : []);
-    case "focus-tab": {
-      const tab = await browser.tabs.get(msg.tabId);
-      if (tab.id !== undefined) {
-        await browser.tabs.update(tab.id, { active: true });
-      }
-      if (tab.windowId !== undefined) {
-        await browser.windows.update(tab.windowId, { focused: true });
-      }
-      return { ok: true };
-    }
-    case "reopen-tabs":
-      return reopenClosedTabs(Array.isArray(msg.records) ? msg.records : []);
-    case "dup-notice-act": {
-      // The frame lives in a page nothing here controls, so it proves itself
-      // before it is allowed to close or restore anything.
-      if (!(await isDupNoticeNonce(msg.nonce))) {
-        console.warn("[tabglutton] duplicate notice: refused an unproven action");
-        return undefined;
-      }
-      if (msg.action === "close") return closeDuplicateTabs();
-      return reopenClosedTabs(Array.isArray(msg.records) ? msg.records : []);
-    }
-    case "open-cockpit": {
-      await openCockpit();
-      return { ok: true };
-    }
-    case "get-bridge-status": {
-      const response: GetBridgeStatusResponse = {
-        status: bridge.status,
-        port: bridge.connectedPort,
-      };
-      return response;
-    }
-    case "get-diagnostics":
-      return collectDiagnostics();
-  }
-  return undefined;
+/**
+ * The Digest panel's surface. Agent-written text reaches it, and so does any
+ * page that can send this extension a message — `notice/dup-notice.html` is
+ * web-accessible and so framable by any site — so the panel's mutations are
+ * accepted from the full view alone, and the popup may only read.
+ */
+const digestActions = new DigestActions({
+  opts: () => normalizeOptsFrom(settings),
+  liveTabs: async () =>
+    (await queryAllTabs())
+      .map((tab) => toLiveTab(tab, safeFavIconUrl(tab.favIconUrl)))
+      .filter((tab) => tab !== null),
+  getTab: liveTabById,
+  readUndoLog,
+  closeTabs: async (tabIds) =>
+    (await bridgeRunner.run("tabs_close", { tabIds })) as TabsCloseResult,
+  undoClose: async (batchId) =>
+    (await bridgeRunner.run("undo_close", { batchId })) as UndoCloseResult,
+  group: async (groups) => {
+    const res = await applyGrouping(groups);
+    return {
+      groupedIds: res.groupedIds,
+      ...(res.unsupported ? { unsupported: res.unsupported } : {}),
+    };
+  },
+  focusTab,
+  openUrl: async (url) => {
+    await browser.tabs.create({ url, active: true });
+  },
 });
+
+const POPUP_URL = browser.runtime.getURL("popup/popup.html");
+
+function digestMessageAllowed(type: string, sender: browser.runtime.MessageSender): boolean {
+  if (sender.id !== undefined && sender.id !== browser.runtime.id) return false;
+  if (isSenderPage(sender.url, COCKPIT_URL)) return true;
+  return !isDigestMutation(type) && isSenderPage(sender.url, POPUP_URL);
+}
+
+async function focusTab(tabId: number): Promise<void> {
+  const tab = await browser.tabs.get(tabId);
+  if (tab.id !== undefined) {
+    await browser.tabs.update(tab.id, { active: true });
+  }
+  if (tab.windowId !== undefined) {
+    await browser.windows.update(tab.windowId, { focused: true });
+  }
+}
+
+browser.runtime.onMessage.addListener(
+  async (rawMsg: unknown, sender: browser.runtime.MessageSender): Promise<unknown> => {
+    if (!rawMsg || typeof rawMsg !== "object") return undefined;
+    const msg = rawMsg as IncomingMessage;
+    switch (msg.type) {
+      case "clip-current-result":
+        return finishClipResult(msg);
+      case "get-scoped-tabs": {
+        const tabs = (await queryScopedTabs()).filter(tabInScope);
+        // Both read once for the whole listing, not once per tab.
+        const memory = await loadClipMemory();
+        const opts = normalizeOptsFrom(settings);
+        const response: GetScopedTabsResponse = {
+          tabs: tabs
+            .map((t) => tabToPopupTab(t, memory, opts))
+            .sort((a, b) => (a.windowId ?? 0) - (b.windowId ?? 0) || a.index - b.index),
+          settings,
+        };
+        return response;
+      }
+      case "clip-selected-tabs":
+        return clipSelectedTabs(Array.isArray(msg.tabIds) ? msg.tabIds : []);
+      case "close-duplicates":
+        return closeDuplicateTabs();
+      case "close-tabs": {
+        const ids = Array.isArray(msg.tabIds) ? msg.tabIds : [];
+        if (ids.length) {
+          await browser.tabs.remove(ids);
+        }
+        return { closed: ids.length };
+      }
+      case "apply-grouping":
+        return applyGrouping(Array.isArray(msg.groups) ? msg.groups : []);
+      case "focus-tab":
+        await focusTab(msg.tabId);
+        return { ok: true };
+      case "reopen-tabs":
+        return reopenClosedTabs(Array.isArray(msg.records) ? msg.records : []);
+      case "dup-notice-act": {
+        // The frame lives in a page nothing here controls, so it proves itself
+        // before it is allowed to close or restore anything.
+        if (!(await isDupNoticeNonce(msg.nonce))) {
+          console.warn("[tabglutton] duplicate notice: refused an unproven action");
+          return undefined;
+        }
+        if (msg.action === "close") return closeDuplicateTabs();
+        return reopenClosedTabs(Array.isArray(msg.records) ? msg.records : []);
+      }
+      case "open-cockpit": {
+        await openCockpit(msg.view);
+        return { ok: true };
+      }
+      case "get-bridge-status": {
+        const response: GetBridgeStatusResponse = {
+          status: bridge.status,
+          port: bridge.connectedPort,
+        };
+        return response;
+      }
+      case "get-diagnostics":
+        return collectDiagnostics();
+      case "get-digests":
+      case "digest-seen":
+      case "digest-set-fate":
+      case "digest-act":
+      case "digest-undo":
+      case "digest-show":
+        await settingsReady;
+        if (!digestMessageAllowed(msg.type, sender)) {
+          console.warn("[tabglutton] digest: refused a message from outside the full view");
+          return undefined;
+        }
+        return digestActions.handle(msg);
+    }
+    return undefined;
+  },
+);
 
 /**
  * Materialize a grouping plan the cockpit previewed. The plan is the contract:
@@ -1584,6 +1654,7 @@ async function applyGrouping(groups: PlannedGroup[]): Promise<ApplyGroupingRespo
   if (typeof tabsApi.group !== "function" || !tabGroups) {
     return {
       grouped: 0,
+      groupedIds: [],
       groupsTouched: 0,
       unsupported:
         typeof tabsApi.group !== "function"
@@ -1593,6 +1664,7 @@ async function applyGrouping(groups: PlannedGroup[]): Promise<ApplyGroupingRespo
   }
 
   let grouped = 0;
+  const groupedIds: number[] = [];
   let groupsTouched = 0;
   for (const plan of groups) {
     const wanted = Array.isArray(plan.tabIds) ? plan.tabIds.filter(Number.isInteger) : [];
@@ -1625,6 +1697,7 @@ async function applyGrouping(groups: PlannedGroup[]): Promise<ApplyGroupingRespo
               ...(plan.windowId >= 0 ? { createProperties: { windowId: plan.windowId } } : {}),
             });
       grouped += live.length;
+      groupedIds.push(...live);
       groupsTouched += 1;
       try {
         await tabGroups.update(groupId, { title: plan.name, color: plan.color });
@@ -1638,7 +1711,7 @@ async function applyGrouping(groups: PlannedGroup[]): Promise<ApplyGroupingRespo
       console.warn("[tabglutton] tabs.group failed for", plan.name, err);
     }
   }
-  return { grouped, groupsTouched };
+  return { grouped, groupedIds, groupsTouched };
 }
 
 /**
@@ -1738,20 +1811,20 @@ async function platformLabel(): Promise<string> {
   }
 }
 
-const COCKPIT_URL = browser.runtime.getURL("popup/devour.html");
-
-async function openCockpit(): Promise<void> {
+async function openCockpit(view?: "digest"): Promise<void> {
+  const url = view ? `${COCKPIT_URL}#${view}` : COCKPIT_URL;
   try {
     const existing = await browser.tabs.query({ url: COCKPIT_URL });
     const reusable = existing.find((t) => t.id !== undefined);
     if (reusable?.id !== undefined) {
-      await browser.tabs.update(reusable.id, { active: true });
+      // A hash change does not reload the page; the full view listens for it.
+      await browser.tabs.update(reusable.id, { active: true, ...(view ? { url } : {}) });
       if (reusable.windowId !== undefined) {
         await browser.windows.update(reusable.windowId, { focused: true });
       }
       return;
     }
-    await browser.tabs.create({ url: COCKPIT_URL, active: true });
+    await browser.tabs.create({ url, active: true });
   } catch (err) {
     console.warn("[tabglutton] failed to open cockpit", err);
   }

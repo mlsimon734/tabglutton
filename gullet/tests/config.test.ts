@@ -162,6 +162,46 @@ describe("CLI and environment precedence", () => {
     ).rejects.toThrow(/"detach"/);
   });
 
+  describe("digestMirror", () => {
+    const env = { HOME: "/home/michael" };
+    const withConfig = (json: string) =>
+      loadConfig([], env, runtime({ "/home/michael/.config/tabglutton/config.json": json }));
+
+    test("defaults to on, into Digests/ in the vault", async () => {
+      expect((await parsed([])).digestMirror).toEqual({ enabled: true, folder: "Digests" });
+    });
+
+    test("can be turned off or pointed elsewhere", async () => {
+      expect((await withConfig('{"digestMirror":{"enabled":false}}')).digestMirror).toEqual({
+        enabled: false,
+        folder: "Digests",
+      });
+      expect(
+        (await withConfig('{"digestMirror":{"folder":"/Notes/Digests/"}}')).digestMirror,
+      ).toEqual({ enabled: true, folder: "/Notes/Digests/" });
+      expect(
+        (await withConfig('{"digestMirror":{"folder":"/Inbox/Digests/"}}')).digestMirror.folder,
+      ).toBe("/Inbox/Digests/");
+      expect(
+        (await withConfig('{"digestMirror":{"folder":"Inbox/Digests/"}}')).digestMirror.folder,
+      ).toBe("Inbox/Digests");
+    });
+
+    test("refuses a folder that climbs out of the vault, and malformed values", async () => {
+      await expect(withConfig('{"digestMirror":{"folder":"../elsewhere"}}')).rejects.toThrow(
+        /inside the vault/,
+      );
+      await expect(withConfig('{"digestMirror":{"folder":""}}')).rejects.toThrow(/non-empty/);
+      await expect(withConfig('{"digestMirror":{"enabled":"yes"}}')).rejects.toThrow(
+        /digestMirror.enabled/,
+      );
+      await expect(withConfig('{"digestMirror":{"vault":"x"}}')).rejects.toThrow(
+        /digestMirror.vault/,
+      );
+      await expect(withConfig('{"digestMirror":true}')).rejects.toThrow(/must be an object/);
+    });
+  });
+
   // The spawned hub reads its token from stdin, so resolving one here would at
   // best be redundant work and at worst a `tokenCommand` blocking forever on a
   // locked secret manager in a process with no terminal.

@@ -21,6 +21,19 @@
         </div>
 
         <div class="header-filters">
+          <!-- Shown only once a digest exists. Digest mode swaps the queue for
+               the agent's report and hides every control that acts on a
+               queue selection. -->
+          <div id="view-switch" class="seg" role="group" aria-label="View" hidden>
+            <button type="button" class="seg-btn is-on" data-view="tabs" aria-pressed="true">
+              Tabs
+            </button>
+            <button type="button" class="seg-btn" data-view="digest" aria-pressed="false">
+              Digest
+              <span id="digest-unseen" class="count-badge" hidden>0</span>
+            </button>
+          </div>
+
           <div class="header-search">
             <svg class="search-glyph" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
               <circle cx="7" cy="7" r="4.4" fill="none" stroke="currentColor" stroke-width="1.4" />
@@ -98,6 +111,7 @@
           <p id="empty-sub" class="muted"></p>
         </div>
         <ul id="groups"></ul>
+        <div id="digest" class="digest" hidden></div>
       </section>
 
       <aside class="inspector" aria-label="Inspector">
@@ -171,7 +185,12 @@
           <span class="action-divider" aria-hidden="true"></span>
           <button id="close-selected" type="button" class="danger" disabled>Close</button>
         </div>
-        <div class="kbd-legend" aria-hidden="true">
+        <div class="kbd-legend kbd-legend-digest" aria-hidden="true">
+          <span class="kbd-hint"><kbd>j</kbd><kbd>k</kbd>move</span>
+          <span class="kbd-hint"><kbd>1</kbd><kbd>2</kbd><kbd>3</kbd><kbd>4</kbd>section</span>
+          <span class="kbd-hint"><kbd>↵</kbd>show</span>
+        </div>
+        <div class="kbd-legend kbd-legend-tabs" aria-hidden="true">
           <span class="kbd-hint"><kbd>j</kbd><kbd>k</kbd>move</span>
           <span class="kbd-hint"><kbd>space</kbd>toggle</span>
           <span class="kbd-hint"><kbd>d</kbd>devour</span>

@@ -4,7 +4,12 @@
 // end rather than in the extension's pass.
 
 import type { BridgeTab, ClipMark } from "../../src/bridge-protocol.js";
-import { isTrackingParam } from "../../src/normalize.js";
+import { clipText as clip, displayUrl } from "../../src/normalize.js";
+
+// The listing's URL form lives beside `normalizeUrl` because the extension has to
+// recognise it too: a `digest_report` item carries the URL exactly as a listing
+// showed it, clipped or not (`observeReport`).
+export { displayUrl, TAB_URL_MAX } from "../../src/normalize.js";
 
 /**
  * Titles are clipped, not summarised. 120 is where the curve turns: measured
@@ -16,29 +21,6 @@ import { isTrackingParam } from "../../src/normalize.js";
  * already says.
  */
 export const TAB_TITLE_MAX = 120;
-
-/**
- * URLs are trimmed structurally first (see `displayUrl`) and only clipped as a
- * backstop, which is why this is generous. A URL cut mid-string stops being a
- * URL: it cannot be copied, and two distinct tabs can clip to the same prefix
- * and read as duplicates. Losing a data: URI's payload is the case this exists
- * for, and there the prefix really is all the information there is.
- */
-export const TAB_URL_MAX = 200;
-
-/** Trailing ellipsis, so a clipped value can never be read as a complete one. */
-const ELLIPSIS = "…";
-
-/**
- * Tolerates a non-string because the tabs reaching here came off a socket. The
- * extension guarantees `title` and `url`, but a version-skewed or malformed one
- * does not, and one field missing from one tab must not throw away a listing of
- * eight hundred — the same reason `tabs_list` keeps a failing browser's partner.
- */
-function clip(value: unknown, max: number): string {
-  const text = typeof value === "string" ? value : "";
-  return text.length <= max ? text : text.slice(0, max - 1) + ELLIPSIS;
-}
 
 /**
  * A tab as it appears in a rendered listing. `index` is gone — it duplicated
@@ -65,36 +47,6 @@ export interface RenderedTabs {
   tabs: RenderedTab[];
   /** The one window every tab is in, hoisted out of them. Omitted otherwise. */
   windowId?: number;
-}
-
-/**
- * A shorter URL that is still a URL. Drops the click-tracking params, the `www.`
- * and the trailing slash — which is where long URLs get long — while keeping the
- * scheme, the parameter order the page actually used, and the fragment.
- *
- * Keeping the scheme costs ~8 bytes a tab and buys a string an agent can hand
- * back to the user verbatim; keeping the fragment is not optional, because for
- * an SPA the fragment is the whole page identity. Params keep their original
- * order rather than being sorted: `normalizeUrl` sorts because it is building a
- * comparison key, and this is not one.
- */
-export function displayUrl(raw: string): string {
-  let url: URL;
-  try {
-    url = new URL(raw);
-  } catch {
-    // Also the path for a missing or non-string url; see `clip`.
-    return clip(raw, TAB_URL_MAX);
-  }
-  if (url.protocol !== "http:" && url.protocol !== "https:") return clip(raw, TAB_URL_MAX);
-
-  const host = url.host.toLowerCase().replace(/^www\./, "");
-  const path = url.pathname.length > 1 ? url.pathname.replace(/\/$/, "") : "";
-  const kept = [...url.searchParams].filter(([key]) => !isTrackingParam(key));
-  const search = kept.length
-    ? "?" + kept.map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`).join("&")
-    : "";
-  return clip(`${url.protocol}//${host}${path}${search}${url.hash}`, TAB_URL_MAX);
 }
 
 /**
