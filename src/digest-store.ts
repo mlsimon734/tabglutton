@@ -93,12 +93,14 @@ export function toLiveTab(tab: browser.tabs.Tab, favIconUrl?: string): LiveTab |
     id: tab.id,
     url: tab.url ?? "",
     windowId: tab.windowId ?? -1,
+    index: tab.index,
     incognito: tab.incognito,
     pinned: tab.pinned,
     active: tab.active,
     // Chrome has no `hidden`; on Firefox it approximates another Zen workspace.
     hidden: !IS_CHROME && tab.hidden === true,
     discarded: tab.discarded === true,
+    ...(tab.groupId !== undefined && tab.groupId !== -1 ? { grouped: true } : {}),
     ...(tab.lastAccessed !== undefined && tab.lastAccessed > 0
       ? { lastAccessed: tab.lastAccessed }
       : {}),

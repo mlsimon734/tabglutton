@@ -16,7 +16,9 @@ import {
   resolveDigestItems,
   retainDigests,
   summarizeDigest,
-  withAction,
+  moveUndoState,
+  withClose,
+  withMove,
   DIGEST_FRESH_MS,
   DIGEST_STORE_VERSION,
   type DigestItemRecord,
@@ -33,6 +35,7 @@ function tab(id: number, url: string, extra: Partial<LiveTab> = {}): LiveTab {
     id,
     url,
     windowId: 1,
+    index: 0,
     incognito: false,
     pinned: false,
     active: false,
@@ -214,12 +217,15 @@ describe("observeReport", () => {
 });
 
 describe("planDigestAction and recheck", () => {
-  test("close excludes pinned and active; keep excludes pinned and hidden", () => {
-    expect(exclusionFor(tab(1, "u", { pinned: true }), "keep")).toBe("pinned");
+  test("close excludes pinned and active; move to top excludes pinned and hidden", () => {
+    expect(exclusionFor(tab(1, "u", { pinned: true }), "top")).toBe("pinned");
     expect(exclusionFor(tab(1, "u", { active: true }), "close")).toBe("active");
-    expect(exclusionFor(tab(1, "u", { active: true }), "keep")).toBeNull();
-    expect(exclusionFor(tab(1, "u", { hidden: true }), "keep")).toBe("hidden");
+    expect(exclusionFor(tab(1, "u", { active: true }), "top")).toBeNull();
+    expect(exclusionFor(tab(1, "u", { hidden: true }), "top")).toBe("hidden");
     expect(exclusionFor(tab(1, "u", { hidden: true }), "close")).toBeNull();
+    // Moving a grouped tab out of its group's span would ungroup it.
+    expect(exclusionFor(tab(1, "u", { grouped: true }), "top")).toBe("in-group");
+    expect(exclusionFor(tab(1, "u", { grouped: true }), "close")).toBeNull();
   });
 
   test("plans only the section's rows, counting moved rows in their new section", () => {
@@ -245,8 +251,8 @@ describe("planDigestAction and recheck", () => {
       { index: 4, outcome: "active" },
       { index: 5, outcome: "gone" },
     ]);
-    const keep = planDigestAction(r, "keep", live, opts);
-    expect(keep.targets.map((t) => t.index)).toEqual([2]);
+    const top = planDigestAction(r, "top", live, opts);
+    expect(top.targets.map((t) => t.index)).toEqual([2]);
   });
 
   test("recheck refuses a tab that navigated or got pinned since planning", () => {
@@ -254,7 +260,7 @@ describe("planDigestAction and recheck", () => {
     expect(recheckTarget(target, tab(1, "https://a.test/"), "close", opts)).toBeNull();
     expect(recheckTarget(target, tab(1, "https://b.test/"), "close", opts)).toBe("changed");
     expect(recheckTarget(target, tab(1, ""), "close", opts)).toBe("changed");
-    expect(recheckTarget(target, tab(1, "https://a.test/", { pinned: true }), "keep", opts)).toBe(
+    expect(recheckTarget(target, tab(1, "https://a.test/", { pinned: true }), "top", opts)).toBe(
       "pinned",
     );
     expect(recheckTarget(target, null, "close", opts)).toBe("gone");
@@ -270,7 +276,7 @@ describe("close and undo state come from the undo log", () => {
   });
 
   test("by batch id", () => {
-    const r = withAction(record(items), "close", {
+    const r = withClose(record(items), {
       startedAt: 1500,
       batchId: "b1",
       outcomes: [],
@@ -304,7 +310,7 @@ describe("close and undo state come from the undo log", () => {
   test("the newest restorable close wins, and history is capped", () => {
     let r = record(items);
     for (let i = 0; i < 7; i++) {
-      r = withAction(r, "close", { startedAt: i, batchId: `b${i}`, outcomes: [] });
+      r = withClose(r, { startedAt: i, batchId: `b${i}`, outcomes: [] });
     }
     expect(r.closes.map((c) => c.batchId)).toEqual(["b6", "b5", "b4", "b3", "b2"]);
     const log = [batch("b4", ["https://a.test/"]), batch("b2", ["https://b.test/"])];
@@ -371,14 +377,18 @@ describe("views", () => {
   });
 
   test("buildDigestView merges live state, outcomes, and undo", () => {
-    const r = withAction(
+    const r = withMove(
       record([
         rec(1, "https://www.a.test/x", { fate: "worth-it" }),
         rec(2, "https://b.test/"),
         rec(3, "https://c.test/", { observed: { open: false }, anchor: undefined }),
       ]),
-      "keep",
-      { startedAt: 1, at: 2, outcomes: [{ index: 0, outcome: "grouped" }] },
+      {
+        startedAt: 1,
+        at: 2,
+        outcomes: [{ index: 0, outcome: "moved" }],
+        from: [{ tabId: 1, windowId: 1, index: 4 }],
+      },
     );
     const view = buildDigestView(
       r,
@@ -392,13 +402,81 @@ describe("views", () => {
       tabId: 1,
       pinned: true,
       favIconUrl: "https://a.test/f.ico",
-      outcome: "grouped",
+      outcome: "moved",
       unmatchedAtReport: false,
     });
     expect(view.items[1]).toMatchObject({ live: "gone" });
     expect(view.items[1]?.tabId).toBeUndefined();
     expect(view.items[2]?.unmatchedAtReport).toBe(true);
     expect(view.undo).toBeNull();
+    // A moved row stays movable: its tab is open where it was put.
+    expect(view.items[0]?.locked).toBe(false);
+    expect(view.moveUndo).toBe(1);
+    expect(moveUndoState({ top: { ...r.top!, undoneAt: 3 } })).toBeNull();
+    // Once undone, the rows no longer claim to be at the top.
+    const undone = buildDigestView({ ...r, top: { ...r.top!, undoneAt: 3 } }, [], [], opts);
+    expect(undone.items[0]?.outcome).toBeUndefined();
+  });
+
+  test("page facts join by the named tab and URL, never by URL alone", () => {
+    const r = record([
+      rec(1, "https://a.test/x", { fate: "worth-it" }),
+      rec(2, "https://b.test/"),
+      rec(3, "https://c.test/"),
+    ]);
+    const facts = [
+      { tabId: 1, url: "https://www.a.test/x", readAt: 5, description: "A's own words" },
+      // The right page, read in a different tab: not this item's read.
+      { tabId: 9, url: "https://b.test/", readAt: 5, description: "someone else's tab" },
+      // The right tab, since navigated: not this page.
+      { tabId: 3, url: "https://c.test/other", readAt: 5, description: "another page" },
+      { tabId: 2, url: "https://b.test/", readAt: 5, favicon: "https://b.test/f.ico" },
+    ];
+    const view = buildDigestView(r, [tab(1, "https://a.test/x")], [], opts, { facts });
+    expect(view.items[0]?.page).toEqual({ readAt: 5, description: "A's own words" });
+    expect(view.items[1]?.page?.description).toBeUndefined();
+    // A gone tab keeps the favicon it had when it was read.
+    expect(view.items[1]?.favIconUrl).toBe("https://b.test/f.ico");
+    expect(view.items[2]?.page).toBeUndefined();
+  });
+
+  test("a closed row locks while its page is gone, and not once copies reopen", () => {
+    const r = withClose(record([rec(1, "https://a.test/"), rec(2, "https://a.test/")]), {
+      startedAt: 1,
+      at: 2,
+      batchId: "b",
+      outcomes: [
+        { index: 0, outcome: "closed" },
+        { index: 1, outcome: "closed" },
+      ],
+    });
+    const gone = buildDigestView(r, [], [], opts);
+    expect(gone.items.map((i) => [i.live, i.locked])).toEqual([
+      ["gone", true],
+      ["gone", true],
+    ]);
+    // An Undo reopened both under new ids: which is which cannot be told.
+    const reopened = buildDigestView(
+      r,
+      [tab(7, "https://a.test/"), tab(8, "https://a.test/")],
+      [],
+      opts,
+    );
+    expect(reopened.items.map((i) => [i.live, i.locked])).toEqual([
+      ["ambiguous", false],
+      ["ambiguous", false],
+    ]);
+  });
+
+  test("a 0.5.0 Keep record is dropped on parse, the digest kept", () => {
+    const r = record([rec(1, "https://a.test/")]);
+    const legacy = {
+      ...r,
+      keep: { startedAt: 1, outcomes: [{ index: 0, outcome: "grouped" }] },
+    };
+    const parsed = parseDigestStore({ v: DIGEST_STORE_VERSION, digests: [legacy] });
+    expect(parsed.digests).toHaveLength(1);
+    expect("keep" in (parsed.digests[0] ?? {})).toBe(false);
   });
 
   test("summary and the popup's freshness rule", () => {

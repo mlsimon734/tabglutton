@@ -3,7 +3,8 @@
 // right before touching it (`recheckTarget`), and reports per item what it did.
 // The destructive half goes through the bridge's own `tabs_close` and
 // `undo_close`, so every undo invariant holds with no second implementation
-// (docs/ENGINEERING.md §Undo invariants).
+// (docs/ENGINEERING.md §Undo invariants). Move to top only reorders; it keeps
+// the positions it moved tabs from on the digest, and its Undo puts them back.
 
 import {
   DIGEST_FATES,
@@ -13,22 +14,25 @@ import {
 } from "./bridge-protocol.js";
 import {
   buildDigestView,
-  DIGEST_GROUP_NAME,
   planDigestAction,
   recheckTarget,
   summarizeDigest,
-  withAction,
+  withClose,
+  withMove,
   type DigestAction,
   type DigestActionRecord,
   type DigestItemOutcome,
   type DigestRecord,
   type DigestSummary,
+  type DigestTarget,
   type DigestView,
+  type FileDestination,
   type LiveTab,
 } from "./digest.js";
 import { announceDigestsChanged, readDigests, toLiveTab, updateDigest } from "./digest-store.js";
-import type { PlannedGroup } from "./grouping.js";
+import type { TabPosition } from "./move-to-top.js";
 import type { NormalizeOpts } from "./normalize.js";
+import type { PageFacts } from "./page-facts.js";
 import type { UndoBatch } from "./undo-log.js";
 
 export type GetDigestsMessage = { type: "get-digests"; digestId?: string; view?: boolean };
@@ -42,6 +46,8 @@ export type DigestSetFateMessage = {
 };
 export type DigestActMessage = { type: "digest-act"; digestId: string; action: DigestAction };
 export type DigestUndoMessage = { type: "digest-undo"; digestId: string };
+/** Put the latest Move to top's tabs back where they were. */
+export type DigestUndoMoveMessage = { type: "digest-undo-move"; digestId: string };
 export type DigestShowMessage = { type: "digest-show"; digestId: string; index: number };
 
 export type DigestMessage =
@@ -50,6 +56,7 @@ export type DigestMessage =
   | DigestSetFateMessage
   | DigestActMessage
   | DigestUndoMessage
+  | DigestUndoMoveMessage
   | DigestShowMessage;
 
 export interface GetDigestsResponse {
@@ -63,12 +70,10 @@ export type DigestActResponse =
   | {
       ok: true;
       action: DigestAction;
-      /** Items grouped or closed. */
+      /** Items moved or closed. */
       done: number;
       outcomes: Array<{ index: number; outcome: DigestItemOutcome }>;
       batchId?: string;
-      /** This engine cannot group at all; nothing moved. */
-      unsupported?: string;
     }
   | { ok: false; error: string };
 
@@ -79,7 +84,19 @@ export interface DigestActionDeps {
   readUndoLog: () => Promise<UndoBatch[]>;
   closeTabs: (tabIds: number[]) => Promise<TabsCloseResult>;
   undoClose: (batchId: string) => Promise<UndoCloseResult>;
-  group: (groups: PlannedGroup[]) => Promise<{ groupedIds: number[]; unsupported?: string }>;
+  /**
+   * Move these tabs, in this order, to the head of their window's unpinned
+   * tabs. Answers where each sat before and which ones the engine really put
+   * at the top.
+   */
+  moveToTop: (
+    windowId: number,
+    tabIds: number[],
+  ) => Promise<{ from: TabPosition[]; landed: number[] }>;
+  /** Put moved tabs back at their recorded indexes. */
+  restoreOrder: (from: TabPosition[]) => Promise<{ restored: number; skipped: number }>;
+  pageFacts: () => Promise<PageFacts[]>;
+  fileTo: () => FileDestination;
   focusTab: (tabId: number) => Promise<void>;
   openUrl: (url: string) => Promise<void>;
 }
@@ -107,6 +124,8 @@ export class DigestActions {
         return this.act(msg.digestId, msg.action);
       case "digest-undo":
         return this.undo(msg.digestId);
+      case "digest-undo-move":
+        return this.undoMove(msg.digestId);
       case "digest-show":
         return this.show(msg.digestId, msg.index);
     }
@@ -118,8 +137,15 @@ export class DigestActions {
   }
 
   private async view(record: DigestRecord): Promise<DigestView> {
-    const [live, log] = await Promise.all([this.deps.liveTabs(), this.deps.readUndoLog()]);
-    return buildDigestView(record, live, log, this.deps.opts());
+    const [live, log, facts] = await Promise.all([
+      this.deps.liveTabs(),
+      this.deps.readUndoLog(),
+      this.deps.pageFacts().catch(() => []),
+    ]);
+    return buildDigestView(record, live, log, this.deps.opts(), {
+      facts,
+      fileTo: this.deps.fileTo(),
+    });
   }
 
   private async get(msg: GetDigestsMessage): Promise<GetDigestsResponse> {
@@ -140,9 +166,10 @@ export class DigestActions {
   }
 
   /**
-   * Move a row. A row an action already took (grouped, or closed and still
-   * gone) is locked: moving it would describe something that already happened
-   * as something that has not.
+   * Move a row. A row a close already took (and whose tab is still gone) is
+   * locked: moving it would describe something that already happened as
+   * something that has not. Unticking a close row is this same move, to
+   * could-not-read; ticking it again returns it to the agent's fate.
    */
   private async setFate(msg: DigestSetFateMessage): Promise<{ ok: boolean }> {
     const fate = msg.fate;
@@ -164,7 +191,7 @@ export class DigestActions {
   }
 
   async act(id: string, action: DigestAction): Promise<DigestActResponse> {
-    if (action !== "keep" && action !== "close") return { ok: false, error: "Unknown action." };
+    if (action !== "top" && action !== "close") return { ok: false, error: "Unknown action." };
     const record = await this.find(id);
     if (!record) return { ok: false, error: "That digest is no longer stored." };
     const opts = this.deps.opts();
@@ -183,36 +210,24 @@ export class DigestActions {
     const startedAt = Date.now();
     let done = 0;
     let batchId: string | undefined;
-    let unsupported: string | undefined;
 
-    if (action === "keep") {
-      const byWindow = new Map<number, PlannedGroup>();
-      for (const t of targets) {
-        const group = byWindow.get(t.windowId) ?? {
-          name: DIGEST_GROUP_NAME,
-          color: "yellow",
-          windowId: t.windowId,
-          tabIds: [],
-        };
-        group.tabIds.push(t.tabId);
-        byWindow.set(t.windowId, group);
-      }
-      if (targets.length > 0) {
-        const res = await this.deps.group([...byWindow.values()]);
-        unsupported = res.unsupported;
-        const grouped = new Set(res.groupedIds);
-        for (const t of targets) {
-          outcomes.push({ index: t.index, outcome: grouped.has(t.tabId) ? "grouped" : "failed" });
-        }
-        done = grouped.size;
-      }
-      if (unsupported) return { ok: true, action, done: 0, outcomes: [], unsupported };
+    if (action === "top") {
+      const moved = await this.moveToTop(targets);
+      outcomes.push(...moved.outcomes);
+      done = moved.outcomes.filter((o) => o.outcome === "moved").length;
+      outcomes.sort((a, b) => a.index - b.index);
+      const entry = { startedAt, at: Date.now(), outcomes, from: moved.from };
+      await updateDigest(record.id, (current) => withMove(current, entry)).catch((err) =>
+        console.warn("[tabglutton] digest: could not record a move", String(err?.name ?? "")),
+      );
+      announceDigestsChanged();
+      return { ok: true, action, done, outcomes };
     } else if (targets.length > 0) {
       // Intent first. If the write after the close is lost, the panel finds the
       // batch again from this `startedAt` and the undo log (`findCloseBatch`);
       // if this write fails, nothing has been closed yet.
       const intent = await updateDigest(record.id, (current) =>
-        withAction(current, "close", { startedAt, outcomes: [] }),
+        withClose(current, { startedAt, outcomes: [] }),
       );
       if (!intent) return { ok: false, error: "That digest is no longer stored." };
       const ids = targets.map((t) => t.tabId);
@@ -252,11 +267,70 @@ export class DigestActions {
       outcomes,
     };
     // A lost write here is recoverable: the undo log still holds the batch.
-    await updateDigest(record.id, (current) => withAction(current, action, entry)).catch((err) =>
+    await updateDigest(record.id, (current) => withClose(current, entry)).catch((err) =>
       console.warn("[tabglutton] digest: could not record an action", String(err?.name ?? "")),
     );
     announceDigestsChanged();
     return { ok: true, action, done, outcomes, ...(batchId ? { batchId } : {}) };
+  }
+
+  /**
+   * One `moveToTop` per window, each tab in the digest's order. A window whose
+   * move throws leaves its tabs where they were, reported `failed`; only tabs
+   * the engine really put at the top count as `moved` and are recorded for Undo.
+   */
+  private async moveToTop(targets: DigestTarget[]): Promise<{
+    outcomes: Array<{ index: number; outcome: DigestItemOutcome }>;
+    from: TabPosition[];
+  }> {
+    const byWindow = new Map<number, DigestTarget[]>();
+    for (const t of [...targets].sort((a, b) => a.index - b.index)) {
+      const list = byWindow.get(t.windowId);
+      if (list) list.push(t);
+      else byWindow.set(t.windowId, [t]);
+    }
+    const outcomes: Array<{ index: number; outcome: DigestItemOutcome }> = [];
+    const from: TabPosition[] = [];
+    for (const [windowId, list] of byWindow) {
+      let landed = new Set<number>();
+      try {
+        const res = await this.deps.moveToTop(
+          windowId,
+          list.map((t) => t.tabId),
+        );
+        landed = new Set(res.landed);
+        from.push(...res.from);
+      } catch {
+        // Nothing to record: a move that threw put nothing anywhere.
+      }
+      for (const t of list) {
+        outcomes.push({ index: t.index, outcome: landed.has(t.tabId) ? "moved" : "failed" });
+      }
+    }
+    return { outcomes, from };
+  }
+
+  /** Put the latest Move to top's tabs back, once. */
+  private async undoMove(id: string): Promise<{ ok: boolean; restored: number; skipped: number }> {
+    const record = await this.find(id);
+    const top = record?.top;
+    if (!record || !top || top.undoneAt !== undefined || top.from.length === 0) {
+      return { ok: false, restored: 0, skipped: 0 };
+    }
+    // Spent before the tabs move, under the lock, so a double click cannot run
+    // it twice and a newer Move to top is never undone by an older click.
+    let claimed = false;
+    await updateDigest(record.id, (current) => {
+      if (current.top?.startedAt !== top.startedAt || current.top.undoneAt !== undefined) {
+        return null;
+      }
+      claimed = true;
+      return withMove(current, { ...current.top, undoneAt: Date.now() });
+    });
+    if (!claimed) return { ok: false, restored: 0, skipped: 0 };
+    const res = await this.deps.restoreOrder(top.from);
+    announceDigestsChanged();
+    return { ok: true, ...res };
   }
 
   /** Reopen the newest close batch that still has something to reopen. */

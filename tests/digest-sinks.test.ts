@@ -22,6 +22,21 @@ describe("pages that render digests use no HTML sinks", () => {
     });
   }
 
+  // The Desk layout shows page images and favicons. They go through one
+  // helper as a CSS background, from values the background has already
+  // checked (`src/page-facts.ts`): no <img>, no src, nothing a page URL could
+  // be loaded through from this page.
+  test("images are backgrounds set through cssUrl, never <img> or src", () => {
+    const panel = code("popup/digest-panel.ts");
+    expect(panel).not.toMatch(
+      /createElement\(\s*"img"|el\(\s*"img"|\.src\s*=|setAttribute\(\s*"(src|href|style)"/,
+    );
+    const backgrounds = panel.match(/backgroundImage\s*=\s*[^;]+;/g) ?? [];
+    expect(backgrounds.length).toBeGreaterThan(0);
+    for (const b of backgrounds) expect(b).toMatch(/=\s*cssUrl\(/);
+    expect(panel).not.toMatch(/\.style\.cssText|\.style\s*=/);
+  });
+
   test("no link is built from agent text", () => {
     expect(code("popup/digest-panel.ts")).not.toMatch(
       /\.href\s*=|createElement\(\s*"a"|el\(\s*"a"/,

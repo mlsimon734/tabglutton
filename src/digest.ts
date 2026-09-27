@@ -20,7 +20,9 @@ import {
   type DigestReportParams,
   type DigestReporter,
 } from "./bridge-protocol.js";
+import type { TabPosition } from "./move-to-top.js";
 import { displayUrl, normalizeUrl, type NormalizeOpts } from "./normalize.js";
+import { factsFor, type PageFacts } from "./page-facts.js";
 import type { UndoBatch } from "./undo-log.js";
 
 export { digestCounts };
@@ -34,8 +36,6 @@ export const DIGEST_STORE_VERSION = 1;
 export const DIGEST_RETENTION = 10;
 /** The popup's "Digest ready" line stops offering a digest this old. */
 export const DIGEST_FRESH_MS = 7 * 24 * 60 * 60 * 1000;
-/** The tab group Keep writes into. Same name in a window means the same group. */
-export const DIGEST_GROUP_NAME = "Worth your time";
 /** Close batches remembered per digest, newest first. The undo log holds the truth. */
 const CLOSE_HISTORY = 5;
 
@@ -63,15 +63,16 @@ export interface DigestItemRecord extends DigestNoteItem {
 }
 
 /**
- * What one action did to one item. `grouped`/`closed` are successes; the rest
+ * What one action did to one item. `moved`/`closed` are successes; the rest
  * say why an item was left alone, and every one of them leaves the tab as it was.
  */
 export type DigestItemOutcome =
-  | "grouped"
+  | "moved"
   | "closed"
   | "pinned"
   | "active"
   | "hidden"
+  | "in-group"
   | "gone"
   | "ambiguous"
   | "changed"
@@ -86,6 +87,13 @@ export interface DigestActionRecord {
   outcomes: Array<{ index: number; outcome: DigestItemOutcome }>;
 }
 
+/** A Move to top, with where each moved tab sat before so Undo can put it back. */
+export interface DigestMoveRecord extends DigestActionRecord {
+  from: TabPosition[];
+  /** Undo ran; the positions are spent. */
+  undoneAt?: number;
+}
+
 export interface DigestRecord {
   id: string;
   receivedAt: number;
@@ -94,8 +102,8 @@ export interface DigestRecord {
   items: DigestItemRecord[];
   /** First render in the panel; turns the popup's line off. */
   openedAt?: number;
-  /** The latest Keep in a group. */
-  keep?: DigestActionRecord;
+  /** The latest Move to top. */
+  top?: DigestMoveRecord;
   /** Close actions, newest first. */
   closes: DigestActionRecord[];
   mirror: DigestMirrorState;
@@ -106,11 +114,11 @@ export interface DigestStore {
   digests: DigestRecord[];
 }
 
-/** The two bulk actions in this slice. File is deferred; could-not-read has none. */
-export type DigestAction = "keep" | "close";
+/** The two bulk actions. File is deferred (#96); could-not-read has none. */
+export type DigestAction = "top" | "close";
 
 export function actionFate(action: DigestAction): DigestFate {
-  return action === "keep" ? "worth-it" : "close";
+  return action === "top" ? "worth-it" : "close";
 }
 
 export function effectiveFate(item: Pick<DigestItemRecord, "fate" | "userFate">): DigestFate {
@@ -128,11 +136,14 @@ export interface LiveTab {
   id: number;
   url: string;
   windowId: number;
+  index: number;
   incognito: boolean;
   pinned: boolean;
   active: boolean;
   hidden: boolean;
   discarded: boolean;
+  /** In a tab group. Moving it to the top would take it out of its group. */
+  grouped?: boolean;
   lastAccessed?: number;
   favIconUrl?: string;
 }
@@ -283,14 +294,16 @@ export interface DigestPlan {
 
 /**
  * Why a resolved tab is left alone by this action, or null when it may be
- * acted on. Pinned tabs never (grouping silently unpins them, #33, and the
- * skill never makes them candidates); active tabs are not closed out from under
- * the user; Firefox-hidden tabs are not grouped, which is unmeasured.
+ * acted on. Pinned tabs never (they already lead the list, and the skill never
+ * makes them candidates); active tabs are not closed out from under the user;
+ * Firefox-hidden tabs are not moved, which is unmeasured; a tab in a tab group
+ * is not moved, because moving it out of the group's span ungroups it.
  */
 export function exclusionFor(tab: LiveTab, action: DigestAction): DigestItemOutcome | null {
   if (tab.pinned) return "pinned";
   if (action === "close" && tab.active) return "active";
-  if (action === "keep" && tab.hidden) return "hidden";
+  if (action === "top" && tab.hidden) return "hidden";
+  if (action === "top" && tab.grouped) return "in-group";
   return null;
 }
 
@@ -396,15 +409,22 @@ export function digestUndoState(
   return null;
 }
 
-/** Record an action, keeping the close history short. */
-export function withAction(
-  record: DigestRecord,
-  action: DigestAction,
-  entry: DigestActionRecord,
-): DigestRecord {
-  if (action === "keep") return { ...record, keep: entry };
+/** Record a close, keeping the close history short. */
+export function withClose(record: DigestRecord, entry: DigestActionRecord): DigestRecord {
   const rest = record.closes.filter((c) => c.startedAt !== entry.startedAt);
   return { ...record, closes: [entry, ...rest].slice(0, CLOSE_HISTORY) };
+}
+
+/** Record a Move to top. Only the latest is kept: its Undo is the only one offered. */
+export function withMove(record: DigestRecord, entry: DigestMoveRecord): DigestRecord {
+  return { ...record, top: entry };
+}
+
+/** How many tabs the latest Move to top can still put back, or null. */
+export function moveUndoState(record: Pick<DigestRecord, "top">): number | null {
+  const top = record.top;
+  if (!top || top.undoneAt !== undefined || top.from.length === 0) return null;
+  return top.from.length;
 }
 
 // --- ids, retention, parsing ---------------------------------------------------
@@ -460,11 +480,12 @@ const optNum = (v: unknown): boolean => v === undefined || isNum(v);
 const isFate = (v: unknown): v is DigestFate =>
   isStr(v) && (DIGEST_FATES as readonly string[]).includes(v);
 const OUTCOMES: ReadonlySet<string> = new Set([
-  "grouped",
+  "moved",
   "closed",
   "pinned",
   "active",
   "hidden",
+  "in-group",
   "gone",
   "ambiguous",
   "changed",
@@ -511,6 +532,20 @@ function isAction(value: unknown): value is DigestActionRecord {
   );
 }
 
+function isMove(value: unknown): value is DigestMoveRecord {
+  const o = asRecord(value);
+  return (
+    o !== null &&
+    isAction(value) &&
+    optNum(o.undoneAt) &&
+    Array.isArray(o.from) &&
+    o.from.every((x) => {
+      const r = asRecord(x);
+      return r !== null && isNum(r.tabId) && isNum(r.windowId) && isNum(r.index);
+    })
+  );
+}
+
 function isMirror(value: unknown): value is DigestMirrorState {
   const o = asRecord(value);
   if (!o) return false;
@@ -550,7 +585,7 @@ function isRecord(value: unknown): value is DigestRecord {
     o.items.length > 0 &&
     o.items.every(isItem) &&
     optNum(o.openedAt) &&
-    (o.keep === undefined || isAction(o.keep)) &&
+    (o.top === undefined || isMove(o.top)) &&
     Array.isArray(o.closes) &&
     o.closes.every(isAction) &&
     isMirror(o.mirror)
@@ -572,12 +607,29 @@ export function parseDigestStore(raw: unknown): {
     return { digests: [], unknownVersion: obj ? obj.v : typeof raw };
   }
   const list = Array.isArray(obj.digests) ? obj.digests.filter(isRecord) : [];
-  return { digests: retainDigests(list) };
+  // 0.5.0's Keep in a group left a `keep` record; there is nothing to undo or
+  // show from it now, so it is dropped rather than carried along.
+  const current = list.map((d) => {
+    if (!("keep" in d)) return d;
+    const { keep: _legacy, ...rest } = d as DigestRecord & { keep?: unknown };
+    return rest;
+  });
+  return { digests: retainDigests(current) };
 }
 
 // --- views ------------------------------------------------------------------------
 
-/** One row as the panel renders it. Every string here is agent text: textContent only. */
+/**
+ * What the page said about itself when the extension read it (`page-facts.ts`).
+ * Browser-observed, never taken from the report; still page text, so still
+ * `textContent` only.
+ */
+export type DigestPageView = Omit<PageFacts, "tabId" | "url">;
+
+/**
+ * One row as the panel renders it. Every string here but `host` and `page` is
+ * agent text; all of it renders through textContent only.
+ */
 export interface DigestItemView {
   index: number;
   title: string;
@@ -598,14 +650,18 @@ export interface DigestItemView {
   active: boolean;
   hidden: boolean;
   discarded: boolean;
+  grouped: boolean;
   favIconUrl?: string;
   /** The named tab was not open on this page when the report arrived. */
   unmatchedAtReport: boolean;
+  /** The extension's own read of this tab on this page, when there was one. */
+  page?: DigestPageView;
   /** What the latest action for this item's section did to it. */
   outcome?: DigestItemOutcome;
   /**
-   * An action already took this row — grouped, or closed and still gone — so
-   * it cannot be moved to another section.
+   * A close already took this row and no tab is open on its page, so it cannot be
+   * moved to another section. A row moved to the top stays movable: its tab is
+   * open, where it was put.
    */
   locked: boolean;
 }
@@ -627,9 +683,19 @@ export interface DigestView {
   sitting: DigestRecord["sitting"];
   mirror: DigestMirrorState;
   items: DigestItemView[];
-  keep?: DigestActionRecord;
+  top?: DigestMoveRecord;
   lastClose?: DigestActionRecord;
   undo: DigestUndoState | null;
+  /** Tabs the latest Move to top can put back, or null when there is nothing to undo. */
+  moveUndo: number | null;
+  /** Where Devour would file the File section, by the user's own setting. */
+  fileTo?: FileDestination;
+}
+
+/** The destination the File section names. Zotero routing is per page, so it is a note, not a chip. */
+export interface FileDestination {
+  kind: "obsidian" | "file";
+  zotero: boolean;
 }
 
 /** What the digest is called: its feeds, else the agent's label, else "tabs". */
@@ -661,18 +727,29 @@ export function buildDigestView(
   live: readonly LiveTab[],
   log: readonly UndoBatch[],
   opts: NormalizeOpts,
+  context: { facts?: readonly PageFacts[]; fileTo?: FileDestination } = {},
 ): DigestView {
   const resolutions = resolveDigestItems(record.items, live, opts);
   const lastClose = record.closes[0];
   const outcomeFor = (index: number, fate: DigestFate): DigestItemOutcome | undefined => {
-    const action = fate === "worth-it" ? record.keep : fate === "close" ? lastClose : undefined;
+    // An undone move no longer describes where the tabs are.
+    const top = record.top?.undoneAt === undefined ? record.top : undefined;
+    const action = fate === "worth-it" ? top : fate === "close" ? lastClose : undefined;
     return action?.outcomes.find((o) => o.index === index)?.outcome;
   };
+  const facts = context.facts ?? [];
   const items = record.items.map((item, index): DigestItemView => {
     const r = resolutions[index] ?? { kind: "gone" };
     const tab = r.kind === "exact" || r.kind === "fallback" ? r.tab : null;
     const fate = effectiveFate(item);
     const outcome = outcomeFor(index, fate);
+    // The read of the tab the agent named, on the page it named: the same
+    // id-plus-URL identity the report itself is held to.
+    const read = factsFor(facts, item.tabIdHint, item.url, opts);
+    const page: DigestPageView | undefined = read
+      ? (({ tabId: _t, url: _u, ...rest }) => rest)(read)
+      : undefined;
+    const favIconUrl = tab?.favIconUrl ?? page?.favicon;
     return {
       index,
       title: item.title,
@@ -691,10 +768,14 @@ export function buildDigestView(
       active: tab?.active ?? false,
       hidden: tab?.hidden ?? false,
       discarded: tab?.discarded ?? false,
-      ...(tab?.favIconUrl ? { favIconUrl: tab.favIconUrl } : {}),
+      grouped: tab?.grouped ?? false,
+      ...(favIconUrl ? { favIconUrl } : {}),
       unmatchedAtReport: !item.observed.open,
+      ...(page ? { page } : {}),
       ...(outcome ? { outcome } : {}),
-      locked: outcome === "grouped" || (outcome === "closed" && !tab),
+      // Gone, not merely unresolved: after an Undo reopens two copies of one
+      // page under new ids, the row is ambiguous — open somewhere — and says so.
+      locked: outcome === "closed" && r.kind === "gone",
     };
   });
   return {
@@ -705,9 +786,11 @@ export function buildDigestView(
     sitting: record.sitting,
     mirror: record.mirror,
     items,
-    ...(record.keep ? { keep: record.keep } : {}),
+    ...(record.top ? { top: record.top } : {}),
     ...(lastClose ? { lastClose } : {}),
     undo: digestUndoState(record, log, opts),
+    moveUndo: moveUndoState(record),
+    ...(context.fileTo ? { fileTo: context.fileTo } : {}),
   };
 }
 

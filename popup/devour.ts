@@ -1277,7 +1277,13 @@ function toggleFocusedSelection(): void {
 document.addEventListener("keydown", (e) => {
   const target = e.target as HTMLElement | null;
   const tag = target?.tagName;
-  const inField = tag === "INPUT" || tag === "TEXTAREA" || target?.isContentEditable;
+  // A Digest close row's checkbox takes focus when clicked but holds no text,
+  // so there it must not swallow the list's keys. The queue's own checkboxes
+  // keep the old rule: Space there would toggle twice.
+  const digestTick =
+    state.view === "digest" && tag === "INPUT" && (target as HTMLInputElement).type === "checkbox";
+  const inField =
+    (tag === "INPUT" && !digestTick) || tag === "TEXTAREA" || target?.isContentEditable;
 
   if (e.key === "/" && !e.metaKey && !e.ctrlKey && !e.altKey) {
     if (inField || state.view === "digest") return;
@@ -1293,7 +1299,8 @@ document.addEventListener("keydown", (e) => {
   if (inField) return;
   if (e.metaKey || e.ctrlKey || e.altKey) return;
   if (state.view === "digest") {
-    // `d` and `x` are not bound here, so a stray key cannot close a section.
+    // `d` is not bound here and `x` only ticks a row in or out of Close, so a
+    // stray key cannot close a section.
     if (target?.tagName === "BUTTON" && e.key === "Enter") return;
     if (digestPanel.handleKey(e.key)) e.preventDefault();
     return;
@@ -1394,7 +1401,7 @@ browser.runtime.onMessage.addListener((raw: unknown): void => {
   if (msg.type === "refresh-cockpit") {
     void refresh();
   } else if (msg.type === "digests-changed") {
-    void digestPanel.refresh();
+    digestPanel.refreshSoon();
   } else if (
     msg.type === "clip-progress" &&
     typeof msg.completed === "number" &&

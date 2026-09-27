@@ -1450,10 +1450,17 @@ body.digest-mode .kbd-legend {
   margin-left: 0;
 }
 
+/* The panel measures itself, not the window: the desk's two columns need
+   ~880px of its own width, and below that the pane becomes an expansion
+   under the focused row. */
+.digest {
+  container: digest / inline-size;
+}
+
 .digest-doc {
   display: flex;
   flex-direction: column;
-  gap: var(--space-6);
+  gap: var(--space-4);
 }
 
 .digest-head {
@@ -1522,34 +1529,149 @@ body.digest-mode .kbd-legend {
   color: var(--ink-soft);
 }
 
-.digest-mirror .mono {
+.digest-mirror .mono,
+.dk-url.mono,
+.dk-tag .mono {
   font-family: var(--font-mono);
   font-size: var(--fs-tiny);
-  color: var(--ink-soft);
   overflow-wrap: anywhere;
+}
+
+.digest-mirror .mono {
+  color: var(--ink-soft);
 }
 
 .digest-mirror.is-failed {
   color: var(--danger);
 }
 
+/* The sitting at a glance: one bar per fate, sized by count. Colour here is a
+   state indicator (the shortlist in accent, Close in danger), not decoration. */
+.f-worth-it {
+  --f: var(--accent);
+}
+.f-file {
+  --f: var(--muted-soft);
+}
+.f-close {
+  --f: var(--danger);
+}
+.f-could-not-read {
+  --f: var(--hairline-strong);
+}
+
+.digest-strip-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: var(--space-2);
+}
+
+.digest-strip {
+  display: flex;
+  gap: 2px;
+  height: 6px;
+  border-radius: var(--radius-pill);
+  overflow: hidden;
+}
+
+.digest-strip span {
+  display: block;
+  min-width: 4px;
+  background: var(--f);
+}
+
+.digest-strip-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px var(--space-4);
+}
+
+.digest-strip-legend button {
+  border: 0;
+  padding: 2px 0;
+  gap: 6px;
+  font-size: var(--fs-small);
+  font-weight: 450;
+  color: var(--muted);
+  border-radius: var(--radius-1);
+}
+
+.digest-strip-legend button:hover:not(:disabled) {
+  background: transparent;
+  color: var(--ink);
+}
+
+.digest-strip-legend i {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  background: var(--f);
+}
+
+.digest-strip-legend b {
+  color: var(--ink);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- the desk: list beside a sticky preview pane ---- */
+
+.desk {
+  display: grid;
+  gap: var(--space-5);
+  align-items: start;
+}
+
+@container digest (min-width: 880px) {
+  .desk {
+    grid-template-columns: minmax(0, 1fr) minmax(330px, 0.82fr);
+  }
+}
+
+.desk-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  min-width: 0;
+}
+
 .digest-section {
   display: flex;
   flex-direction: column;
-  gap: var(--space-2);
+  scroll-margin-top: calc(var(--chrome-top) + var(--space-3));
 }
 
 /* The rule carries its count and its one action; the note between them says
    what the last action did, or what the section is for. */
 .digest-section .section-head {
+  flex-wrap: wrap;
   align-items: center;
-  padding-bottom: 6px;
+  gap: 6px var(--space-3);
+  min-height: 44px;
+  padding: 0 2px 8px;
   border-bottom: 1px solid var(--hairline);
+}
+
+.digest-section .section-title {
+  margin: 0;
+  font-size: var(--fs-tiny);
 }
 
 .digest-section .section-head > .count-badge {
   background: var(--hover-strong);
-  color: var(--muted);
+  color: var(--ink-soft);
+}
+
+.digest-section .section-note {
+  font-size: var(--fs-small);
+}
+
+.section-acts {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-left: auto;
 }
 
 .digest-rows {
@@ -1560,147 +1682,597 @@ body.digest-mode .kbd-legend {
   flex-direction: column;
 }
 
-/* A `.tab` row with a body that can hold a paragraph: four columns (favicon,
-   body, status, controls), aligned to the top so a clamped reason does not
-   float the favicon to the middle of it. */
-.digest-row.tab {
-  grid-template-columns: 22px minmax(0, 1fr) auto auto;
+/* ---- rows, tiered by section ---- */
+
+.dk-row {
+  position: relative;
+  display: grid;
+  gap: var(--space-3);
   align-items: start;
+  padding: var(--space-3);
+  border-bottom: 1px solid var(--hairline);
+  outline: none;
   cursor: default;
+  transition: background var(--duration-fast) var(--easing-soft);
 }
 
-.digest-row .favicon {
-  margin-top: 1px;
+.dk-row:hover {
+  background: var(--hover);
 }
 
-.digest-row.is-gone .favicon,
-.digest-row.is-gone .tab-title {
-  opacity: 0.6;
+.dk-row.focused {
+  background: var(--hover-strong);
+  box-shadow: inset 2px 0 0 var(--accent);
 }
 
-.digest-body {
+.dk-row:focus-visible {
+  box-shadow:
+    inset 2px 0 0 var(--accent),
+    inset 0 0 0 2px var(--accent-ring);
+}
+
+/* The shortlist: thumbnail, title, the page's site line, two lines of the
+   agent's reasoning. */
+.dk-row.is-rich {
+  grid-template-columns: 112px minmax(0, 1fr) auto;
+}
+
+/* Filed: one line of title, one of reasoning, and where Devour would file it. */
+.dk-row.is-file {
+  grid-template-columns: 22px minmax(0, 1fr) auto;
+  padding-block: 9px;
+}
+
+/* Close and leave: tick, favicon, one line. */
+.dk-row.is-brief {
+  grid-template-columns: 16px 22px minmax(0, 1fr) auto;
+  align-items: center;
+  padding-block: 6px;
+}
+
+.dk-tx {
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: 4px;
   min-width: 0;
 }
 
-.digest-line {
-  display: flex;
-  align-items: baseline;
-  gap: var(--space-3);
+.dk-title {
+  color: var(--ink);
+  font-size: var(--fs-body);
+  font-weight: 600;
+  line-height: 1.3;
   min-width: 0;
-}
-
-.digest-line .tab-title {
-  min-width: 0;
-}
-
-/* Parsed from the URL by the extension, never taken from the agent: the one
-   fact on the row a hostile title cannot choose. */
-.digest-host {
-  flex: none;
-  font-family: var(--font-mono);
-  font-size: var(--fs-tiny);
-  color: var(--muted);
-}
-
-/* One line for every fate but the shortlist, which gets four. The row never
-   grows on hover; the full text is in the tooltip. */
-.digest-reason {
-  margin: 0;
-  font-size: var(--fs-small);
-  line-height: 1.45;
-  color: var(--ink-soft);
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 1;
-  line-clamp: 1;
-  overflow: hidden;
   overflow-wrap: anywhere;
 }
 
-.digest-reason.is-long {
-  -webkit-line-clamp: 4;
-  line-clamp: 4;
-}
-
-.digest-extras {
-  margin: 0;
-  font-size: var(--fs-tiny);
-  color: var(--muted);
+.is-file .dk-title,
+.is-brief .dk-title {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.digest-extras q {
-  color: var(--ink-soft);
+.is-brief .dk-title {
+  font-weight: 500;
 }
 
-.digest-extras .mono {
+.dk-l1 {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+/* Parsed from the URL by the extension, never taken from the agent: the one
+   fact on the row a hostile title cannot choose. */
+.dk-host {
+  flex: none;
   font-family: var(--font-mono);
-}
-
-.digest-marks {
-  padding-top: 2px;
-}
-
-.digest-status {
   font-size: var(--fs-tiny);
   color: var(--muted);
   white-space: nowrap;
 }
 
-.digest-status.is-done {
-  font-size: var(--fs-micro);
+.dk-rt {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+}
+
+.dk-row.is-gone .dk-fav,
+.dk-row.is-gone .dk-title {
+  opacity: 0.6;
+}
+
+.dk-row.is-closed .dk-title {
+  color: var(--muted);
+}
+
+.dk-fav.is-sm {
+  width: 18px;
+  height: 18px;
+  background-size: 16px 16px;
+}
+
+.dk-fav.is-md {
+  width: 22px;
+  height: 22px;
+  margin-top: 1px;
+}
+
+.dk-fav.is-lg {
+  width: 40px;
+  height: 40px;
+  background-size: 32px 32px;
+  border-radius: var(--radius-2);
+}
+
+.dk-fav.fallback.is-sm {
+  font-size: 10px;
+}
+
+.dk-fav.fallback.is-lg {
+  font-size: 18px;
+  border-radius: 50%;
+  background: var(--paper-raised);
+}
+
+.dk-tick,
+.dk-tick-slot {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+}
+
+.dk-tick {
+  accent-color: var(--danger);
+  cursor: pointer;
+}
+
+.dk-tick:disabled {
+  cursor: default;
+}
+
+/* ---- the page's voice: upright, observed by the browser ---- */
+
+.dk-art {
+  position: relative;
+  aspect-ratio: 16 / 9;
+  width: 100%;
+  border-radius: var(--radius-2);
+  overflow: hidden;
+  background-color: var(--paper-raised);
+  background-size: cover;
+  background-position: center;
+}
+
+.dk-art::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  box-shadow: inset 0 0 0 1px var(--img-ring);
+  pointer-events: none;
+}
+
+.dk-art.is-fallback {
+  background: var(--hover-strong);
+}
+
+.dk-art-fallback {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: var(--space-2);
+}
+
+.dk-art-name {
+  font-size: var(--fs-tiny);
   font-weight: 600;
+  color: var(--muted);
+  max-width: 90%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.is-rich .dk-art .dk-art-name {
+  display: none;
+}
+
+.is-rich .dk-art .dk-fav.is-lg {
+  width: 30px;
+  height: 30px;
+  background-size: 24px 24px;
+}
+
+.dk-art-tag {
+  position: absolute;
+  left: 8px;
+  top: 8px;
+  z-index: 1;
+  font-size: var(--fs-micro);
+  font-weight: 650;
+  letter-spacing: var(--track-label);
+  text-transform: uppercase;
+  color: #fff;
+  background: rgba(20, 16, 14, 0.72);
+  padding: 3px 7px;
+  border-radius: var(--radius-pill);
+}
+
+.dk-site {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 6px;
+  min-width: 0;
+  font-size: var(--fs-small);
+  color: var(--muted);
+}
+
+.dk-site-name {
+  color: var(--ink-soft);
+  font-weight: 550;
+}
+
+.dk-sep {
+  color: var(--muted-soft);
+}
+
+.dk-num {
+  font-variant-numeric: tabular-nums;
+}
+
+.dk-excerpt {
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: 13.5px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.dk-excerpt.is-missing {
+  color: var(--muted);
+  font-style: normal;
+  font-size: var(--fs-small);
+}
+
+/* ---- the agent's voice: italic, behind a dashed rule, labelled ---- */
+
+.dk-agent {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  border-left: 1px dashed var(--hairline-strong);
+  padding-left: var(--space-3);
+  min-width: 0;
+}
+
+.dk-agent-label {
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
+  letter-spacing: var(--track-label);
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.dk-agent-reason,
+.dk-say {
+  margin: 0;
+  font-style: italic;
+  color: var(--ink-soft);
+  font-size: 13px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.dk-say {
+  color: var(--muted);
+  font-size: var(--fs-small);
+}
+
+.dk-agent-quote {
+  margin: 0;
+  font-style: italic;
+  color: var(--muted);
+  font-size: var(--fs-small);
+  overflow-wrap: anywhere;
+}
+
+/* In a row the agent's label would repeat forty times; the dashed rule and the
+   italic carry the voice there, and the label returns in the pane. */
+.dk-row .dk-agent-label {
+  display: none;
+}
+
+.dk-row .dk-agent-reason {
+  font-size: var(--fs-small);
+  line-height: 1.45;
+}
+
+.dk-agent-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 2px;
+}
+
+.dk-tag {
+  font-size: var(--fs-tiny);
+  color: var(--muted);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-pill);
+  padding: 1px 8px;
+  white-space: nowrap;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.clamp2 {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+}
+
+.one {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dk-dest {
+  font-size: var(--fs-tiny);
+  font-weight: 600;
+  color: var(--ink-soft);
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--radius-pill);
+  padding: 2px 9px;
+  white-space: nowrap;
+  background: var(--paper-raised);
+  align-self: flex-start;
+}
+
+.dk-rt .dk-dest {
+  align-self: flex-end;
+}
+
+/* ---- state ---- */
+
+.digest-state {
+  font-size: var(--fs-tiny);
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.digest-state:empty {
+  display: none;
+}
+
+.digest-state.is-done {
+  font-size: var(--fs-micro);
+  font-weight: 700;
   letter-spacing: var(--track-label);
   text-transform: uppercase;
   color: var(--accent);
 }
 
-.digest-status.is-moved {
-  font-size: var(--fs-micro);
-  font-weight: 600;
-  letter-spacing: var(--track-label);
-  text-transform: uppercase;
+.digest-state.is-refused {
   color: var(--ink-soft);
 }
 
-.digest-actions {
-  display: inline-flex;
+.dk-fold {
+  display: flex;
   align-items: center;
-  gap: var(--space-2);
+  gap: var(--space-3);
+  padding: 8px var(--space-3);
+  border-bottom: 1px solid var(--hairline);
+  font-size: var(--fs-small);
+  color: var(--muted);
 }
 
-/* The section control is revealed like the row's other actions, on hover and
-   focus, so a list of twenty rows is not twenty control strips. */
+.dk-fold-favs {
+  display: inline-flex;
+}
+
+.dk-fold-favs .dk-fav {
+  margin-right: -4px;
+  opacity: 0.6;
+  filter: grayscale(0.6);
+}
+
+.dk-fold-text b {
+  color: var(--ink-soft);
+  font-weight: 600;
+}
+
+.dk-fold button {
+  margin-left: auto;
+}
+
+/* ---- the pane, and its narrow-width stand-in ---- */
+
+.desk-pane {
+  position: sticky;
+  top: calc(var(--chrome-top) + var(--space-2));
+  max-height: calc(100vh - var(--chrome-top) - var(--chrome-bottom) - var(--space-5));
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--pad);
+  background: var(--paper);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-3);
+}
+
+.desk-pane:empty {
+  display: none;
+}
+
+.desk-pane-label {
+  font-size: var(--fs-micro);
+  font-weight: 650;
+  letter-spacing: var(--track-label);
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.dk-detail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.dk-detail-title {
+  margin: 0;
+  font-size: 18px;
+  line-height: 1.25;
+  font-weight: 650;
+  letter-spacing: var(--track-display);
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+.dk-url {
+  margin: 0;
+  color: var(--muted);
+}
+
+.dk-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--hairline);
+}
+
+.dk-bar .digest-state {
+  margin-left: auto;
+}
+
+.dk-bar .dk-show {
+  border-color: var(--hairline);
+  background: var(--paper-raised);
+  color: var(--ink-soft);
+}
+
 .digest-fate.seg {
-  height: 28px;
+  height: 30px;
 }
 
 .digest-fate button.seg-btn {
+  gap: 5px;
   padding: 0 9px;
-  font-size: var(--fs-tiny);
-}
-
-.digest-actions .digest-show {
-  padding: 4px 10px;
   font-size: var(--fs-small);
 }
 
-.digest-undo {
-  flex: none;
+.digest-fate kbd {
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
+  min-width: 16px;
+  padding: 0 3px;
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--radius-1);
+  color: var(--muted);
+  line-height: 14px;
+  text-align: center;
 }
 
-@media (max-width: 980px) {
-  .digest-row.tab {
-    grid-template-columns: 22px minmax(0, 1fr) auto;
+.dk-expand {
+  display: none;
+}
+
+@container digest (max-width: 879px) {
+  .desk-pane {
+    display: none;
   }
 
-  .digest-actions {
-    grid-column: 2 / -1;
+  .dk-expand {
+    display: block;
+    padding: var(--space-1) var(--space-3) var(--space-4);
+    border-bottom: 1px solid var(--hairline);
+    background: var(--hover-strong);
+  }
+
+  .dk-expand .dk-art {
+    max-width: 420px;
+  }
+}
+
+@container digest (max-width: 520px) {
+  .dk-row.is-rich {
+    grid-template-columns: 80px minmax(0, 1fr);
+  }
+
+  .dk-row.is-rich > .digest-state {
+    grid-column: 2;
+  }
+}
+
+/* ---- B's hover card on the compact rows ---- */
+
+/* Pops ~350ms after the pointer settles (or on keyboard focus), so skimming
+   down the list with the mouse does not strobe cards. Never on the focused
+   row, whose page is already in the pane, and never below the desk width or
+   without a hover-capable pointer. */
+.dk-peek {
+  position: absolute;
+  left: 48px;
+  top: calc(100% - 4px);
+  z-index: 12;
+  width: 300px;
+  max-width: calc(100% - 60px);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: 10px;
+  background: var(--paper-raised);
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--radius-3);
+  box-shadow: 0 18px 40px -18px var(--glass-shade);
+  visibility: hidden;
+  opacity: 0;
+  transform: translateY(-4px);
+  pointer-events: none;
+  transition:
+    opacity var(--duration) var(--easing),
+    transform var(--duration) var(--easing),
+    visibility 0s linear var(--duration);
+}
+
+.dk-peek .dk-excerpt {
+  font-size: var(--fs-small);
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+  line-clamp: 4;
+  overflow: hidden;
+}
+
+@media (hover: hover) {
+  .dk-row:not(.focused):hover > .dk-peek,
+  .dk-row:not(.focused):focus-visible > .dk-peek {
+    visibility: visible;
     opacity: 1;
+    transform: none;
+    transition-delay: 350ms, 350ms, 350ms;
+  }
+}
+
+@container digest (max-width: 879px) {
+  .dk-peek {
+    display: none;
   }
 }
