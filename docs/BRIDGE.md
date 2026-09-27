@@ -497,14 +497,18 @@ panel renders it through `textContent` only; and receiving a report stores it an
 nothing else. The panel's actions re-resolve each item at click time: an item acts on a tab
 only when the tab's id and committed URL still agree, or when the URL names exactly one tab
 in the same window and privacy context — otherwise it is refused as ambiguous, never picked
-by recency. **Keep in a group** writes a per-window "Worth your time" tab group (pinned and
-hidden tabs excluded); **Close** runs this same `tabs_close` as one batch (pinned and active
+by recency. **Move to top** moves the shortlist to the head of each tab's own window,
+after the pinned tabs, and records where each came from for its Undo (pinned and hidden
+tabs excluded; nothing is grouped); **Close** runs this same `tabs_close` as one batch (pinned and active
 tabs excluded), and the panel's Undo is read from the undo log by batch id. No
 `BRIDGE_PROTO` bump: an old extension answers `bad-request: Unknown method digest_report`,
 which the `/digest` skill turns into "update the extension", and an old Gullet never
 advertises the tool. The note is Gullet's to write because Gullet can see the disk — written
 atomically, only if absent, and keyed on its `digest_id`, so a retried report lands once.
-`docs/ENGINEERING.md` §Digest has the rest.
+What the panel shows as the page's own voice (image, description, site, favicon) is
+recorded by the extension from its own `tab_read` extraction, keyed by tab id and URL, and is
+never part of `digest_report` or of what `tab_read` returns. `docs/ENGINEERING.md` §Digest
+has the rest.
 
 ▸ **`tab_clip` read `obsidianVault` directly, and that was a split rather than a
 limitation.** When `clipDestination` landed, a user set to `file` had a working popup and an

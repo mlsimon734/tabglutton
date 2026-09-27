@@ -1,6 +1,6 @@
 ---
 name: digest
-description: Digest the tabs a browsing session left unresolved through Tabglutton's bridge. Reads each tab, gives every item a fate, and reports the lot to Tabglutton with digest_report, where the user groups the shortlist and closes the rest from the full view's Digest panel. Use when the user says "digest", "digest my tabs", "go through what I opened", "deal with the rest of these", or names a sitting (a feed visit's batch) to clear.
+description: Digest the tabs a browsing session left unresolved through Tabglutton's bridge. Reads each tab, gives every item a fate, and reports the lot to Tabglutton with digest_report, where the user moves the shortlist to the top of the tab list and closes the rest from the full view's Digest panel. Use when the user says "digest", "digest my tabs", "go through what I opened", "deal with the rest of these", or names a sitting (a feed visit's batch) to clear.
 ---
 
 # Digest

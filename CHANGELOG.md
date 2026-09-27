@@ -2,6 +2,30 @@
 
 All notable changes to Tabglutton are documented here.
 
+## [0.5.1](https://github.com/mlsimon734/tabglutton/compare/v0.5.0...v0.5.1) (unreleased)
+
+### Features
+
+- **The Digest panel is a desk: a list beside a preview.** The shortlist gets a thumbnail
+  and two lines of the agent's reasoning, filed items one line and where Devour would file
+  them, and close rows one line with a checkbox. The row you focus opens beside the list
+  with the page's own image and description, the agent's full reasoning, and Show and the
+  section keys; in a narrow window it opens under the row instead. Hovering a compact row
+  pops a small preview card. After Close, the closed rows fold into one line.
+- **What the page said and what the agent claims now look different.** Upright text and
+  images come from the page, recorded by Tabglutton when the agent read the tab: its
+  og:image (kept as a small thumbnail, so the panel never loads anything from the site), its
+  description, site, author, date, and favicon, plus a video's length or a thread's comment
+  count when the page states them. The agent's reasoning is italic behind a dashed rule
+  labelled "Agent", and its quote is dropped when it only repeats the page's description.
+  None of this can be supplied by the agent's report.
+- **Untick a close row to leave its tab open.** The row moves to "Could not read / leave
+  open", and ticking it there puts it back. `x` ticks the focused row.
+- **Move to top replaces Keep in a group.** The shortlist's tabs move to the top of their
+  own window's tab list, right after your pinned tabs, in the digest's order. Nothing is
+  grouped, pinned tabs are never touched, and **Undo** puts every moved tab back where it
+  was.
+
 ## [0.5.0](https://github.com/mlsimon734/tabglutton/compare/v0.4.1...v0.5.0) (2026-09-26)
 
 Digests move into the extension. An agent that reads a batch of tabs now hands its verdicts
