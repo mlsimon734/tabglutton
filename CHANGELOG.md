@@ -2,7 +2,17 @@
 
 All notable changes to Tabglutton are documented here.
 
-## [0.5.0](https://github.com/mlsimon734/tabglutton/compare/v0.4.2...v0.5.0) (unreleased)
+## [0.5.0](https://github.com/mlsimon734/tabglutton/compare/v0.4.1...v0.5.0) (2026-09-26)
+
+Digests move into the extension. An agent that reads a batch of tabs now hands its verdicts
+to Tabglutton through a new `digest_report` bridge tool, and you keep, close, and undo from a
+Digest panel in the full view, while Gullet writes the matching note to your vault. This
+release also folds in the never-tagged 0.4.2 work: an optional in-page duplicate notice,
+YouTube transcripts in clips, a design polish pass, and a fix for row closes that lagged or
+needed a second click. The bridge protocol is unchanged, so no running hub has to be stopped,
+but `digest_report` needs this version of both the extension and Gullet.
+
+### Features
 
 - **Digests land in Tabglutton, and you act on them there.** An agent running the digest
   skill (it ships with Gullet) now reads a sitting's tabs and reports its verdicts through a
@@ -21,12 +31,6 @@ All notable changes to Tabglutton are documented here.
   config), written straight to disk and exactly once however often the agent retries.
   Agent text in it is escaped, so a hostile page title cannot become a link, an embed, or a
   Dataview query. Turn it off with `"digestMirror": { "enabled": false }`.
-- **Update both halves together.** `digest_report` needs this version of the extension and of
-  Gullet; the skill tells the user to update when the extension doesn't know the tool. The
-  bridge protocol is unchanged, so no running hub has to be stopped.
-
-## [0.4.2](https://github.com/mlsimon734/tabglutton/compare/v0.4.1...v0.4.2) (unreleased)
-
 - **An optional notice when duplicates pile up.** Switch it on under Deduplication in
   Settings and pick a threshold, and once the badge count reaches it a small Tabglutton pill
   appears in the corner of the page you are on — the count, a **Dedup** button, and Undo
@@ -43,6 +47,12 @@ All notable changes to Tabglutton are documented here.
   reads a Reddit comments page from its feed and a logged-out x.com status through oEmbed when
   the page itself has nothing rendered, and falls back to the page as before when those
   fetches fail. Everything else extracts exactly as it did.
+
+### Changed
+
+- **Update both halves together.** `digest_report` needs this version of the extension and of
+  Gullet; the skill tells the user to update when the extension doesn't know the tool. The
+  bridge protocol is unchanged, so no running hub has to be stopped.
 - **Design polish.** The full view at narrow widths (under 980px) now stacks the inspector
   under the queue instead of squeezing both into two columns. The Obsidian handoff page
   follows the theme instead of flashing white, and says what it is doing, with a link to open
@@ -53,6 +63,8 @@ All notable changes to Tabglutton are documented here.
   duplicate URLs in the popup end in an ellipsis instead of being cut off. Setup no longer
   calls Dedup "exact-duplicate", shows a literal `{URL}` on Chrome, or says a rules editor is
   still to come. The window title and button labels say "full view" rather than "cockpit".
+
+### Fixed
 
 - **Closing a tab from its row is immediate, and never needs a second click.** The row
   used to stay until the whole list had been rebuilt — about a quarter of a second on a
