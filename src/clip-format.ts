@@ -1,3 +1,4 @@
+import type { PageSignals } from "./page-extras.js";
 import type { SiteRule } from "./site-rules.js";
 import type { ClipMode } from "./storage.js";
 
@@ -10,6 +11,8 @@ export interface ClipPayload {
   site: string;
   wordCount: number;
   markdown: string;
+  /** For the Digest panel only; never written into a note or returned by `tab_read`. */
+  page?: PageSignals;
 }
 
 const DEFAULT_CLIPPER_PATH = "Clippings";

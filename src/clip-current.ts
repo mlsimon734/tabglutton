@@ -3,17 +3,8 @@
 // bare "webextension-polyfill" import here would not set the global anyway.
 import Defuddle from "defuddle/full";
 import type { DefuddleResponse } from "defuddle/full";
-
-interface ClipPayload {
-  title: string;
-  url: string;
-  author: string;
-  published: string;
-  description: string;
-  site: string;
-  wordCount: number;
-  markdown: string;
-}
+import type { ClipPayload } from "./clip-format.js";
+import { pageExtras, type PageSignals } from "./page-extras.js";
 
 interface ClipResultMessage {
   type: "clip-current-result";
@@ -59,6 +50,24 @@ function markdownFrom(result: DefuddleResponse): string {
   return result.contentMarkdown ?? result.content ?? "";
 }
 
+/**
+ * What the Digest panel shows as the page's own voice beyond Defuddle's text
+ * metadata: its image and a couple of site extras, read here because the tab
+ * may be closed by the time anyone looks. Raw and page-controlled; the background validates and stores
+ * them (`src/page-facts.ts`), and `tab_read` never returns them.
+ */
+function signalsFrom(result: DefuddleResponse): PageSignals {
+  const extras = pageExtras({
+    schemaOrgData: result.schemaOrgData,
+    durationMeta: document.querySelector('meta[itemprop="duration"]')?.getAttribute("content"),
+    commentCountAttr: document.querySelector("shreddit-post")?.getAttribute("comment-count"),
+  });
+  return {
+    ...(result.image ? { image: result.image } : {}),
+    ...(Object.keys(extras).length > 0 ? { extras } : {}),
+  };
+}
+
 function payloadFrom(result: DefuddleResponse): ClipPayload {
   return {
     title: result.title || document.title || location.href,
@@ -69,6 +78,7 @@ function payloadFrom(result: DefuddleResponse): ClipPayload {
     site: result.site || result.domain || "",
     wordCount: result.wordCount || 0,
     markdown: markdownFrom(result),
+    page: signalsFrom(result),
   };
 }
 
