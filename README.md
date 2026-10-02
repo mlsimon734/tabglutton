@@ -2,8 +2,9 @@
 
 # Tabglutton
 
-**Devour a sprawling tab list.** Close duplicates, file the keepers into Obsidian —
-or hand the whole backlog to a coding agent and let it triage.
+**Follow your curiosity without the tab backlog.** Close duplicates, file the keepers into
+Obsidian — or hand the whole backlog to your agent to drop the noise, keep what matters
+now, and file the rest for later.
 
 For Firefox based browsers like [Zen Browser](https://zen-browser.app/) and Chromium browsers like [Helium](https://helium.computer/).
 
@@ -36,12 +37,14 @@ For Firefox based browsers like [Zen Browser](https://zen-browser.app/) and Chro
 
 ## The problem
 
-Too much content, so little time! Tabglutton is for those voracious consumers of information
-who open dozens of blog posts, X posts, and articles every day out of interest where discovery
-outpaces ingestion. Tabglutton helps manage the feast of tabs you may or may not want to
-imbibe, acting as a curator, deduplicator, and dashboard. It even connects to your Obsidian vault
-to automate second brain extension, acting as a batch ingest version of Obsidian Web Clipper.
-Connect to your agent of choice to triage high signal content, determined by your existing interests and pursuits.
+An interesting link should not become another decision you owe your browser. Tabglutton
+is for people who open blog posts, threads, articles, and repos out of curiosity, then
+find themselves spending attention on the trail of unread tabs.
+
+The job is triage you do not have to do yourself: drop the low-signal stuff — clickbait,
+empty promotion — keep what matters for your current work, and file useful-but-not-now
+material into Obsidian, where it waits without becoming required reading and without
+occupying a tab.
 
 ## What it does
 
@@ -78,8 +81,9 @@ published date), filed into your vault under `Clippings/`, and closed.
 
 > [!NOTE]
 > You can include the Clippings directory in your main vault, or put it in a secondary
-> agent managed vault (LLM-wiki style), where you can do additional agent-driven synthesis to avoid polluting
-> your primary vault with noise.
+> agent-managed vault (LLM-wiki style) so agent-driven synthesis never pollutes your
+> primary vault with noise. Either way it is a reference collection, not a reading list:
+> nothing there is owed a second look.
 
 The full-screen **Devour cockpit** (`Alt+Shift+D`) is the workspace for this: tabs grouped
 by host, an inspector previewing exactly where each note will land, and keyboard triage
@@ -102,9 +106,12 @@ one-time token setup command, and point Claude Code or Codex at
 | `tabs_close` | Close a batch, returning a `batchId`                    |
 | `undo_close` | Reverse any batch                                       |
 
-So "go through my 400 tabs, tell me what's worth keeping, clip the good ones and close the
-noise" becomes a thing you can actually ask for. The agent triages on metadata first, reads
-only the survivors, and every close is reversible.
+So "go through my 400 tabs, drop the noise, keep what matters for my current work, and
+file the useful references for later" becomes a thing you can actually ask for. The agent
+triages on metadata first, reads only the survivors, and judges them against the goals you
+gave it — Tabglutton has no content classifier of its own, so the triage is only as good
+as your agent and its instructions. You set the scope, and every close is a logged batch
+you can undo.
 
 **It is deliberately hard to make this dangerous.** The bridge is off until you enable it.
 It binds loopback only, authenticates with a shared token that never crosses the wire
