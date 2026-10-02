@@ -208,17 +208,21 @@ muted). All have hover / active / disabled / focus-visible (3px accent ring) sta
   makes the tokens reachable at all — an in-page shadow-DOM overlay gets either inline styles
   a strict `style-src` refuses or hand-copied hex. It never takes focus.
 - Digest panel (`popup/digest-panel.ts`, the full view's **Digest** side of the `Tabs | Digest`
-  seg) — an agent's report, so it is written in the tab list's vocabulary rather than a new
-  one: fate sections reuse `.section-head` (uppercase label, `.count-badge`, a result line
-  in the note slot) and rows reuse `.tab` with the letter-fallback favicon. One primary
-  action per section: **Keep in a group** is `.primary` (accent, the only fill on the
-  page), **Close n** is `.danger`, and once an action has run its button gives way to the
-  result line and a `.quiet` Undo. Row status sits in `.tab-marks`: `is-done` (accent,
-  uppercase micro) for what happened, muted sentence case for anything left alone and
-  why. The provenance line says who reported it and that the reading is untrusted; agent
-  text is plain text only, so a hostile title reads as its markup. The popup's
-  `#digest-ready` line is a bordered strip above the list with one `Open`, and disappears
-  once the panel has been opened.
+  seg) — a **desk**: the list, tiered by section, beside a sticky preview pane for the
+  focused row (`.desk`, two columns from 880px of the panel's own width via a container
+  query; below that the pane becomes `.dk-expand` under the row). The shortlist rows carry a
+  16:9 thumbnail and two lines of reasoning, File rows one line and a destination chip, Close
+  and leave rows one line with a checkbox. **Two voices, visibly apart:** upright text and
+  images are the page's own (recorded by the extension), italic text behind a dashed rule
+  labelled "Agent" is the agent's claim; a quote that only repeats the description is not
+  shown. Compact rows pop B's hover card (`.dk-peek`) after 350ms, never on the focused row,
+  below the desk width, or without a hover pointer. A missing image is the favicon tile, not
+  a blank. Fate sections reuse `.section-head`; **Move to top** is `.primary` (the only fill
+  on the page), **Close n** `.danger`, and after an action the head carries the result line
+  and a `.quiet` Undo. After Close the closed rows fold into one `.dk-fold` line. A strip of
+  fate bars under the provenance line jumps to each section. The popup's `#digest-ready`
+  line is a bordered strip above the list with one `Open`, and disappears once the panel has
+  been opened.
 - Chrome stacks — `.chrome` positions and insets; in the **popup** the stack owns the
   material (`.u-glass` + `.u-glass-top` / `.u-glass-bottom`), in the **cockpit** the capsules
   inside it do (`.u-glass-float` for the all-round rim, since a detached object shows all

@@ -19,6 +19,8 @@ import {
   type DigestMessage,
 } from "./digest-actions.js";
 import { toLiveTab } from "./digest-store.js";
+import { landedAtTop, restoreSequence, topIndex, type TabPosition } from "./move-to-top.js";
+import { readPageFacts, recordPageFacts } from "./page-facts-store.js";
 import {
   dupNoticeAfterReopen,
   planDupNotice,
@@ -309,7 +311,14 @@ const pendingClips = new Map<
 // capability the popup does not already have.
 const bridgeRunner = new BridgeMethodRunner({
   getSettings: () => settings,
-  extract: (tabId) => clipTab(tabId, { wake: false }),
+  extract: async (tabId) => {
+    const res = await clipTab(tabId, { wake: false });
+    // The Digest panel's page voice (`page-facts.ts`): recorded from this read,
+    // after it has answered, so `tab_read` never waits on an image.
+    const payload = res.payload ?? res.guarded?.payload;
+    if (payload) void recordFactsForRead(tabId, payload);
+    return res;
+  },
   load: ensureTabReady,
   openObsidianUrl,
   copyToClipboardViaTab,
@@ -1516,18 +1525,105 @@ const digestActions = new DigestActions({
     (await bridgeRunner.run("tabs_close", { tabIds })) as TabsCloseResult,
   undoClose: async (batchId) =>
     (await bridgeRunner.run("undo_close", { batchId })) as UndoCloseResult,
-  group: async (groups) => {
-    const res = await applyGrouping(groups);
-    return {
-      groupedIds: res.groupedIds,
-      ...(res.unsupported ? { unsupported: res.unsupported } : {}),
-    };
-  },
+  moveToTop: moveTabsToTop,
+  restoreOrder: restoreTabOrder,
+  pageFacts: readPageFacts,
+  fileTo: () => ({
+    kind: settings.clipDestination === "file" ? "file" : "obsidian",
+    zotero: settings.zoteroRoutingEnabled,
+  }),
   focusTab,
   openUrl: async (url) => {
     await browser.tabs.create({ url, active: true });
   },
 });
+
+async function recordFactsForRead(tabId: number, payload: ClipPayload): Promise<void> {
+  let tab: browser.tabs.Tab;
+  try {
+    tab = await browser.tabs.get(tabId);
+  } catch {
+    return;
+  }
+  await recordPageFacts(
+    {
+      id: tabId,
+      url: tab.url ?? "",
+      incognito: tab.incognito,
+      ...(safeFavIconUrl(tab.favIconUrl) ? { favIconUrl: safeFavIconUrl(tab.favIconUrl) } : {}),
+    },
+    payload,
+  );
+}
+
+/**
+ * Move to top, browser half (`src/move-to-top.ts` has the arithmetic and the
+ * measurements). One listing is the source for both the recorded positions and
+ * the target index, and the result is read back rather than trusted: an index
+ * the engine ignores (Firefox does, inside the pinned block; Zen may, as it
+ * does for `tabs.create`) leaves the tab where it was and reports it unmoved.
+ */
+async function moveTabsToTop(
+  windowId: number,
+  tabIds: number[],
+): Promise<{ from: TabPosition[]; landed: number[] }> {
+  const listing = await browser.tabs.query({ windowId });
+  const byId = new Map(listing.map((t) => [t.id, t] as const));
+  const ids = tabIds.filter((id) => {
+    const tab = byId.get(id);
+    return tab !== undefined && !tab.pinned;
+  });
+  const order = listing.map((t) => ({ id: t.id ?? -1, index: t.index, pinned: t.pinned }));
+  const top = topIndex(order);
+  if (ids.length === 0 || top === null) return { from: [], landed: [] };
+  const from = ids.map((id) => ({ tabId: id, windowId, index: byId.get(id)?.index ?? top }));
+  await browser.tabs.move(ids, { windowId, index: top });
+  const after = await browser.tabs.query({ windowId });
+  const landed = landedAtTop(
+    after.map((t) => ({ id: t.id ?? -1, index: t.index, pinned: t.pinned })),
+    ids,
+  );
+  // Only what really moved is put back by Undo.
+  return {
+    from: from.filter((p) => landed.has(p.tabId)),
+    landed: [...landed],
+  };
+}
+
+/**
+ * Undo a Move to top: each tab back to its recorded index, highest first per
+ * window (`restoreSequence`). A tab that has since closed, changed window, or
+ * been pinned is skipped; the index is clamped to the window as it is now.
+ */
+async function restoreTabOrder(
+  from: TabPosition[],
+): Promise<{ restored: number; skipped: number }> {
+  let restored = 0;
+  let skipped = 0;
+  for (const p of restoreSequence(from)) {
+    try {
+      const tab = await browser.tabs.get(p.tabId);
+      if (tab.windowId !== p.windowId || tab.pinned) {
+        skipped++;
+        continue;
+      }
+      // Clamped to the highest index the listing shows, never to its length: on
+      // Zen another workspace's tabs are absent from the listing but hold
+      // indexes, and counting only the visible tabs would drop a tab among them.
+      const last = Math.max(
+        ...(await browser.tabs.query({ windowId: p.windowId })).map((t) => t.index),
+      );
+      await browser.tabs.move(p.tabId, {
+        windowId: p.windowId,
+        index: Math.min(p.index, last),
+      });
+      restored++;
+    } catch {
+      skipped++;
+    }
+  }
+  return { restored, skipped };
+}
 
 const POPUP_URL = browser.runtime.getURL("popup/popup.html");
 
@@ -1613,6 +1709,7 @@ browser.runtime.onMessage.addListener(
       case "digest-set-fate":
       case "digest-act":
       case "digest-undo":
+      case "digest-undo-move":
       case "digest-show":
         await settingsReady;
         if (!digestMessageAllowed(msg.type, sender)) {

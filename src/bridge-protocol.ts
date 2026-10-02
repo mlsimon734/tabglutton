@@ -1128,8 +1128,8 @@ export interface UndoCloseResult {
 /**
  * What the agent thinks should happen to one item.
  *
- * - `worth-it` — the user would reopen it or act on it; kept, and offered for
- *   a "Worth your time" tab group.
+ * - `worth-it` — the user would reopen it or act on it; kept, and offered a
+ *   Move to top of its window's tab list.
  * - `file` — reference material to keep but not reopen. Display only in this
  *   slice: there is no bulk File action (deferred with its own design).
  * - `close` — read, judged, and offered for one undoable close.
@@ -1253,7 +1253,7 @@ export function digestCounts(
 
 /** What `digest_report` tells the agent to tell the user. */
 export const DIGEST_REPORT_NEXT =
-  "The digest is in Tabglutton's full view, under Digest (the popup shows a Digest ready line). Nothing was grouped or closed: the user decides from there.";
+  "The digest is in Tabglutton's full view, under Digest (the popup shows a Digest ready line). Nothing was moved or closed: the user decides from there.";
 
 /** Gullet → extension: what became of the note. See `DigestMirrorState`. */
 export interface DigestMirrorParams {

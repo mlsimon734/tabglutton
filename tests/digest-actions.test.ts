@@ -7,7 +7,7 @@ import {
   type LiveTab,
 } from "../src/digest.js";
 import { DigestActions, isDigestMutation, type DigestActionDeps } from "../src/digest-actions.js";
-import type { PlannedGroup } from "../src/grouping.js";
+import type { TabPosition } from "../src/move-to-top.js";
 import type { UndoBatch } from "../src/undo-log.js";
 
 // The actions reach storage and runtime messaging through the `browser`
@@ -32,6 +32,7 @@ function tab(id: number, url: string, extra: Partial<LiveTab> = {}): LiveTab {
     id,
     url,
     windowId: 1,
+    index: 0,
     incognito: false,
     pinned: false,
     active: false,
@@ -78,11 +79,19 @@ interface Harness {
   live: LiveTab[];
   log: UndoBatch[];
   closed: number[][];
-  groups: PlannedGroup[][];
+  moves: Array<[number, number[]]>;
+  restored: TabPosition[][];
 }
 
 function harness(live: LiveTab[], overrides: Partial<DigestActionDeps> = {}): Harness {
-  const h: Harness = { live, log: [], closed: [], groups: [], deps: undefined as never };
+  const h: Harness = {
+    live,
+    log: [],
+    closed: [],
+    moves: [],
+    restored: [],
+    deps: undefined as never,
+  };
   h.deps = {
     opts: () => ({}),
     liveTabs: async () => h.live,
@@ -111,10 +120,19 @@ function harness(live: LiveTab[], overrides: Partial<DigestActionDeps> = {}): Ha
       h.log = h.log.filter((b) => b.id !== batchId);
       return { batchId, restored: 1, failed: 0 };
     },
-    group: async (groups) => {
-      h.groups.push(groups);
-      return { groupedIds: groups.flatMap((g) => g.tabIds) };
+    moveToTop: async (windowId, tabIds) => {
+      h.moves.push([windowId, tabIds]);
+      return {
+        from: tabIds.map((tabId, i) => ({ tabId, windowId, index: 10 + i })),
+        landed: tabIds,
+      };
     },
+    restoreOrder: async (from) => {
+      h.restored.push(from);
+      return { restored: from.length, skipped: 0 };
+    },
+    pageFacts: async () => [],
+    fileTo: () => ({ kind: "obsidian", zotero: false }),
     focusTab: async () => {},
     openUrl: async () => {},
     ...overrides,
@@ -245,50 +263,108 @@ describe("digest actions", () => {
     ]);
   });
 
-  test("keep groups per window, excluding pinned and hidden", async () => {
+  test("move to top moves per window in digest order, excluding pinned and hidden", async () => {
     seed([
       item(1, "https://a.test/", "worth-it"),
       item(2, "https://b.test/", "worth-it"),
       item(3, "https://c.test/", "worth-it"),
       item(4, "https://d.test/", "worth-it"),
+      item(5, "https://e.test/", "worth-it"),
     ]);
     const live = [
       tab(1, "https://a.test/"),
       tab(2, "https://b.test/", { pinned: true }),
       tab(3, "https://c.test/", { hidden: true }),
       tab(4, "https://d.test/", { windowId: 2 }),
+      tab(5, "https://e.test/"),
     ];
     const items = stored().items;
     items[3] = { ...items[3]!, anchor: { windowId: 2, incognito: false } };
     const h = harness(live);
-    const res = await new DigestActions(h.deps).act(ID, "keep");
+    const res = await new DigestActions(h.deps).act(ID, "top");
     expect(res.ok && res.outcomes).toEqual([
-      { index: 0, outcome: "grouped" },
+      { index: 0, outcome: "moved" },
       { index: 1, outcome: "pinned" },
       { index: 2, outcome: "hidden" },
-      { index: 3, outcome: "grouped" },
+      { index: 3, outcome: "moved" },
+      { index: 4, outcome: "moved" },
     ]);
-    expect(h.groups[0]?.map((g) => [g.name, g.color, g.windowId, g.tabIds])).toEqual([
-      ["Worth your time", "yellow", 1, [1]],
-      ["Worth your time", "yellow", 2, [4]],
+    expect(h.moves).toEqual([
+      [1, [1, 5]],
+      [2, [4]],
     ]);
-    expect(stored().keep?.outcomes).toHaveLength(4);
+    expect(stored().top?.from).toEqual([
+      { tabId: 1, windowId: 1, index: 10 },
+      { tabId: 5, windowId: 1, index: 11 },
+      { tabId: 4, windowId: 2, index: 10 },
+    ]);
   });
 
-  test("keep on an engine without tab groups moves nothing and records nothing", async () => {
+  test("a tab the engine did not put at the top is failed and not recorded for undo", async () => {
+    seed([item(1, "https://a.test/", "worth-it"), item(2, "https://b.test/", "worth-it")]);
+    const h = harness([tab(1, "https://a.test/"), tab(2, "https://b.test/")], {
+      moveToTop: async (windowId) => ({ from: [{ tabId: 1, windowId, index: 7 }], landed: [1] }),
+    });
+    const res = await new DigestActions(h.deps).act(ID, "top");
+    expect(res.ok && res.outcomes).toEqual([
+      { index: 0, outcome: "moved" },
+      { index: 1, outcome: "failed" },
+    ]);
+    expect(res.ok && res.done).toBe(1);
+    expect(stored().top?.from).toEqual([{ tabId: 1, windowId: 1, index: 7 }]);
+  });
+
+  test("a window whose move throws leaves its tabs alone, reported failed", async () => {
     seed([item(1, "https://a.test/", "worth-it")]);
     const h = harness([tab(1, "https://a.test/")], {
-      group: async () => ({ groupedIds: [], unsupported: "no tabs.group" }),
+      moveToTop: async () => {
+        throw new Error("no");
+      },
     });
-    const res = await new DigestActions(h.deps).act(ID, "keep");
-    expect(res).toEqual({
-      ok: true,
-      action: "keep",
-      done: 0,
-      outcomes: [],
-      unsupported: "no tabs.group",
+    const res = await new DigestActions(h.deps).act(ID, "top");
+    expect(res.ok && res.outcomes).toEqual([{ index: 0, outcome: "failed" }]);
+    expect(stored().top?.from).toEqual([]);
+  });
+
+  test("undo of a move puts the recorded positions back, once", async () => {
+    seed([item(1, "https://a.test/", "worth-it")]);
+    const h = harness([tab(1, "https://a.test/")]);
+    const actions = new DigestActions(h.deps);
+    await actions.act(ID, "top");
+    const view = (await actions.handle({ type: "get-digests", view: true })) as {
+      view: { moveUndo: number | null };
+    };
+    expect(view.view.moveUndo).toBe(1);
+    const [first, second] = await Promise.all([
+      actions.handle({ type: "digest-undo-move", digestId: ID }),
+      actions.handle({ type: "digest-undo-move", digestId: ID }),
+    ]);
+    expect([first, second]).toContainEqual({ ok: true, restored: 1, skipped: 0 });
+    expect([first, second]).toContainEqual({ ok: false, restored: 0, skipped: 0 });
+    expect(h.restored).toEqual([[{ tabId: 1, windowId: 1, index: 10 }]]);
+    expect(stored().top?.undoneAt).toEqual(expect.any(Number));
+    const after = (await actions.handle({ type: "get-digests", view: true })) as {
+      view: { moveUndo: number | null };
+    };
+    expect(after.view.moveUndo).toBeNull();
+  });
+
+  test("unticking a close row moves it to could-not-read; ticking returns it", async () => {
+    seed([item(1, "https://a.test/", "close"), item(2, "https://b.test/", "close")]);
+    const h = harness([tab(1, "https://a.test/"), tab(2, "https://b.test/")]);
+    const actions = new DigestActions(h.deps);
+    await actions.handle({
+      type: "digest-set-fate",
+      digestId: ID,
+      index: 1,
+      fate: "could-not-read",
     });
-    expect(stored().keep).toBeUndefined();
+    expect(stored().items[1]?.userFate).toBe("could-not-read");
+    const res = await actions.act(ID, "close");
+    expect(res.ok && res.outcomes).toEqual([{ index: 0, outcome: "closed" }]);
+    expect(h.closed).toEqual([[1]]);
+    await actions.handle({ type: "digest-set-fate", digestId: ID, index: 1, fate: null });
+    expect(stored().items[1]?.userFate).toBeUndefined();
   });
 
   test("moving a row writes userFate; a locked row cannot move", async () => {
