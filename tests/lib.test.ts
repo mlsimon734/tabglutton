@@ -7,6 +7,7 @@ import {
   computeDedupCount,
   createPressGate,
   extraTabIds,
+  selectTabRange,
   RAIL_MIN_THUMB,
   railScrollTop,
   railThumb,
@@ -39,6 +40,52 @@ function copy(id: number, url: string, overrides: Partial<PopupTab> = {}): Popup
 }
 
 const settings: Settings = defaults();
+
+describe("selectTabRange", () => {
+  test("ordinary clicks toggle one tab and establish a new anchor", () => {
+    const selected = new Set([9]);
+    expect(selectTabRange(selected, [3, 1, 2], null, 1, true)).toBe(1);
+    expect([...selected]).toEqual([9, 1]);
+    expect(selectTabRange(selected, [3, 1, 2], null, 1, false)).toBe(1);
+    expect([...selected]).toEqual([9]);
+  });
+
+  test("ranges cross groups in displayed order and preserve other selections", () => {
+    const groups = visibleGroups(
+      [tab(1, "a.com"), tab(2, "b.com"), tab(3, "a.com"), tab(4, "b.com")],
+      "",
+      settings,
+    );
+    const selected = new Set([9]);
+    const ids = groups.flatMap((g) => g.tabs.map((t) => t.id));
+    expect(ids).toEqual([1, 3, 2, 4]);
+    expect(selectTabRange(selected, ids, 3, 4, true)).toBe(3);
+    expect([...selected]).toEqual([9, 3, 2, 4]);
+  });
+
+  test("reverse ranges can deselect, keeping the anchor for another Shift-click", () => {
+    const selected = new Set([9, 3, 1, 2, 4]);
+    const anchor = selectTabRange(selected, [3, 1, 2, 4], 2, 3, false);
+    expect(anchor).toBe(2);
+    expect([...selected]).toEqual([9, 4]);
+    selectTabRange(selected, [3, 1, 2, 4], anchor, 4, true);
+    expect([...selected].sort()).toEqual([2, 4, 9]);
+  });
+
+  test("ranges skip filtered-out rows without changing their selection", () => {
+    const selected = new Set([1, 2]);
+    selectTabRange(selected, [1, 3, 5], 1, 5, true);
+    expect([...selected].sort()).toEqual([1, 2, 3, 5]);
+    selectTabRange(selected, [1, 3, 5], 1, 5, false);
+    expect([...selected]).toEqual([2]);
+  });
+
+  test("a missing or hidden anchor falls back to the clicked tab", () => {
+    const selected = new Set([9]);
+    expect(selectTabRange(selected, [3, 1, 2], 9, 2, true)).toBe(2);
+    expect([...selected]).toEqual([9, 2]);
+  });
+});
 
 describe("visibleGroups", () => {
   test("without sticky order, sorts by count descending then host A-Z", () => {

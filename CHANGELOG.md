@@ -6,6 +6,9 @@ All notable changes to Tabglutton are documented here.
 
 ### Features
 
+- **Shift-click selects a range of tabs.** In the popup and full view, click a checkbox,
+  then Shift-click another to select or deselect the rows between them. Ranges follow
+  the displayed order and skip tabs hidden by filters.
 - **The Digest panel is a desk: a list beside a preview.** The shortlist gets a thumbnail
   and two lines of the agent's reasoning, filed items one line and where Devour would file
   them, and close rows one line with a checkbox. The row you focus opens beside the list

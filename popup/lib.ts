@@ -361,6 +361,27 @@ export function selectedTabsInUiOrder(groups: TabGroup[], selected: Set<number>)
   return out;
 }
 
+/** Apply a checkbox's state across a visible range; retain its anchor for Shift-clicks. */
+export function selectTabRange(
+  selected: Set<number>,
+  visibleIds: number[],
+  anchorId: number | null,
+  tabId: number,
+  checked: boolean,
+): number {
+  const anchorIndex = anchorId === null ? -1 : visibleIds.indexOf(anchorId);
+  const tabIndex = visibleIds.indexOf(tabId);
+  const ids =
+    anchorIndex < 0 || tabIndex < 0
+      ? [tabId]
+      : visibleIds.slice(Math.min(anchorIndex, tabIndex), Math.max(anchorIndex, tabIndex) + 1);
+  for (const id of ids) {
+    if (checked) selected.add(id);
+    else selected.delete(id);
+  }
+  return anchorId !== null && anchorIndex >= 0 ? anchorId : tabId;
+}
+
 export async function sendMessage<T>(msg: unknown): Promise<T | undefined> {
   try {
     return (await browser.runtime.sendMessage(msg)) as T | undefined;
