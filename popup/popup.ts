@@ -24,6 +24,7 @@ import {
   prettifyShortcut,
   reasonLabel,
   ruleMark,
+  selectTabRange,
   selectedTabsInUiOrder,
   sendMessage,
   type TabGroup,
@@ -39,6 +40,7 @@ interface PopupState {
   settings: Settings | null;
   filter: string;
   selected: Set<number>;
+  selectionAnchor: number | null;
   dedupCount: number;
   toast: ToastState | null;
   clipping: boolean;
@@ -92,6 +94,7 @@ const state: PopupState = {
   settings: null,
   filter: "",
   selected: new Set(),
+  selectionAnchor: null,
   dedupCount: 0,
   toast: null,
   clipping: false,
@@ -327,10 +330,16 @@ function renderTab(tab: PopupTab, group: TabGroup): HTMLDivElement {
   const checkbox = document.createElement("input");
   checkbox.type = "checkbox";
   checkbox.checked = state.selected.has(tab.id);
-  checkbox.title = "Select this tab";
-  checkbox.addEventListener("change", () => {
-    if (checkbox.checked) state.selected.add(tab.id);
-    else state.selected.delete(tab.id);
+  checkbox.title = "Select this tab (Shift-click to select a range)";
+  checkbox.addEventListener("click", (e) => {
+    const groups = visibleGroups(state.scopedTabs, state.filter, state.settings, state.stickyOrder);
+    state.selectionAnchor = selectTabRange(
+      state.selected,
+      visibleTabIds(groups),
+      e.shiftKey ? state.selectionAnchor : null,
+      tab.id,
+      checkbox.checked,
+    );
     render();
   });
 

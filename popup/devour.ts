@@ -33,6 +33,7 @@ import {
   markdownForTabs,
   reasonLabel,
   ruleMark,
+  selectTabRange,
   selectedTabsInUiOrder,
   sendMessage,
   type TabGroup,
@@ -52,6 +53,7 @@ interface CockpitState {
   /** Deliberately not persisted: a hidden filter surviving a reopen is a bug report. */
   clipFilter: ClipFilter;
   selected: Set<number>;
+  selectionAnchor: number | null;
   dedupCount: number;
   toast: ToastState | null;
   clipping: boolean;
@@ -122,6 +124,7 @@ const state: CockpitState = {
   filter: "",
   clipFilter: "all",
   selected: new Set(),
+  selectionAnchor: null,
   dedupCount: 0,
   toast: null,
   clipping: false,
@@ -411,9 +414,15 @@ function renderTab(tab: PopupTab, group: TabGroup): HTMLDivElement {
   const checkbox = document.createElement("input");
   checkbox.type = "checkbox";
   checkbox.checked = state.selected.has(tab.id);
-  checkbox.addEventListener("change", () => {
-    if (checkbox.checked) state.selected.add(tab.id);
-    else state.selected.delete(tab.id);
+  checkbox.title = "Select this tab (Shift-click to select a range)";
+  checkbox.addEventListener("click", (e) => {
+    state.selectionAnchor = selectTabRange(
+      state.selected,
+      visibleTabIds(currentGroups()),
+      e.shiftKey ? state.selectionAnchor : null,
+      tab.id,
+      checkbox.checked,
+    );
     render();
   });
 
