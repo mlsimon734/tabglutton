@@ -29,6 +29,7 @@ import {
   type FileDestination,
   type LiveTab,
 } from "./digest.js";
+import { digestReceipt } from "./digest-receipt.js";
 import { announceDigestsChanged, readDigests, toLiveTab, updateDigest } from "./digest-store.js";
 import type { TabPosition } from "./move-to-top.js";
 import type { NormalizeOpts } from "./normalize.js";
@@ -142,10 +143,12 @@ export class DigestActions {
       this.deps.readUndoLog(),
       this.deps.pageFacts().catch(() => []),
     ]);
-    return buildDigestView(record, live, log, this.deps.opts(), {
+    const view = buildDigestView(record, live, log, this.deps.opts(), {
       facts,
       fileTo: this.deps.fileTo(),
     });
+    const receipt = digestReceipt(record, Date.now());
+    return receipt ? { ...view, receipt } : view;
   }
 
   private async get(msg: GetDigestsMessage): Promise<GetDigestsResponse> {

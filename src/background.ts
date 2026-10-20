@@ -6,7 +6,12 @@
 // is unresolvable in a Firefox module service worker and aborts registration.
 import { BridgeClient, type BridgeStatus } from "./bridge-client.js";
 import { BridgeMethodRunner, isHttpUrl, queryAllTabs, readUndoLog } from "./bridge-methods.js";
-import type { ClipMark, TabsCloseResult, UndoCloseResult } from "./bridge-protocol.js";
+import {
+  digestCounts,
+  type ClipMark,
+  type TabsCloseResult,
+  type UndoCloseResult,
+} from "./bridge-protocol.js";
 import { getBrowserInfoOnce } from "./browser-info.js";
 import { clipDownloadPath, saveClipFile, type SavedClipFile } from "./clip-file.js";
 import { thinClipVerdict, type ClipGuardReason, type ThinClipVerdict } from "./clip-guard.js";
@@ -18,7 +23,8 @@ import {
   liveTabById,
   type DigestMessage,
 } from "./digest-actions.js";
-import { toLiveTab } from "./digest-store.js";
+import { digestReceipt, reopenWatchList, type ReopenWatch } from "./digest-receipt.js";
+import { digestsGeneration, noteDigestReopen, readDigests, toLiveTab } from "./digest-store.js";
 import { landedAtTop, restoreSequence, topIndex, type TabPosition } from "./move-to-top.js";
 import { readPageFacts, recordPageFacts } from "./page-facts-store.js";
 import {
@@ -42,7 +48,7 @@ import {
   type ClipPayload,
   type ObsidianClipRequest,
 } from "./clip-format.js";
-import type { NormalizeOpts } from "./normalize.js";
+import { normalizeUrl, type NormalizeOpts } from "./normalize.js";
 import { DOWNLOADS_GONE, downloadsGrant } from "./permissions.js";
 import { getFilePlatformOnce } from "./platform.js";
 import { createTaskQueue, delay } from "./serialize.js";
@@ -1538,6 +1544,68 @@ const digestActions = new DigestActions({
   },
 });
 
+/**
+ * A closed page coming back, for the digest receipt (`src/digest-receipt.ts`).
+ * Every navigation passes through here, so the closed items still watched are
+ * held by URL key and rebuilt only when a digest write or the URL rules changed
+ * it; with nothing watched, a navigation costs a map lookup. The committed
+ * `tab.url` only (docs/ENGINEERING.md §Uncommitted URLs): a tab still loading
+ * has not come back to anything yet, and its commit fires this again.
+ */
+let reopenWatch: { stamp: string; byKey: Promise<Map<string, ReopenWatch[]>> } | null = null;
+
+function reopenWatchByKey(opts: NormalizeOpts): Promise<Map<string, ReopenWatch[]>> {
+  const stamp = `${digestsGeneration()} ${JSON.stringify(opts)}`;
+  if (reopenWatch?.stamp !== stamp) {
+    const byKey = readDigests().then((list) => {
+      const map = new Map<string, ReopenWatch[]>();
+      for (const watch of reopenWatchList(list, opts, Date.now())) {
+        const same = map.get(watch.key);
+        if (same) same.push(watch);
+        else map.set(watch.key, [watch]);
+      }
+      return map;
+    });
+    // A failed read is not cached: the next navigation asks again.
+    byKey.catch(() => {
+      if (reopenWatch?.byKey === byKey) reopenWatch = null;
+    });
+    reopenWatch = { stamp, byKey };
+  }
+  return reopenWatch.byKey;
+}
+
+async function noteReopen(tab: browser.tabs.Tab): Promise<void> {
+  if (!tab.url || !isHttpUrl(tab.url)) return;
+  await settingsReady;
+  const opts = normalizeOptsFrom(settings);
+  const key = normalizeUrl(tab.url, opts);
+  const watched = key === null ? undefined : (await reopenWatchByKey(opts)).get(key);
+  if (!watched) return;
+  const now = Date.now();
+  for (const watch of watched) {
+    if (watch.incognito !== tab.incognito || now >= watch.until) continue;
+    await noteDigestReopen(watch.digestId, watch.index, now);
+  }
+}
+
+// Not through `onTabUpdated`: this listens for the URL, not the status.
+const onUrlChange: Parameters<typeof browser.tabs.onUpdated.addListener>[0] = (
+  _tabId,
+  changeInfo,
+  tab,
+) => {
+  if (changeInfo.url === undefined) return;
+  noteReopen(tab).catch((err) =>
+    console.warn("[tabglutton] digest: could not check a reopened page", String(err?.name ?? "")),
+  );
+};
+if (IS_CHROME) {
+  browser.tabs.onUpdated.addListener(onUrlChange);
+} else {
+  browser.tabs.onUpdated.addListener(onUrlChange, { properties: ["url"] });
+}
+
 async function recordFactsForRead(tabId: number, payload: ClipPayload): Promise<void> {
   let tab: browser.tabs.Tab;
   try {
@@ -1842,6 +1910,15 @@ async function collectDiagnostics(): Promise<GetDiagnosticsResponse> {
     (n, group) => n + (group.tabs.length - 1),
     0,
   );
+  const now = Date.now();
+  const digests = (await readDigests().catch(() => [])).map((record) => {
+    const receipt = digestReceipt(record, now);
+    return {
+      receivedAt: record.receivedAt,
+      fates: digestCounts(record.items),
+      ...(receipt ? { receipt } : {}),
+    };
+  });
   return {
     engine: await engineLabel(),
     platform: await platformLabel(),
@@ -1863,6 +1940,7 @@ async function collectDiagnostics(): Promise<GetDiagnosticsResponse> {
       allowTabLoad: settings.bridgeAllowTabLoad,
       errors: bridge.recentErrors,
     },
+    digests,
   };
 }
 

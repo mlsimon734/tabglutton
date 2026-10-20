@@ -34,6 +34,7 @@ function backgroundFacts(
       allowTabLoad: false,
       errors: [],
     },
+    digests: [],
     ...over,
   };
 }
@@ -168,6 +169,7 @@ describe("renderDiagnostics", () => {
         "  9m ago  handshake-timeout 4589 (x3)",
         "  4m ago  socket-closed 1015 (x2)",
         "  40s ago  method-failed tabs_list",
+        "digests (none stored)",
         "```",
       ].join("\n"),
     );
@@ -244,6 +246,47 @@ describe("renderDiagnostics", () => {
     // 24-character random string, so that is what to look for.
     expect(block).not.toContain("://");
     expect(block).not.toMatch(/[A-Za-z0-9_-]{24,}/);
+  });
+
+  test("counts each stored digest and what the user did with it, and nothing else", () => {
+    const block = renderDiagnostics(
+      facts({
+        background: backgroundFacts({
+          digests: [
+            {
+              receivedAt: T0 - 2 * 60 * 60_000,
+              fates: { "worth-it": 6, file: 7, close: 14, "could-not-read": 1 },
+              receipt: {
+                closed: 14,
+                reopened: 2,
+                undone: 0,
+                moved: 3,
+                moves: [
+                  { from: "worth-it", to: "close", count: 2 },
+                  { from: "close", to: "could-not-read", count: 1 },
+                ],
+                reviewMs: 4 * 60_000,
+                watching: true,
+              },
+            },
+            {
+              receivedAt: T0 - 3 * 24 * 60 * 60_000,
+              fates: { "worth-it": 2, file: 0, close: 3, "could-not-read": 0 },
+            },
+          ],
+        }),
+      }),
+      T0,
+    );
+
+    expect(block).toContain(
+      [
+        "digests (2, newest first)",
+        "  2h ago  28 tabs (worth 6 · file 7 · close 14 · unread 1) · closed 14 after 4m · reopened 2 (watching) · undone 0 · moved 3: worth-it>close 2, close>could-not-read 1",
+        "  3d ago  5 tabs (worth 2 · file 0 · close 3 · unread 0) · not closed",
+        "```",
+      ].join("\n"),
+    );
   });
 
   test("uses the singular for one duplicate and one window", () => {

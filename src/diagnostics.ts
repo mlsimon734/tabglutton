@@ -30,7 +30,8 @@
  * that may read permissions), and this module stays pure and unit-tested.
  */
 
-import type { BridgeWireMethod } from "./bridge-protocol.js";
+import type { BridgeWireMethod, DigestFate } from "./bridge-protocol.js";
+import type { DigestReceipt } from "./digest-receipt.js";
 import type { PermissionGrant } from "./permissions.js";
 import type { BridgePortMode, ClipDestination, ScopeMode } from "./storage.js";
 import type { BridgeStatus } from "./bridge-client.js";
@@ -142,6 +143,21 @@ export interface DiagnosticsGrants {
 }
 
 /**
+ * One stored digest, as counts. The experiment it measures is written up from
+ * these lines, and they reach a public issue like the rest of the block, so
+ * nothing here names a page, a feed, or the agent: no URL, title, label, or
+ * reason, only how many and of which fate.
+ */
+export interface DiagnosticsDigestFacts {
+  /** Epoch ms; rendered relative, like every time in the block. */
+  receivedAt: number;
+  /** The agent's sections, by count. */
+  fates: Record<DigestFate, number>;
+  /** Absent until a Close has taken something. */
+  receipt?: DigestReceipt;
+}
+
+/**
  * The half of the block only the background page can answer — it owns the
  * bridge client and the settings the extension is actually running on.
  */
@@ -160,6 +176,8 @@ export interface DiagnosticsBackgroundFacts {
   /** The in-page duplicate notice: whether it is on, and the badge count it fires at. */
   dupNotice: { enabled: boolean; threshold: number };
   bridge: DiagnosticsBridgeFacts;
+  /** Stored digests, newest first. */
+  digests: readonly DiagnosticsDigestFacts[];
 }
 
 /**
@@ -218,6 +236,38 @@ function errorLines(errors: readonly BridgeErrorEntry[], now: number): string[] 
   });
 }
 
+/** "4m", "1h 20m": the review time, coarse like `agoLabel`. */
+function spanLabel(ms: number): string {
+  if (ms < MINUTE) return `${Math.floor(ms / 1_000)}s`;
+  if (ms < HOUR) return `${Math.floor(ms / MINUTE)}m`;
+  const minutes = Math.floor((ms % HOUR) / MINUTE);
+  return `${Math.floor(ms / HOUR)}h${minutes ? ` ${minutes}m` : ""}`;
+}
+
+function digestLines(digests: readonly DiagnosticsDigestFacts[], now: number): string[] {
+  return digests.map((d) => {
+    const fates = d.fates;
+    const total = fates["worth-it"] + fates.file + fates.close + fates["could-not-read"];
+    const parts = [
+      `${total} tabs (worth ${fates["worth-it"]} · file ${fates.file} · close ${fates.close} · unread ${fates["could-not-read"]})`,
+    ];
+    const r = d.receipt;
+    if (!r) {
+      parts.push("not closed");
+    } else {
+      parts.push(
+        `closed ${r.closed}${r.reviewMs === undefined ? "" : ` after ${spanLabel(r.reviewMs)}`}`,
+        `reopened ${r.reopened}${r.watching ? " (watching)" : ""}`,
+        `undone ${r.undone}`,
+        r.moved === 0
+          ? "moved 0"
+          : `moved ${r.moved}: ${r.moves.map((m) => `${m.from}>${m.to} ${m.count}`).join(", ")}`,
+      );
+    }
+    return `  ${agoLabel(now - d.receivedAt)}  ${parts.join(" · ")}`;
+  });
+}
+
 /** Pads the label column so the block scans as a table inside the code fence. */
 function row(label: string, value: string): string {
   return `${label.padEnd(13)}${value}`;
@@ -264,6 +314,10 @@ export function renderDiagnostics(facts: DiagnosticsFacts, now: number): string 
       ? "bridge errors (none this session)"
       : `bridge errors (${errors.length}, oldest first)`,
     ...errorLines(errors, now),
+    bg.digests.length === 0
+      ? "digests (none stored)"
+      : `digests (${bg.digests.length}, newest first)`,
+    ...digestLines(bg.digests, now),
     "```",
   );
   return lines.join("\n");

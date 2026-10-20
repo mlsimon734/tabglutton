@@ -29,6 +29,7 @@ import type {
   DigestSummary,
   DigestView,
 } from "../src/digest.js";
+import { receiptSegments, type DigestReceipt } from "../src/digest-receipt.js";
 import { quoteRepeatsDescription, shortPublished } from "../src/page-facts.js";
 import { hostInitial, sendMessage } from "./lib.js";
 
@@ -533,8 +534,21 @@ export class DigestPanel {
         break;
     }
     head.append(mirror);
+    if (view.receipt) head.append(this.renderReceipt(view.receipt));
     head.append(this.renderStrip(view));
     return head;
+  }
+
+  /** What the user did with the digest's closes. Counts only; the rows say which. */
+  private renderReceipt(receipt: DigestReceipt): HTMLElement {
+    const line = el("p", "digest-receipt");
+    line.title =
+      "Reopened counts pages this digest closed that you opened again within 48 hours. Undo is counted on its own.";
+    receiptSegments(receipt).forEach((part, i) => {
+      if (i > 0) line.append(" · ");
+      line.append(part.lead, el("strong", undefined, String(part.n)), part.tail);
+    });
+    return line;
   }
 
   /** One bar per fate, proportional, with a legend that jumps to its section. */
