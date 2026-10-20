@@ -661,12 +661,12 @@ All five slots are filled. The set lives in `docs/media/store/`.
    full-resolution original is kept as `obsidian-note-original.jpg` because unlike the
    other four it cannot be regenerated from a script. Downscale recipe:
    `sips -s format png -Z 1280 in.jpg --out a.png && sips -s format png -c 800 1280 a.png
---out out.png` — the `-s format png` is load-bearing, since `sips` otherwise writes
+   --out out.png` — the `-s format png` is load-bearing, since `sips` otherwise writes
    JPEG bytes under a `.png` name and only warns.
 
    **Two things to decide before this ships.** The note's filename is the most prominent
    text in the frame, and it reads `kepanodefuddle Get the main content of any page as
-Markdown.` — the slash stripped with no separator. That is correct behaviour and matches
+   Markdown.` — the slash stripped with no separator. That is correct behaviour and matches
    Obsidian Web Clipper exactly (see `sanitizeFileName` in `src/clip-format.ts`), but it is
    the least flattering filename the product produces and it is the first thing a viewer's
    eye lands on. Second, the file tree beside it carries test detritus — `Web browser 1/2/3`,

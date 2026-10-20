@@ -365,7 +365,7 @@ One JSON object per WebSocket frame (the frame is the delimiter), versioned:
 
 - Sidecar → extension on connect: `{ type: "challenge", proto: 2, server, nonce }`.
 - Extension → sidecar: `{ type: "hello", proto: 2, browser: "firefox" | "chrome",
-extVersion, label, nonce, proof }`.
+  extVersion, label, nonce, proof }`.
 - Sidecar → extension: `{ type: "hello-ack", proto, connectionId, proof, sessions? }`, or
   `{ type: "hello-error", error }`.
 - Sidecar → extension requests: `{ type: "request", id, method, params }`; responses
@@ -1063,7 +1063,7 @@ _proved_. Anything still unproven has moved to Open questions, where it gets rea
     attribution.** The build with the counter reverted showed the same ~5-minute
     session-start discovery on the same day — and that browser's own console carries
     recurring `PushServiceWebSocket: beginWSSetup: asyncOpen failed
-NS_ERROR_SOCKET_CREATE_FAILED` bursts: Firefox's Push service, no Tabglutton
+    NS_ERROR_SOCKET_CREATE_FAILED` bursts: Firefox's Push service, no Tabglutton
     involvement, unable to open a WebSocket at the OS socket layer. A bridge dial landing
     inside such a burst fails instantly, and every one of those failures is a real failed
     WebSocket connect — exactly what feeds `FailDelayManager` — while the HTTP probe can
