@@ -32,6 +32,18 @@ describe("groupDuplicates", () => {
     expect(groupDuplicates(tabs, {})).toEqual([]);
   });
 
+  test("never groups non-web URLs, such as Zen's synced-window stand-ins", () => {
+    const tabs = [
+      makeTab({ id: 1, url: "about:blank", discarded: true }),
+      makeTab({ id: 2, url: "about:blank", discarded: true }),
+      makeTab({ id: 3, url: "about:newtab" }),
+      makeTab({ id: 4, url: "about:newtab" }),
+      makeTab({ id: 5, url: "file:///tmp/a.pdf" }),
+      makeTab({ id: 6, url: "file:///tmp/a.pdf" }),
+    ];
+    expect(groupDuplicates(tabs, {})).toEqual([]);
+  });
+
   test("groups two tabs with the same canonical URL", () => {
     const t1 = makeTab({ id: 1, url: "https://example.com/a" });
     const t2 = makeTab({ id: 2, url: "https://www.example.com/a/" });
