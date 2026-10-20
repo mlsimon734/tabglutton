@@ -43,7 +43,13 @@ import {
   type ObsidianClipRequest,
 } from "./clip-format.js";
 import type { NormalizeOpts } from "./normalize.js";
-import { DOWNLOADS_GONE, downloadsGrant } from "./permissions.js";
+import {
+  DOWNLOADS_GONE,
+  downloadsGrant,
+  originsGrant,
+  ZOTERO_ACCESS_GONE,
+  ZOTERO_ORIGINS,
+} from "./permissions.js";
 import { getFilePlatformOnce } from "./platform.js";
 import { createTaskQueue, delay } from "./serialize.js";
 import type { PlannedGroup } from "./grouping.js";
@@ -59,7 +65,13 @@ import {
   type Settings,
 } from "./storage.js";
 import { IS_CHROME } from "./target.js";
-import { getZoteroTabInfo, isAcademicZoteroTarget, saveTabToZotero } from "./zotero.js";
+import { saveCitationToZotero, ZoteroError, type ZoteroSaveReceipt } from "./zotero.js";
+import {
+  citationFromSnapshot,
+  parseCitationSnapshot,
+  webpageCitation,
+  type ZoteroCitation,
+} from "./zotero-item.js";
 
 export type GetScopedTabsMessage = { type: "get-scoped-tabs" };
 export type ClipSelectedTabsMessage = {
@@ -324,17 +336,18 @@ const bridgeRunner = new BridgeMethodRunner({
   copyToClipboardViaTab,
   // The bridge routes papers exactly as Devour does, through the same function,
   // so the destination a user chose holds whichever surface the clip came from.
-  // No wake: waking is `tabs_load`'s own gated act, and `zoteroDestination`
-  // never navigates — `destinationForTab` is where the popup's wake lives.
-  routesToZotero: async (tabId) => {
-    const destination = await zoteroDestination(tabId);
-    if (destination === null) return false;
-    // A Connector that could not answer is reported as such, never flattened
-    // into "not a paper" — that `false` would file a paper into Obsidian.
+  // No wake: waking is `tabs_load`'s own gated act, and reading a page's
+  // citation data never navigates — `destinationForTab` is where the popup's
+  // wake lives.
+  zoteroCitation: async (tabId) => {
+    const destination = await zoteroDestination(tabId, null);
+    if (destination === null) return null;
+    // A page that could not be read is reported as such, never flattened into
+    // "not a paper" — that `null` would file a paper into Obsidian.
     if (destination.kind === "failed") throw new Error(destination.detail);
-    return destination.kind === "zotero";
+    return destination.kind === "zotero" ? destination.citation : null;
   },
-  saveToZotero: (tabId) => saveTabToZotero(settings.zoteroConnectorId, tabId),
+  saveToZotero: saveRoutedPaper,
 });
 
 const bridge = new BridgeClient({
@@ -894,6 +907,37 @@ function copyInTab(textToCopy: string): void {
   if (!ok) throw new Error("execCommand copy returned false");
 }
 
+// Runs in the tab's isolated world as a `scripting.executeScript` `func`, so it
+// is serialized and re-parsed there and may close over nothing. Reads only the
+// tags `citationFromSnapshot` maps, and a page without `citation_title` sends
+// nothing else back: it is not a paper, and its tags are none of our business.
+// Everything it returns is page-written and is shape-checked by
+// `parseCitationSnapshot` on arrival.
+function readCitationSnapshot(): {
+  url: string;
+  meta: Array<[string, string]>;
+  abstract?: string;
+} {
+  const meta: Array<[string, string]> = [];
+  for (const tag of document.querySelectorAll("meta[name]")) {
+    const name = (tag.getAttribute("name") ?? "").toLowerCase();
+    if (!name.startsWith("citation_") && !name.startsWith("dc.")) continue;
+    const content = tag.getAttribute("content");
+    if (content) meta.push([name, content]);
+    if (meta.length >= 400) break;
+  }
+  if (!meta.some(([name]) => name === "citation_title")) return { url: location.href, meta: [] };
+  if (meta.some(([name]) => name === "citation_abstract" || name === "dc.description")) {
+    return { url: location.href, meta };
+  }
+  // ACL Anthology and PMLR keep the abstract in the body alone; PMLR's
+  // `twitter:description` stops at 160 characters, so it is not a substitute.
+  const abstract = document
+    .querySelector(".acl-abstract span, .acl-abstract, #abstract")
+    ?.textContent?.slice(0, 20_000);
+  return abstract ? { url: location.href, meta, abstract } : { url: location.href, meta };
+}
+
 async function copyToClipboardViaTab(tabId: number, text: string): Promise<boolean> {
   try {
     await browser.scripting.executeScript({
@@ -958,32 +1002,27 @@ async function resolveTabMeta(tabId: number): Promise<{ title: string; url: stri
 type TabDestination =
   | { kind: "obsidian" }
   | { kind: "file" }
-  | { kind: "zotero" }
+  | { kind: "zotero"; citation: ZoteroCitation }
   | { kind: "never-devour"; rule: SiteRule }
   | { kind: "auto-close" }
   | { kind: "failed"; reason: ClipFailureReason; detail: string };
 
-/** Both note destinations run Defuddle; Zotero owns its own page reading. */
+/** Both note destinations run Defuddle; a paper's item is already in its citation. */
 function needsExtraction(destination: TabDestination): boolean {
   return destination.kind === "obsidian" || destination.kind === "file";
 }
-
-const ZOTERO_DETECTION_ATTEMPTS = 8;
-const ZOTERO_DETECTION_RETRY_MS = 250;
 
 /**
  * Decides where one tab goes, and owns the wake for the whole run — the
  * extraction below is called with `wake: false`.
  *
- * The wake has to come first because the Connector's per-tab translator result
- * only exists for a page whose content script has run, and Devour's normal
- * workload is a backlog of discarded tabs. Asking before waking never sees a
- * translator: an arXiv tab in the backlog reports "detecting" (or a
- * translator-less "ready") and is failed or silently sent to Obsidian.
+ * The wake has to come first because whether a page is a paper is read from
+ * its live document's citation tags, and Devour's normal workload is a backlog
+ * of discarded tabs, which have no document to read.
  */
 async function destinationForTab(
   tabId: number,
-  url: string,
+  { title, url }: { title: string; url: string },
   downloadsHeld: boolean,
   rule: SiteRule | null,
 ): Promise<TabDestination> {
@@ -1007,14 +1046,13 @@ async function destinationForTab(
       // extract failure, which is what the Obsidian path always called it.
       return { kind: "failed", reason: "extract-failed", detail: errorMessage(err) };
     }
-    // A zotero rule skips the Connector's detection poll on purpose: the user
-    // named the destination outright, the same way a `vault` override names
-    // Obsidian — and it holds whether or not detection-based routing is on.
-    // The save itself still goes through the Connector, which is where a
+    // A zotero rule names the destination outright, the same way a `vault`
+    // override names Obsidian, and holds whether or not routing is on: a page
+    // with no citation data still goes, as a web page. The save is where a
     // missing Zotero fails loudly rather than silently going elsewhere.
-    if (rule?.disposition === "zotero") return { kind: "zotero" };
-    if (settings.zoteroRoutingEnabled) {
-      const zotero = await zoteroDestination(tabId);
+    const forced = rule?.disposition === "zotero";
+    if (forced || settings.zoteroRoutingEnabled) {
+      const zotero = await zoteroDestination(tabId, forced ? { title, url } : null);
       if (zotero) return zotero;
     }
   }
@@ -1027,8 +1065,8 @@ async function destinationForTab(
     // reload an entire backlog only to fail every page of it. A run reaches
     // here holding a `false` in exactly one configuration: Zotero routing on
     // *and* the file destination chosen, where the whole run cannot be refused
-    // because the papers in it still file to Zotero. Those tabs were woken for
-    // the Connector's sake regardless of this grant, so nothing is spent on it.
+    // because the papers in it still file to Zotero. Those tabs were woken to
+    // read their citation data regardless of this grant, so nothing is spent on it.
     if (!downloadsHeld) {
       return { kind: "failed", reason: "download-failed", detail: DOWNLOADS_GONE };
     }
@@ -1038,30 +1076,98 @@ async function destinationForTab(
     return {
       kind: "failed",
       reason: "vault-missing",
-      detail: "This tab was not an academic Zotero item and no Obsidian vault is configured.",
+      detail: "This tab carries no citation data for Zotero and no Obsidian vault is configured.",
     };
   }
   return { kind: "obsidian" };
 }
 
-/** `null` when the tab is simply not a paper — the caller falls through. */
-async function zoteroDestination(tabId: number): Promise<TabDestination | null> {
-  // A throw is retried like a "detecting" answer: the Connector's MV3 service
-  // worker can be mid-suspend when a batch reaches it, and Chrome answers that
-  // race with "Could not establish connection", not with a real verdict.
-  let lastError = "Zotero Connector did not finish detecting this tab.";
-  for (let attempt = 0; attempt < ZOTERO_DETECTION_ATTEMPTS; attempt += 1) {
-    try {
-      const info = await getZoteroTabInfo(settings.zoteroConnectorId, tabId);
-      if (info.state === "ready") return isAcademicZoteroTarget(info) ? { kind: "zotero" } : null;
-    } catch (err) {
-      lastError = errorMessage(err);
-    }
-    if (attempt + 1 < ZOTERO_DETECTION_ATTEMPTS) {
-      await delay(ZOTERO_DETECTION_RETRY_MS);
-    }
+/**
+ * Read the page's citation data and decide. `null` when the page is simply not
+ * a paper — the caller falls through to the clip destination. `forced` is a
+ * `zotero` site rule's tab: it goes to Zotero whatever it carries, as a web
+ * page when it carries nothing.
+ *
+ * A page that cannot be read is a failure, never "not a paper": the user asked
+ * for papers to go to Zotero, and not knowing whether this is one is not
+ * permission to file it somewhere else.
+ */
+async function zoteroDestination(
+  tabId: number,
+  forced: { title: string; url: string } | null,
+): Promise<TabDestination | null> {
+  let raw: unknown;
+  try {
+    const [injection] = await browser.scripting.executeScript({
+      target: { tabId },
+      func: readCitationSnapshot,
+    });
+    raw = injection?.result;
+  } catch (err) {
+    return {
+      kind: "failed",
+      reason: "zotero-failed",
+      detail: `Tabglutton could not read this page's citation data: ${errorMessage(err)}`,
+    };
   }
-  return { kind: "failed", reason: "zotero-failed", detail: lastError };
+  const snapshot = parseCitationSnapshot(raw);
+  if (!snapshot) {
+    return {
+      kind: "failed",
+      reason: "zotero-failed",
+      detail: "Tabglutton could not read this page's citation data.",
+    };
+  }
+  const accessDate = new Date().toISOString();
+  const citation = citationFromSnapshot(snapshot, accessDate);
+  if (citation) return { kind: "zotero", citation };
+  if (forced) {
+    return {
+      kind: "zotero",
+      citation: webpageCitation(forced.title, snapshot.url, accessDate),
+    };
+  }
+  return null;
+}
+
+/**
+ * Save one routed paper, with the failure said in the user's terms. A request
+ * that got no answer is checked against the loopback grant before it is
+ * reported as Zotero not running: Chrome's grant is revocable, and without it
+ * the request fails exactly the way an absent Zotero does. Asked only once a
+ * save has failed, so a working run pays nothing for it.
+ */
+async function saveRoutedPaper(citation: ZoteroCitation): Promise<ZoteroSaveReceipt> {
+  try {
+    return await saveCitationToZotero(citation, {
+      key: settings.zoteroApiKey,
+      collection: settings.zoteroCollection,
+      fetchPdf: fetchPdfBytes,
+    });
+  } catch (err) {
+    if (
+      err instanceof ZoteroError &&
+      err.kind === "unreachable" &&
+      (await originsGrant(ZOTERO_ORIGINS)) === "missing"
+    ) {
+      throw new Error(ZOTERO_ACCESS_GONE);
+    }
+    throw err;
+  }
+}
+
+/**
+ * The PDF a paper page names, fetched with the browser's own view of the site —
+ * cookies included, so a PDF the user can open through an institutional login
+ * comes down the same way. Only the paper's own `citation_pdf_url` ever
+ * reaches here.
+ */
+async function fetchPdfBytes(url: string): Promise<Uint8Array<ArrayBuffer>> {
+  const response = await fetch(url, { credentials: "include" });
+  if (!response.ok) {
+    throw new Error(`The PDF did not download (HTTP ${response.status}), so none was attached.`);
+  }
+  return new Uint8Array(await response.arrayBuffer());
 }
 
 type ExtractOutcome = { kind: "ok"; res: ClipCurrentResponse } | { kind: "threw"; err: unknown };
@@ -1147,8 +1253,8 @@ async function clipSelectedTabs(requestedTabIds: number[]): Promise<ClipSelected
   // identical per-tab failures rather than as the one fact it is.
   //
   // Refusing the whole run needs the stronger claim that nothing in it could
-  // have gone anywhere else. Zotero routing breaks that: an academic tab files
-  // through the Connector, which needs no `downloads` at all, so a run with
+  // have gone anywhere else. Zotero routing breaks that: a paper files through
+  // Zotero's local API, which needs no `downloads` at all, so a run with
   // routing on is let through and only its file-bound tabs fail. A site rule
   // breaks it the same way — a never-devour, auto-close, or zotero disposition
   // spends nothing on the grant. And only a grant seen to be missing refuses
@@ -1162,11 +1268,10 @@ async function clipSelectedTabs(requestedTabIds: number[]): Promise<ClipSelected
 
   // Phase 1: read, wake, route and extract each tab as one per-tab chain, all
   // of them overlapping. There is deliberately no barrier between the steps —
-  // the slow parts are ensureTabReady's reload-and-wait and the Connector's
-  // detection poll, so a tab that resolves early must not wait on the slowest
-  // one before extracting. Zotero-bound tabs stop after routing: Zotero already
-  // owns the page and its translator state, so a paper needs neither Defuddle
-  // nor Tabglutton's host permission. clipTab is concurrency-safe (per-tab
+  // the slow part is ensureTabReady's reload-and-wait, so a tab that resolves
+  // early must not wait on the slowest one before extracting. Zotero-bound tabs
+  // stop after routing: the citation data routing read is the whole item, so a
+  // paper needs no Defuddle pass. clipTab is concurrency-safe (per-tab
   // onUpdated listener, unique requestId in pendingClips) and is passed
   // `wake: false` because destinationForTab has already woken the tab.
   const prepared = new Map(
@@ -1175,7 +1280,7 @@ async function clipSelectedTabs(requestedTabIds: number[]): Promise<ClipSelected
         const meta = metas.get(tabId) ?? { title: "", url: "" };
         const destination = await destinationForTab(
           tabId,
-          meta.url,
+          meta,
           downloadsHeld,
           rules.get(tabId) ?? null,
         );
@@ -1196,10 +1301,10 @@ async function clipSelectedTabs(requestedTabIds: number[]): Promise<ClipSelected
     ),
   );
 
-  // Phase 2: report in selection order. Connector saves are the one part of it
+  // Phase 2: report in selection order. Zotero saves are the one part of it
   // that overlaps — all of them handed over here, so one is already in flight
-  // while the loop below is still filing earlier tabs. `saveTabToZotero` owns
-  // the ceiling (ZOTERO_SAVE_CONCURRENCY), because the Connector is shared with
+  // while the loop below is still filing earlier tabs. `saveCitationToZotero`
+  // owns the ceiling (ZOTERO_SAVE_CONCURRENCY), because Zotero is shared with
   // the bridge and a per-run pool here would only bound this run.
   //
   // Everything the loop does itself stays serial: Obsidian because clipboard
@@ -1209,10 +1314,11 @@ async function clipSelectedTabs(requestedTabIds: number[]): Promise<ClipSelected
   // Started in selection order and awaited in it too, so a save finishing early
   // changes nothing an agent or the popup can see: same counts, same failure
   // order, same progress ticks.
-  const zoteroSaves = new Map<number, Promise<void>>();
+  const zoteroSaves = new Map<number, Promise<ZoteroSaveReceipt>>();
   for (const tabId of tabIds) {
-    if (prepared.get(tabId)?.destination.kind !== "zotero") continue;
-    const save = saveTabToZotero(settings.zoteroConnectorId, tabId);
+    const destination = prepared.get(tabId)?.destination;
+    if (destination?.kind !== "zotero") continue;
+    const save = saveRoutedPaper(destination.citation);
     // The loop below is the real handler; this only keeps a save that rejects
     // before its turn from surfacing as an unhandled rejection in the console.
     save.catch(() => {});
@@ -1300,16 +1406,24 @@ async function clipSelectedTabs(requestedTabIds: number[]): Promise<ClipSelected
       // the failure order reading exactly as a serial run's.
       const save = zoteroSaves.get(tabId);
       if (save) {
+        let receipt: ZoteroSaveReceipt;
         try {
-          await save;
+          receipt = await save;
         } catch (err) {
           fail("zotero-failed", errorMessage(err));
           console.warn("[tabglutton] Zotero save failed for tab", tabId, err);
           continue;
         }
-        // The Connector accepted the item, which is its report of a handoff and
-        // not a file this extension ever sees — `launched`, like Obsidian.
-        await noteClip(meta.url, "launched", "zotero");
+        if (receipt.pdf === "failed") {
+          console.warn(
+            "[tabglutton] Zotero item saved without its PDF for tab",
+            tabId,
+            receipt.pdfNote,
+          );
+        }
+        // The item was read back from the library before the save resolved, so
+        // this is a sighting, like a download seen to finish — `verified`.
+        await noteClip(meta.url, "verified", "zotero");
         try {
           await browser.tabs.remove(tabId);
         } catch (err) {
@@ -1852,6 +1966,7 @@ async function collectDiagnostics(): Promise<GetDiagnosticsResponse> {
     scope: settings.scope,
     clipDestination: settings.clipDestination,
     zoteroRouting: settings.zoteroRoutingEnabled,
+    zoteroConnected: settings.zoteroApiKey.length > 0,
     dupNotice: { enabled: settings.dupNoticeEnabled, threshold: settings.dupNoticeThreshold },
     bridge: {
       enabled: settings.bridgeEnabled,
@@ -1963,12 +2078,17 @@ void (async function init() {
 })();
 
 /**
- * Settings minus the bridge token. That token is the whole of the bridge's
- * authentication — anything holding it can list, read, clip, and close every tab
- * — and this line runs on every wake of an event page, so leaving it in prints
- * the credential continuously into a console whose contents get pasted wholesale
- * into bug reports and agent sessions.
+ * Settings minus its two credentials. The bridge token is the whole of the
+ * bridge's authentication — anything holding it can list, read, clip, and close
+ * every tab — and the Zotero key writes to the user's library. This line runs on
+ * every wake of an event page, so leaving either in prints it continuously into
+ * a console whose contents get pasted wholesale into bug reports and agent
+ * sessions.
  */
 function loggableSettings(current: Settings): Record<string, unknown> {
-  return { ...current, bridgeToken: current.bridgeToken ? "<set>" : "" };
+  return {
+    ...current,
+    bridgeToken: current.bridgeToken ? "<set>" : "",
+    zoteroApiKey: current.zoteroApiKey ? "<set>" : "",
+  };
 }

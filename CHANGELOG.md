@@ -2,6 +2,22 @@
 
 All notable changes to Tabglutton are documented here.
 
+## [0.5.2](https://github.com/mlsimon734/tabglutton/compare/v0.5.1...v0.5.2) (unreleased)
+
+### Features
+
+- **Route papers to Zotero now works with the Zotero you already have.** Tabglutton saves a
+  paper straight into Zotero 10's local API instead of asking a patched Zotero Connector, which
+  upstream declined to support. A page counts as a paper when it carries citation data (arXiv,
+  OpenReview, journals, conference proceedings); the item is filed into a collection you name,
+  with its PDF attached, and read back from your library before the tab closes. Turn on Zotero's
+  "Allow other applications on this computer to communicate with Zotero", then press **Connect
+  to Zotero** in Tabglutton's settings and choose **Always Allow**. The Connector extension ID
+  field is gone, and standalone PDF tabs no longer route to Zotero. `tab_clip` routes the same
+  way and now says whether the PDF was attached. The manifest's permissions and the bridge
+  protocol are unchanged; on Chrome, turning routing on asks for the same local access the
+  bridge uses ([#113](https://github.com/mlsimon734/tabglutton/issues/113)).
+
 ## [0.5.1](https://github.com/mlsimon734/tabglutton/compare/v0.5.0...v0.5.1) (2026-10-19)
 
 Two threads. The Digest panel becomes a desk: a list beside a preview of the row you

@@ -27,6 +27,16 @@ export const CLIP_ORIGINS = ["*://*/*"];
 export const BRIDGE_ORIGINS = ["http://127.0.0.1/*"];
 
 /**
+ * Zotero's local API at 127.0.0.1:23119. Zotero sends no CORS headers, so a
+ * host grant is the only way an extension reaches it. The same pattern as
+ * `BRIDGE_ORIGINS` (match patterns carry no port), which is why the manifest
+ * needs no new entry: Chrome already lists it as optional and Firefox's
+ * all-sites host permission covers it. Asked for when the user switches routing
+ * on.
+ */
+export const ZOTERO_ORIGINS = ["http://127.0.0.1/*"];
+
+/**
  * A grant, with "could not ask" kept apart from "not granted" — see
  * `downloadsGrant` for why every caller that *acts* needs the third answer.
  */
@@ -113,6 +123,19 @@ export const SITES_REFUSED_FOR_NOTICE =
   "Site access was declined, so the notice has no page to appear on — it stays off. Switch it on again to ask once more, or grant access to all sites from the browser's own extension settings.";
 export const SITES_REVOKED_FOR_NOTICE =
   "Tabglutton no longer has access to sites, so the duplicate notice has no page to appear on and is off. Switch it on again to grant access.";
+
+/**
+ * What the options page says when Zotero routing cannot have the loopback grant
+ * it writes through. Same recovery shape as the notice: the switch goes back
+ * off, so switching it on again is the one click that asks.
+ */
+export const ZOTERO_ACCESS_REFUSED =
+  "Access to Zotero on this computer was declined, so papers have no route there — routing stays off. Switch it on again to ask once more.";
+export const ZOTERO_ACCESS_REVOKED =
+  "Tabglutton no longer has access to Zotero on this computer, so routing papers there is off. Switch it on again to grant it.";
+/** The fact and the remedy, for Devour and the bridge, which cannot ask. */
+export const ZOTERO_ACCESS_GONE =
+  "Tabglutton no longer has access to Zotero on this computer. Routing switches off in Tabglutton's settings while the permission is missing, so switching it on there again is what asks for it.";
 
 /**
  * What the surfaces with no gesture say instead. Neither the background page

@@ -125,17 +125,18 @@
       <section>
         <h2 class="section-title">Academic papers</h2>
         <p class="section-intro">
-          Optionally let Zotero Connector identify scholarly items and save them through its normal
-          translator workflow. Everything else continues to Obsidian.
+          Optionally file pages that carry citation data — arXiv, OpenReview, journals and
+          conference proceedings — into Zotero, with their PDFs. Everything else goes to your clip
+          destination.
         </p>
 
         <div class="setting">
           <div class="setting-text">
             <strong>Route papers to Zotero</strong>
             <small>
-              Includes scholarly translator types and standalone PDFs. Off by default. This local
-              proof of concept requires the patched Connector build described in
-              <code>docs/ZOTERO_POC.md</code>.
+              Needs Zotero 10 or later running on this computer, with “Allow other applications on
+              this computer to communicate with Zotero” turned on in its Advanced settings. Off by
+              default.
             </small>
           </div>
           <div class="setting-control">
@@ -148,19 +149,35 @@
           </div>
         </div>
 
-        <div class="setting block">
+        <div class="setting" id="zoteroConnectionRow">
           <div class="setting-text">
-            <strong>Connector extension ID</strong>
+            <strong>Connection</strong>
             <small>
-              The published Connector is preset. Chrome assigns an unpacked development build a
-              different ID; copy that ID from <code>chrome://extensions</code> when testing the
-              proof of concept.
+              Zotero asks once, in its own window. Choose Always Allow: a one-time approval covers a
+              single write, and filing a paper takes several.
+            </small>
+          </div>
+          <div class="setting-control control-row">
+            <span id="zoteroStatus" class="pill" data-state="disabled" role="status"
+              >Not connected</span
+            >
+            <button type="button" id="zoteroConnect" class="mini-button">Connect to Zotero</button>
+          </div>
+        </div>
+
+        <div class="setting block" id="zoteroCollectionRow">
+          <div class="setting-text">
+            <strong>Collection</strong>
+            <small>
+              Papers go into this top-level collection, which is created the first time it is
+              needed. Leave it empty to file into My Library.
             </small>
           </div>
           <div class="setting-control">
             <input
               type="text"
-              id="zoteroConnectorId"
+              id="zoteroCollection"
+              placeholder="My Library"
               autocomplete="off"
               autocapitalize="off"
               autocorrect="off"
@@ -168,6 +185,8 @@
             />
           </div>
         </div>
+        <!-- Never `hidden`, for the same live-region reason as the notice warning above. -->
+        <p id="zoteroWarning" class="vault-warning setting-note" role="status"></p>
       </section>
 
       <section>
