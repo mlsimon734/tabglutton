@@ -116,6 +116,34 @@ describe("digestReceipt", () => {
     expect(digestReceipt(r, T + 31 * MIN)?.closed).toBe(2);
   });
 
+  test("review time runs to the first Close that took anything", () => {
+    const r = record([rec(A)], {
+      openedAt: T,
+      closes: [
+        close(T + 60 * MIN, [0], { batchId: "b2" }),
+        { startedAt: T + MIN, at: T + MIN, outcomes: [{ index: 0, outcome: "failed" }] },
+      ],
+    });
+    expect(digestReceipt(r, T + 61 * MIN)?.reviewMs).toBe(60 * MIN);
+  });
+
+  test("counts only what the held closes took, so nothing exceeds closed", () => {
+    // Older closes fall off the record (`withClose` keeps the newest few); their
+    // reopens and undos must not outnumber what the record still says closed.
+    const r = record([rec(A), rec(B), rec(C)], {
+      closes: [close(T, [0])],
+      use: {
+        reopened: [
+          { index: 0, at: T + MIN },
+          { index: 1, at: T - MIN },
+          { index: 2, at: T - MIN },
+        ],
+        undone: [{ at: T - 2 * MIN, indexes: [1, 2] }],
+      },
+    });
+    expect(digestReceipt(r, T + 2 * MIN)).toMatchObject({ closed: 1, reopened: 1, undone: 0 });
+  });
+
   test("no review time without a first look", () => {
     const r = record([rec(A)], { closes: [close(T, [0])] });
     expect(digestReceipt(r, T)?.reviewMs).toBeUndefined();
@@ -139,14 +167,12 @@ describe("reopenWatchList", () => {
         index: 0,
         key: key(A),
         incognito: false,
-        until: T + REOPEN_WINDOW_MS,
       },
       {
         digestId: r.id,
         index: 1,
         key: key(B),
         incognito: true,
-        until: T + REOPEN_WINDOW_MS,
       },
     ]);
   });
@@ -166,14 +192,11 @@ describe("reopenWatchList", () => {
       use: { reopened: [], undone: [{ at: T + MIN, indexes: [0] }] },
     });
     expect(reopenWatchList([r], opts, T + 11 * MIN)).toEqual([
-      {
-        digestId: r.id,
-        index: 0,
-        key: key(A),
-        incognito: false,
-        until: T + 10 * MIN + REOPEN_WINDOW_MS,
-      },
+      { digestId: r.id, index: 0, key: key(A), incognito: false },
     ]);
+    // Watched for 48 hours from the second close, not the first.
+    expect(reopenWatchList([r], opts, T + REOPEN_WINDOW_MS + 5 * MIN)).toHaveLength(1);
+    expect(reopenWatchList([r], opts, T + 10 * MIN + REOPEN_WINDOW_MS)).toEqual([]);
   });
 });
 

@@ -26,15 +26,15 @@ import type { UndoBatch } from "./undo-log.js";
 
 export const withDigests = createTaskQueue();
 
-let generation = 0;
+const written = new Set<() => void>();
 
 /**
- * Bumped on every write this context makes. Every digest write happens in the
- * background, so a cache built there from `readDigests` is current while this
- * number is unchanged.
+ * Call `listener` after every digest write this context makes. Every write
+ * happens in the background, so a cache built there from `readDigests` and
+ * refreshed from here is never stale.
  */
-export function digestsGeneration(): number {
-  return generation;
+export function onDigestsWritten(listener: () => void): void {
+  written.add(listener);
 }
 
 /** Only call inside `withDigests`, unless the answer is read-only. */
@@ -55,7 +55,7 @@ async function writeDigests(list: readonly DigestRecord[]): Promise<void> {
   await browser.storage.local.set({
     [DIGESTS_KEY]: { v: DIGEST_STORE_VERSION, digests: retainDigests(list) },
   });
-  generation += 1;
+  for (const listener of written) listener();
 }
 
 /**

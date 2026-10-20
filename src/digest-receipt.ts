@@ -71,8 +71,6 @@ export interface ReopenWatch {
   key: string;
   /** Only a tab in the same privacy context counts. */
   incognito: boolean;
-  /** Epoch ms past which this item is no longer watched. */
-  until: number;
 }
 
 /** Every closed item still watched, across the stored digests. */
@@ -94,7 +92,6 @@ export function reopenWatchList(
         index,
         key,
         incognito: item.anchor?.incognito ?? false,
-        until: since + REOPEN_WINDOW_MS,
       });
     }
   }
@@ -154,11 +151,16 @@ export function withUndone(
   };
 }
 
-/** The receipt, or null until a Close has taken something. */
+/**
+ * The receipt, or null until a Close has taken something. It describes the
+ * closes the record still holds (the newest few, `withClose`): reopens and undos
+ * of an item no held close took are left out, so no count can exceed `closed`.
+ */
 export function digestReceipt(record: DigestRecord, now: number): DigestReceipt | null {
   const closed = closedAt(record);
   if (closed.size === 0) return null;
   const use = record.use ?? NO_USE;
+  const held = (index: number): boolean => closed.has(index);
 
   const tally = new Map<string, { from: DigestFate; to: DigestFate; count: number }>();
   let moved = 0;
@@ -171,7 +173,13 @@ export function digestReceipt(record: DigestRecord, now: number): DigestReceipt 
     else tally.set(key, { from: item.fate, to: item.userFate, count: 1 });
   }
 
-  const firstClose = Math.min(...record.closes.map((c) => c.startedAt));
+  // The first Close that took anything: a press where every tab was refused or
+  // failed is not where the review ended.
+  const firstClose = Math.min(
+    ...record.closes
+      .filter((c) => c.outcomes.some((o) => o.outcome === "closed"))
+      .map((c) => c.startedAt),
+  );
   const reviewMs =
     record.openedAt !== undefined && firstClose >= record.openedAt
       ? firstClose - record.openedAt
@@ -179,8 +187,8 @@ export function digestReceipt(record: DigestRecord, now: number): DigestReceipt 
 
   return {
     closed: closed.size,
-    reopened: new Set(use.reopened.map((r) => r.index)).size,
-    undone: new Set(use.undone.flatMap((u) => u.indexes)).size,
+    reopened: new Set(use.reopened.map((r) => r.index).filter(held)).size,
+    undone: new Set(use.undone.flatMap((u) => u.indexes).filter(held)).size,
     moved,
     moves: [...tally.values()].sort((a, b) => b.count - a.count),
     ...(reviewMs !== undefined ? { reviewMs } : {}),

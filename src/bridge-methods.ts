@@ -1260,11 +1260,13 @@ export class BridgeMethodRunner {
 
   private async undoClose(raw: unknown): Promise<UndoCloseResult> {
     const params = parseUndoCloseParams(raw);
-    const startedAt = Date.now();
     // The whole undo runs under the log's lock, restores included — see
     // `withUndoLog`. Reading, restoring, and writing back are one transaction
     // as far as any concurrent close is concerned.
-    const { result, batch, restored } = await withUndoLog(async () => {
+    const { result, batch, restored, startedAt } = await withUndoLog(async () => {
+      // Taken once the lock is held: a reopen the user made while this Undo was
+      // still waiting on another close is theirs, not the Undo's.
+      const startedAt = Date.now();
       const batch = findBatch(await readUndoLog(), params.batchId);
       if (!batch) {
         fail(
@@ -1303,7 +1305,8 @@ export class BridgeMethodRunner {
         restored: ordered.length - failed.length,
         failed: failed.length,
       };
-      return { result, batch, restored: ordered.filter((entry) => !failed.includes(entry)) };
+      const restored = ordered.filter((entry) => !failed.includes(entry));
+      return { result, batch, restored, startedAt };
     });
     // A digest's receipt counts Undo apart from pages the user reopened. After
     // the lock, so the digest store's queue is never taken inside the undo log's.

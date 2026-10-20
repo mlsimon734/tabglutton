@@ -282,7 +282,7 @@ describe("renderDiagnostics", () => {
     expect(block).toContain(
       [
         "digests (2, newest first)",
-        "  2h ago  28 tabs (worth 6 · file 7 · close 14 · unread 1) · closed 14 after 4m · reopened 2 (watching) · undone 0 · moved 3: worth-it>close 2, close>could-not-read 1",
+        "  2h ago  28 tabs (worth 6 · file 7 · close 14 · unread 1) · closed 14 after 4 min · reopened 2 (watching) · undone 0 · moved 3: worth-it>close 2, close>could-not-read 1",
         "  3d ago  5 tabs (worth 2 · file 0 · close 3 · unread 0) · not closed",
         "```",
       ].join("\n"),

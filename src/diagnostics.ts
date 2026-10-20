@@ -31,7 +31,7 @@
  */
 
 import type { BridgeWireMethod, DigestFate } from "./bridge-protocol.js";
-import type { DigestReceipt } from "./digest-receipt.js";
+import { reviewSpan, type DigestReceipt } from "./digest-receipt.js";
 import type { PermissionGrant } from "./permissions.js";
 import type { BridgePortMode, ClipDestination, ScopeMode } from "./storage.js";
 import type { BridgeStatus } from "./bridge-client.js";
@@ -236,14 +236,6 @@ function errorLines(errors: readonly BridgeErrorEntry[], now: number): string[] 
   });
 }
 
-/** "4m", "1h 20m": the review time, coarse like `agoLabel`. */
-function spanLabel(ms: number): string {
-  if (ms < MINUTE) return `${Math.floor(ms / 1_000)}s`;
-  if (ms < HOUR) return `${Math.floor(ms / MINUTE)}m`;
-  const minutes = Math.floor((ms % HOUR) / MINUTE);
-  return `${Math.floor(ms / HOUR)}h${minutes ? ` ${minutes}m` : ""}`;
-}
-
 function digestLines(digests: readonly DiagnosticsDigestFacts[], now: number): string[] {
   return digests.map((d) => {
     const fates = d.fates;
@@ -256,7 +248,7 @@ function digestLines(digests: readonly DiagnosticsDigestFacts[], now: number): s
       parts.push("not closed");
     } else {
       parts.push(
-        `closed ${r.closed}${r.reviewMs === undefined ? "" : ` after ${spanLabel(r.reviewMs)}`}`,
+        `closed ${r.closed}${r.reviewMs === undefined ? "" : ` after ${reviewSpan(r.reviewMs)}`}`,
         `reopened ${r.reopened}${r.watching ? " (watching)" : ""}`,
         `undone ${r.undone}`,
         r.moved === 0
