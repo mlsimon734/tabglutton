@@ -2,12 +2,14 @@
 
 This proof of concept lets Tabglutton ask a separately built Zotero Connector to identify and save
 scholarly tabs. It is local development machinery, not a production integration: the published
-Connector does not expose this API yet.
+Connector does not expose this API, and upstream has declined to add it (below). The route that
+needs no Connector at all is Zotero's own local API — see §The local API route and
+[#113](https://github.com/mlsimon734/tabglutton/issues/113).
 
 The patch is checked in so the experiment and the upstream proposal are reproducible. It
 cannot be applied automatically when Tabglutton is installed: browser-store extensions are signed,
-isolated packages, and one extension cannot rewrite another installed extension. Until Zotero ships
-the API, testing therefore requires a separately built, unpacked Connector as described below.
+isolated packages, and one extension cannot rewrite another installed extension. Testing therefore
+requires a separately built, unpacked Connector as described below.
 
 ## Upstream proposal
 
@@ -25,11 +27,14 @@ Three attempts, in order, so the next person does not repeat the first two:
   carries.
 - [zotero-connectors#637](https://github.com/zotero/zotero-connectors/pull/637) — the same
   proposal as a reviewable diff, opened because the thread drew none. It answers the
-  `/connector/detect` question the zotero-dev post left open.
+  `/connector/detect` question the zotero-dev post left open. **Declined 2026-09-28**: a Zotero
+  maintainer wrote that they are "unlikely to merge and commit to maintaining something like this
+  without a clearer value proposition to a broader number of our users", suggested asking on the
+  Zotero Forums whether more users want it, and closed the PR unmerged.
 
-Until it lands, **this repository's Zotero routing is shipped and inert** for anyone using a
-published Connector: the API answers nothing, so testing needs a separately built Connector
-as described below.
+**This repository's Connector routing is shipped and inert** for anyone using a published
+Connector, and stays that way: the API answers nothing, so testing needs a separately built
+Connector as described below.
 
 ## What it proves
 
@@ -184,7 +189,59 @@ above; the allowlist is a Connector preference, so it has to be set again for th
 The Connector→Zotero channel is loopback HTTP, not extension-ID-keyed, so the renamed build talks to
 Zotero desktop exactly as the published one does. Zotero's local server has no per-extension
 authorization at all: `server.js` blocks browser-shaped requests only until they carry an
-`X-Zotero-Connector-API-Version` header.
+`X-Zotero-Connector-API-Version` or `Zotero-Allowed-Request` header.
+
+## The local API route
+
+Zotero 10.0 (2026-08-17) added write support to the local API at `http://localhost:23119/api/`,
+which mirrors the web API. That gives a route to Zotero that involves no Connector: read the page's
+own Highwire `citation_*` meta tags (which arXiv, ACL Anthology, PMLR, and most publishers emit for
+Google Scholar), create the item, and upload the PDF.
+
+**Spike, 2026-10-19, on Zotero 10.0.6: passed.** A throwaway Bun script (not checked in) created
+three items, each with an `imported_url` PDF attachment, in a "Tabglutton spike" collection, and read
+each back: title, creator count, collection membership, and the PDF on disk at the right size.
+
+- **arXiv 1706.03762:** `preprint`, 8 creators, DOI `10.48550/arXiv.1706.03762` (derived from the
+  id), abstract, PDF. Nothing missing.
+- **ACL Anthology N19-1423:** `conferencePaper`, 4 creators, DOI, pages, proceedings title, PDF. The
+  abstract is in no meta tag and was read from the page body; publisher and address exist only in the
+  BibTeX and are missing.
+- **PMLR v37 ioffe15:** complete except a DOI, which the page does not carry. The abstract was read
+  from the body because `twitter:description` stops at 160 characters.
+- **OpenReview: not tested.** Server-side fetches meet a Cloudflare Turnstile check. The extension
+  would read the tab the user already has open, which has passed it — inferred, not measured — and
+  whether OpenReview emits `citation_*` tags at all is unverified.
+
+What the API requires, read from Zotero's source at tag 10.0.6 where the documentation is silent:
+
+- The user turns on **Settings → Advanced → "Allow other applications on this computer to
+  communicate with Zotero"**; until then every request answers `403`.
+- Writes need a **local API key**, requested with `POST /api/local/authorize` and an `appName`, and
+  approved by the user in a Zotero dialog. Unless the user picks **Always Allow** the key is
+  single-use, at most five dialog-raising requests are accepted a minute, and a key is consumed by
+  the first write that validates it even when that write then fails (`server_localAPI.js:652`).
+- Every write carries **`Zotero-Server-ID`**, a 12-character id stored in the Zotero database and
+  returned on every response (`server_localAPI.js:594`); a write without it answers `428`, a
+  mismatch `412`.
+- **Browser-shaped requests are dropped with no response** — any `Origin` header, or a `Mozilla/`
+  user agent — unless they carry `Zotero-Allowed-Request` or `X-Zotero-Connector-API-Version`
+  ([`server.js:414-432`](https://github.com/zotero/zotero/blob/10.0.6/chrome/content/zotero/xpcom/server/server.js#L414-L432)).
+  An extension's `moz-extension://` or `chrome-extension://` origin counts.
+- **No CORS headers** are sent except to the bookmarklet origin (`server.js:280`), so an extension
+  reaches the API only with a host permission for `http://localhost:23119/*`. The `Host` header must
+  be `localhost`, `127.0.0.1`, or `[::1]`.
+- PDF bytes go up with a binary content type; `text/plain`, JSON, and form-encoded bodies are decoded
+  as text and would corrupt the file.
+
+What it gives up against the Connector's translators: arXiv's category tags, author comment, and
+version links; publisher fields that only the BibTeX carries; the item type, which Highwire tags do
+not state and has to be inferred; name order, which has to be guessed per site; every site with no
+`citation_*` tags, which the Connector's roughly 600 translators cover; PDFs behind a paywall, which
+this route has to fetch itself; and the Connector's "save to the current collection" UI. For papers
+on arXiv, OpenReview, and conference sites, the loss is small. Where the write should happen — the
+extension with an optional host permission, or Gullet — is the open decision in
+[#113](https://github.com/mlsimon734/tabglutton/issues/113).
 
 ## Suggested smoke test
 
