@@ -18,6 +18,14 @@ All notable changes to Tabglutton are documented here.
   protocol are unchanged; on Chrome, turning routing on asks for the same local access the
   bridge uses ([#113](https://github.com/mlsimon734/tabglutton/issues/113)).
 
+### Fixes
+
+- **Dedup no longer closes pages on Zen when you have more than one window open.** Zen's
+  window sync shows each page's copy in another window as a blank tab, and closing that copy
+  closes the page. Dedup counted those blank tabs as duplicates of each other, so one press
+  could close every synced page, and Undo brought them back blank. Dedup now only compares
+  web pages.
+
 ## [0.5.1](https://github.com/mlsimon734/tabglutton/compare/v0.5.0...v0.5.1) (2026-10-19)
 
 Two threads. The Digest panel becomes a desk: a list beside a preview of the row you

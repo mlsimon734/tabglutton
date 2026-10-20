@@ -21,12 +21,23 @@ export interface DupGroup<T extends DedupTab = Tab> {
   tabs: T[];
 }
 
+/**
+ * Only web pages can be duplicates. Zen's window sync shows every page's copy
+ * in another window as a discarded `about:blank` tab, and closing that copy
+ * closes the page; grouping those stand-ins closed every synced page that had
+ * no duplicate at all (#117).
+ */
+function isWebUrl(url: string | undefined): boolean {
+  return url !== undefined && (url.startsWith("https://") || url.startsWith("http://"));
+}
+
 export function groupDuplicates<T extends DedupTab>(
   tabs: T[],
   normalizeOpts: NormalizeOpts,
 ): DupGroup<T>[] {
   const groups = new Map<string, T[]>();
   for (const tab of tabs) {
+    if (!isWebUrl(tab.url)) continue;
     const key = normalizeUrl(tab.url, normalizeOpts);
     if (!key) continue;
     let bucket = groups.get(key);
