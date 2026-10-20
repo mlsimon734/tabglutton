@@ -65,7 +65,12 @@ import {
   type Settings,
 } from "./storage.js";
 import { IS_CHROME } from "./target.js";
-import { saveCitationToZotero, ZoteroError, type ZoteroSaveReceipt } from "./zotero.js";
+import {
+  saveCitationToZotero,
+  ZOTERO_MAX_PDF_BYTES,
+  ZoteroError,
+  type ZoteroSaveReceipt,
+} from "./zotero.js";
 import {
   citationFromSnapshot,
   parseCitationSnapshot,
@@ -190,6 +195,8 @@ export interface ClipSelectedTabsResponse {
   /** Written as markdown files in the download folder (`clipDestination: "file"`). */
   fileSaved: number;
   zoteroSaved: number;
+  /** Of `zoteroSaved`, the items filed without the PDF their page named. */
+  zoteroPdfMissing: number;
   /** Closed without saving by an `auto-close` site rule. */
   ruleClosed: number;
   /** What those closes could reopen — the popups feed this to their undo toast. */
@@ -1104,10 +1111,14 @@ async function zoteroDestination(
     });
     raw = injection?.result;
   } catch (err) {
+    // Left open rather than guessed about: with routing on, an unreadable page
+    // might be a paper, and filing it as a note is the misfiling routing exists
+    // to prevent. A PDF viewer or a page the engine keeps closed lands here, and
+    // could not have been clipped as a note either.
     return {
       kind: "failed",
       reason: "zotero-failed",
-      detail: `Tabglutton could not read this page's citation data: ${errorMessage(err)}`,
+      detail: `Tabglutton could not read this page to tell whether it is a paper, so it was left open: ${errorMessage(err)}`,
     };
   }
   const snapshot = parseCitationSnapshot(raw);
@@ -1156,6 +1167,9 @@ async function saveRoutedPaper(citation: ZoteroCitation): Promise<ZoteroSaveRece
   }
 }
 
+/** Longer than any PDF a working connection takes; short enough not to strand a run. */
+const PDF_FETCH_TIMEOUT_MS = 60_000;
+
 /**
  * The PDF a paper page names, fetched with the browser's own view of the site —
  * cookies included, so a PDF the user can open through an institutional login
@@ -1163,11 +1177,29 @@ async function saveRoutedPaper(citation: ZoteroCitation): Promise<ZoteroSaveRece
  * reaches here.
  */
 async function fetchPdfBytes(url: string): Promise<Uint8Array<ArrayBuffer>> {
-  const response = await fetch(url, { credentials: "include" });
-  if (!response.ok) {
-    throw new Error(`The PDF did not download (HTTP ${response.status}), so none was attached.`);
+  // Bounds the body as well as the headers: a stalled server would otherwise
+  // hold one of the Zotero pool's slots, and Devour's whole run behind it.
+  const signal = AbortSignal.timeout(PDF_FETCH_TIMEOUT_MS);
+  try {
+    const response = await fetch(url, { credentials: "include", signal });
+    if (!response.ok) {
+      throw new Error(`The PDF did not download (HTTP ${response.status}), so none was attached.`);
+    }
+    if (Number(response.headers.get("Content-Length")) > ZOTERO_MAX_PDF_BYTES) {
+      await response.body?.cancel();
+      throw new Error(
+        `The PDF is larger than ${ZOTERO_MAX_PDF_BYTES / (1024 * 1024)} MB, so it was not attached.`,
+      );
+    }
+    return new Uint8Array(await response.arrayBuffer());
+  } catch (err) {
+    if (signal.aborted) {
+      throw new Error(
+        `The PDF took longer than ${PDF_FETCH_TIMEOUT_MS / 1000} seconds to download, so none was attached.`,
+      );
+    }
+    throw err;
   }
-  return new Uint8Array(await response.arrayBuffer());
 }
 
 type ExtractOutcome = { kind: "ok"; res: ClipCurrentResponse } | { kind: "threw"; err: unknown };
@@ -1213,6 +1245,7 @@ function clipBlocked(blocked: ClipBlockedReason): ClipSelectedTabsResponse {
     obsidianSaved: 0,
     fileSaved: 0,
     zoteroSaved: 0,
+    zoteroPdfMissing: 0,
     ruleClosed: 0,
     ruleClosedRestorable: [],
     blocked,
@@ -1334,6 +1367,7 @@ async function clipSelectedTabs(requestedTabIds: number[]): Promise<ClipSelected
   let obsidianSaved = 0;
   let fileSaved = 0;
   let zoteroSaved = 0;
+  let zoteroPdfMissing = 0;
   let ruleClosed = 0;
   const ruleClosedRestorable: ClosedTabRecord[] = [];
   const failures: ClipFailure[] = [];
@@ -1415,6 +1449,7 @@ async function clipSelectedTabs(requestedTabIds: number[]): Promise<ClipSelected
           continue;
         }
         if (receipt.pdf === "failed") {
+          zoteroPdfMissing += 1;
           console.warn(
             "[tabglutton] Zotero item saved without its PDF for tab",
             tabId,
@@ -1563,6 +1598,7 @@ async function clipSelectedTabs(requestedTabIds: number[]): Promise<ClipSelected
     obsidianSaved,
     fileSaved,
     zoteroSaved,
+    zoteroPdfMissing,
     ruleClosed,
     ruleClosedRestorable,
     failures,

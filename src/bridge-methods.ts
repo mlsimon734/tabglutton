@@ -195,11 +195,12 @@ const NO_INJECTION_TARGET_HINT =
 /**
  * Appended when routing could not read a tab's citation data, which is the one
  * thing that decides whether it is a paper. The page is left open rather than
- * guessed about, and the likely causes are a page mid-navigation or one with no
- * injection target, which the engine's own message names.
+ * guessed about; the engine's own message, and NO_INJECTION_TARGET_HINT when it
+ * applies, say why. No retry advice: `zoteroClip` has already spent the one
+ * retry that helps.
  */
 const CITATION_UNREADABLE_HINT =
-  "The user routes papers to Zotero, and Tabglutton could not tell whether this tab is one, so it was left open rather than filed somewhere the user did not choose. A tab that was still loading can do this on its own; retry once it has.";
+  "The user routes papers to Zotero, and Tabglutton could not tell whether this tab is one, so it was left open rather than filed somewhere the user did not choose.";
 
 /** Pure so the engine-string gate can be pinned without a browser harness. */
 export function isNoInjectionTargetError(message: string | undefined): boolean {
@@ -1011,11 +1012,27 @@ export class BridgeMethodRunner {
     let citation: ZoteroCitation | null;
     try {
       citation = await this.deps.zoteroCitation(tabId);
-    } catch (err) {
-      // Never a fallthrough to Obsidian. The user asked for papers to go to
-      // Zotero, and "could not tell whether this is one" is not permission to
-      // file it somewhere else — the popup fails the tab here too.
-      fail("zotero-failed", `${errorMessage(err)} ${CITATION_UNREADABLE_HINT}`);
+    } catch (first) {
+      // The read is an injection, so it fails the ways `readTab`'s does and
+      // gets the same handling: the grant first, then one pause for a page
+      // still swapping documents, then the engine's words.
+      await requireClipAccess();
+      const message = errorMessage(first);
+      if (!isNoInjectionTargetError(message)) {
+        // Never a fallthrough to Obsidian. The user asked for papers to go to
+        // Zotero, and "could not tell whether this is one" is not permission
+        // to file it somewhere else — the popup fails the tab here too.
+        fail("zotero-failed", `${message} ${CITATION_UNREADABLE_HINT}`);
+      }
+      await delay(TRANSIENT_EXTRACT_RETRY_MS);
+      try {
+        citation = await this.deps.zoteroCitation(tabId);
+      } catch (second) {
+        fail(
+          "zotero-failed",
+          `${errorMessage(second)} ${NO_INJECTION_TARGET_HINT} ${CITATION_UNREADABLE_HINT}`,
+        );
+      }
     }
     if (!citation) return null;
 

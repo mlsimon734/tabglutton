@@ -22,8 +22,9 @@ it started as the Connector proof of concept; that history is at the end.
 3. **The PDF is attached.** The extension fetches `citation_pdf_url` with the user's cookies, checks
    that it is a PDF of at most 64 MB, creates an `imported_url` attachment, uploads the bytes, and
    reads the attachment back for its MD5. A PDF that cannot be had (a bot check, a paywall) leaves
-   the saved item with its URL and closes the tab. `tab_clip` says so in `pdf` / `pdfNote`; Devour
-   only logs it to the console, and Zotero's **Find Available PDF** is the remedy for that item.
+   the saved item with its URL and closes the tab. `tab_clip` says so in `pdf` / `pdfNote`, Devour's
+   summary counts the items "without its PDF", and Zotero's **Find Available PDF** can fill them in.
+   The download stops after 60 seconds.
 
 Anything that stops the item itself is `zotero-failed` with a sentence naming the remedy, and the tab
 stays open. Routing never falls through to the note destination.

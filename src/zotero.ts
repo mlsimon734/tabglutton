@@ -43,7 +43,7 @@ const LIBRARY = "/api/users/0";
 export const ZOTERO_APP_NAME = "Tabglutton";
 
 /** A PDF larger than this is not downloaded into the background page; the item is filed without it. */
-const MAX_PDF_BYTES = 64 * 1024 * 1024;
+export const ZOTERO_MAX_PDF_BYTES = 64 * 1024 * 1024;
 
 /**
  * How many saves may be in flight at once, across every caller.
@@ -233,9 +233,9 @@ export interface ZoteroSaveOptions {
 /**
  * File one paper: the item, then its PDF, each read back before this resolves.
  * Resolves only when the item is in the library under the title that was sent;
- * a PDF that could not be fetched or attached is reported on the receipt, not
- * thrown, because the item is already saved by then and a thrown save would
- * keep the tab open over a paper that is in the library.
+ * anything that goes wrong with the PDF after that is reported on the receipt,
+ * never thrown, because a thrown save keeps the tab open over a paper that is
+ * in the library, and the retry it invites files the paper twice.
  */
 export function saveCitationToZotero(
   citation: ZoteroCitation,
@@ -261,7 +261,7 @@ export function saveCitationToZotero(
     );
     const collections = Array.isArray(back.data?.collections) ? back.data.collections : [];
     if (
-      back.data?.title !== item.title ||
+      !sameText(back.data?.title, item.title) ||
       (collectionKey && !collections.includes(collectionKey))
     ) {
       throw new ZoteroError(
@@ -275,12 +275,19 @@ export function saveCitationToZotero(
       await attachPdf(itemKey, citation.pdfUrl, citation.item, options.fetchPdf, writeHeaders);
       return { itemKey, pdf: "attached" };
     } catch (err) {
-      // A key or instance problem would fail the next save too, so it is the
-      // save's failure; anything about the PDF itself is only the PDF's.
-      if (err instanceof ZoteroError && err.kind !== "refused") throw err;
+      // Even a key or instance failure: it fails the next save on its own, at
+      // the item, where it should; this one is already in the library.
       return { itemKey, pdf: "failed", pdfNote: err instanceof Error ? err.message : String(err) };
     }
   });
+}
+
+/**
+ * Zotero trims and NFC-normalizes a string field as it stores it, so a title
+ * from a page in decomposed form reads back different and still the same.
+ */
+function sameText(stored: unknown, sent: string): boolean {
+  return typeof stored === "string" && stored.trim().normalize() === sent.trim().normalize();
 }
 
 async function readOk(path: string): Promise<ZoteroResponse> {
@@ -310,8 +317,11 @@ function schemaFields(id: string, itemType: string): Promise<ReadonlySet<string>
 }
 
 /**
- * Single-flight per instance and name: three saves into a collection that does
- * not exist yet must create it once, not three times.
+ * Single-flight per instance and name, and only while in flight: three saves
+ * into a collection that does not exist yet must create it once, not three
+ * times, but a key kept past that would outlive the user deleting or renaming
+ * the collection, failing or misfiling every later paper. A settled lookup is
+ * dropped, and the next save pays one GET to look again.
  */
 const collectionCache = new Map<string, Promise<string>>();
 
@@ -333,7 +343,10 @@ function collectionKeyFor(
       return writtenKey(response, "collection");
     })();
     collectionCache.set(cacheKey, key);
-    key.catch(() => collectionCache.delete(cacheKey));
+    void key.then(
+      () => collectionCache.delete(cacheKey),
+      () => collectionCache.delete(cacheKey),
+    );
   }
   return key;
 }
@@ -391,9 +404,9 @@ async function attachPdf(
   writeHeaders: Record<string, string>,
 ): Promise<void> {
   const bytes = await fetchPdf(pdfUrl);
-  if (bytes.length > MAX_PDF_BYTES) {
+  if (bytes.length > ZOTERO_MAX_PDF_BYTES) {
     throw new Error(
-      `The PDF is larger than ${MAX_PDF_BYTES / (1024 * 1024)} MB, so it was not attached.`,
+      `The PDF is larger than ${ZOTERO_MAX_PDF_BYTES / (1024 * 1024)} MB, so it was not attached.`,
     );
   }
   if (new TextDecoder().decode(bytes.subarray(0, 5)) !== "%PDF-") {
@@ -438,9 +451,10 @@ async function attachPdf(
     if (typeof upload.url !== "string" || typeof upload.uploadKey !== "string") {
       throw new ZoteroError("refused", zoteroFailureMessage("refused", "no upload URL was given"));
     }
-    // Only the path is taken from Zotero's URL: it builds the host from the
-    // request's own Host header, and the origin the grant covers is this one.
-    const sent = await call("POST", new URL(upload.url).pathname, {
+    // Only the path and query are taken from Zotero's URL: it builds the host
+    // from the request's own Host header, and the origin the grant covers is this one.
+    const target = new URL(upload.url);
+    const sent = await call("POST", target.pathname + target.search, {
       // Not text, JSON, or form-encoded: Zotero decodes those as UTF-8 and
       // would corrupt the PDF before hashing it.
       headers: { "Content-Type": "application/pdf" },

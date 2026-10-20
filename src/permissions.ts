@@ -127,15 +127,16 @@ export const SITES_REVOKED_FOR_NOTICE =
 /**
  * What the options page says when Zotero routing cannot have the loopback grant
  * it writes through. Same recovery shape as the notice: the switch goes back
- * off, so switching it on again is the one click that asks.
+ * off, so switching it on again is a click that asks — and so is Connect, which
+ * a `zotero` site rule needs even with the switch off.
  */
 export const ZOTERO_ACCESS_REFUSED =
-  "Access to Zotero on this computer was declined, so papers have no route there — routing stays off. Switch it on again to ask once more.";
+  "Access to Zotero on this computer was declined, so Tabglutton cannot reach it. Switching routing on or pressing Connect to Zotero asks again.";
 export const ZOTERO_ACCESS_REVOKED =
   "Tabglutton no longer has access to Zotero on this computer, so routing papers there is off. Switch it on again to grant it.";
 /** The fact and the remedy, for Devour and the bridge, which cannot ask. */
 export const ZOTERO_ACCESS_GONE =
-  "Tabglutton no longer has access to Zotero on this computer. Routing switches off in Tabglutton's settings while the permission is missing, so switching it on there again is what asks for it.";
+  "Tabglutton has no access to Zotero on this computer. Press Connect to Zotero in Tabglutton's settings, which asks for it.";
 
 /**
  * What the surfaces with no gesture say instead. Neither the background page

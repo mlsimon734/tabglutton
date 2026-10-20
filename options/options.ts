@@ -66,8 +66,6 @@ const obsidianVault = document.getElementById("obsidianVault") as HTMLInputEleme
 const clippingsBaseFolder = document.getElementById("clippingsBaseFolder") as HTMLInputElement;
 const groupingSkipList = document.getElementById("groupingSkipList") as HTMLInputElement;
 const zoteroRoutingEnabled = document.getElementById("zoteroRoutingEnabled") as HTMLInputElement;
-const zoteroConnectionRow = document.getElementById("zoteroConnectionRow") as HTMLDivElement;
-const zoteroCollectionRow = document.getElementById("zoteroCollectionRow") as HTMLDivElement;
 const zoteroStatusEl = document.getElementById("zoteroStatus") as HTMLSpanElement;
 const zoteroConnect = document.getElementById("zoteroConnect") as HTMLButtonElement;
 const zoteroCollection = document.getElementById("zoteroCollection") as HTMLInputElement;
@@ -141,7 +139,7 @@ async function load(): Promise<void> {
     setZoteroWarning(ZOTERO_ACCESS_REVOKED);
     await saveSettings({ zoteroRoutingEnabled: false });
   }
-  updateZotero();
+  renderZoteroStatus();
   rules = settings.siteRules;
   renderRules();
   updateVaultWarning();
@@ -444,13 +442,6 @@ function renderZoteroStatus(waiting = false): void {
   zoteroConnect.textContent = zoteroKeyHeld ? "Connect again" : "Connect to Zotero";
 }
 
-/** The connection and the collection only mean something while routing is on. */
-function updateZotero(): void {
-  zoteroConnectionRow.hidden = !zoteroRoutingEnabled.checked;
-  zoteroCollectionRow.hidden = !zoteroRoutingEnabled.checked;
-  renderZoteroStatus();
-}
-
 /**
  * Say so now if Zotero is not there to take a paper, rather than at the first
  * Devour. A local GET with no key, so asking costs nothing; never overwrites a
@@ -473,11 +464,11 @@ zoteroRoutingEnabled.addEventListener("change", () => {
     if (zoteroRoutingEnabled.checked && !(await requestOrigins(ZOTERO_ORIGINS))) {
       zoteroRoutingEnabled.checked = false;
       setZoteroWarning(ZOTERO_ACCESS_REFUSED);
-      updateZotero();
+      renderZoteroStatus();
       return;
     }
     setZoteroWarning("");
-    updateZotero();
+    renderZoteroStatus();
     await save();
     if (zoteroRoutingEnabled.checked) await checkZoteroReachable();
   })();

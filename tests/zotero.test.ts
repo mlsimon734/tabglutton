@@ -190,6 +190,43 @@ describe("saveCitationToZotero()", () => {
     expect(creates.length).toBe(1);
   });
 
+  test("a collection deleted between saves is looked up again, not served from memory", async () => {
+    let deleted = false;
+    const seen = fakeZotero("S-deleted", (req) =>
+      deleted && req.path.startsWith("/api/users/0/collections/top")
+        ? new Response("[]", { status: 200, headers: { "Zotero-Server-ID": "S-deleted" } })
+        : undefined,
+    );
+    const options = { key: "good-key", collection: "Papers", fetchPdf: async () => PDF };
+    await saveCitationToZotero(paper(), options);
+    deleted = true;
+    await saveCitationToZotero(paper(), options);
+    const items = seen
+      .filter((req) => req.method === "POST" && req.path === "/api/users/0/items")
+      .map((req) => (JSON.parse(String(req.body)) as Array<{ collections?: string[] }>)[0]);
+    expect(items.map((item) => item?.collections)).toEqual([["C1"], ["C3"]]);
+  });
+
+  test("a title Zotero stores normalized still reads back as the one sent", async () => {
+    const decomposed = "Cafe\u0301 au lait";
+    fakeZotero("S-nfc", (req) =>
+      req.method === "GET" && /^\/api\/users\/0\/items\/\w+$/.test(req.path)
+        ? new Response(JSON.stringify({ data: { title: decomposed.normalize() } }), {
+            status: 200,
+            headers: { "Zotero-Server-ID": "S-nfc" },
+          })
+        : undefined,
+    );
+    const citation = paper();
+    citation.item.title = decomposed;
+    const receipt = await saveCitationToZotero(citation, {
+      key: "good-key",
+      collection: "",
+      fetchPdf: async () => PDF,
+    });
+    expect(receipt.pdf).toBe("none");
+  });
+
   test("a blank collection files into the library root", async () => {
     const seen = fakeZotero("S-root");
     await saveCitationToZotero(paper(), {
@@ -209,6 +246,21 @@ describe("saveCitationToZotero()", () => {
     });
     expect(receipt.pdf).toBe("failed");
     expect(receipt.pdfNote).toContain("did not return a PDF");
+  });
+
+  test("a key refused mid-PDF fails the PDF, not the item already in the library", async () => {
+    fakeZotero("S-midpdf", (req) =>
+      req.method === "POST" && /\/items\/\w+\/file$/.test(req.path)
+        ? new Response("", { status: 401 })
+        : undefined,
+    );
+    const receipt = await saveCitationToZotero(paper("https://example.org/paper.pdf"), {
+      key: "good-key",
+      collection: "",
+      fetchPdf: async () => PDF,
+    });
+    expect(receipt.pdf).toBe("failed");
+    expect(receipt.pdfNote).toContain("Connect to Zotero");
   });
 
   test("no key is not connected, and nothing is written", async () => {
