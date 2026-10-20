@@ -2,13 +2,16 @@
 
 All notable changes to Tabglutton are documented here.
 
-## [0.5.1](https://github.com/mlsimon734/tabglutton/compare/v0.5.0...v0.5.1) (unreleased)
+## [0.5.1](https://github.com/mlsimon734/tabglutton/compare/v0.5.0...v0.5.1) (2026-10-19)
+
+Two threads. The Digest panel becomes a desk: a list beside a preview of the row you
+focus, with what the page itself said kept visibly apart from what the agent claims, and
+its shortlist action changes from Keep in a group to Move to top. Separately, Shift-click
+selects a range of tabs in the popup and the full view. The bridge protocol and the
+manifest's permissions are unchanged, so no running hub has to be stopped.
 
 ### Features
 
-- **Shift-click selects a range of tabs.** In the popup and full view, click a checkbox,
-  then Shift-click another to select or deselect the rows between them. Ranges follow
-  the displayed order and skip tabs hidden by filters.
 - **The Digest panel is a desk: a list beside a preview.** The shortlist gets a thumbnail
   and two lines of the agent's reasoning, filed items one line and where Devour would file
   them, and close rows one line with a checkbox. The row you focus opens beside the list
@@ -24,6 +27,12 @@ All notable changes to Tabglutton are documented here.
   None of this can be supplied by the agent's report.
 - **Untick a close row to leave its tab open.** The row moves to "Could not read / leave
   open", and ticking it there puts it back. `x` ticks the focused row.
+- **Shift-click selects a range of tabs.** In the popup and full view, click a checkbox,
+  then Shift-click another to select or deselect the rows between them. Ranges follow
+  the displayed order and skip tabs hidden by filters.
+
+### Changed
+
 - **Move to top replaces Keep in a group.** The shortlist's tabs move to the top of their
   own window's tab list, right after your pinned tabs, in the digest's order. Nothing is
   grouped, pinned tabs are never touched, and **Undo** puts every moved tab back where it
