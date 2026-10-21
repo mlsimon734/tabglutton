@@ -25,7 +25,7 @@ import {
 } from "./digest-actions.js";
 import { digestReceipt, reopenWatchList, type ReopenWatch } from "./digest-receipt.js";
 import { noteDigestReopen, onDigestsWritten, readDigests, toLiveTab } from "./digest-store.js";
-import { landedAtTop, restoreSequence, topIndex, type TabPosition } from "./move-to-top.js";
+import { layoutFrom, type OrderMove, type PlacedBlock } from "./tab-order.js";
 import { readPageFacts, recordPageFacts } from "./page-facts-store.js";
 import {
   dupNoticeAfterReopen,
@@ -1542,8 +1542,8 @@ const digestActions = new DigestActions({
     (await bridgeRunner.run("tabs_close", { tabIds })) as TabsCloseResult,
   undoClose: async (batchId) =>
     (await bridgeRunner.run("undo_close", { batchId })) as UndoCloseResult,
-  moveToTop: moveTabsToTop,
-  restoreOrder: restoreTabOrder,
+  readLayout: readOrderLayout,
+  moveBlock: moveOrderBlock,
   pageFacts: readPageFacts,
   fileTo: () => ({
     kind: settings.clipDestination === "file" ? "file" : "obsidian",
@@ -1652,72 +1652,37 @@ async function recordFactsForRead(tabId: number, payload: ClipPayload): Promise<
 }
 
 /**
- * Move to top, browser half (`src/move-to-top.ts` has the arithmetic and the
- * measurements). One listing is the source for both the recorded positions and
- * the target index, and the result is read back rather than trusted: an index
- * the engine ignores (Firefox does, inside the pinned block; Zen may, as it
- * does for `tabs.create`) leaves the tab where it was and reports it unmoved.
+ * Focus and Clear, browser half (`src/tab-order.ts` has the plan, the
+ * measurements, and the read-back loop). A window's layout comes from one
+ * listing of that window and nothing else: the panel acts on its own window
+ * only, which on Zen is also what keeps window sync replaying each move once.
+ * A window that no longer exists answers with no tabs, never a guess.
  */
-async function moveTabsToTop(
-  windowId: number,
-  tabIds: number[],
-): Promise<{ from: TabPosition[]; landed: number[] }> {
-  const listing = await browser.tabs.query({ windowId });
-  const byId = new Map(listing.map((t) => [t.id, t] as const));
-  const ids = tabIds.filter((id) => {
-    const tab = byId.get(id);
-    return tab !== undefined && !tab.pinned;
-  });
-  const order = listing.map((t) => ({ id: t.id ?? -1, index: t.index, pinned: t.pinned }));
-  const top = topIndex(order);
-  if (ids.length === 0 || top === null) return { from: [], landed: [] };
-  const from = ids.map((id) => ({ tabId: id, windowId, index: byId.get(id)?.index ?? top }));
-  await browser.tabs.move(ids, { windowId, index: top });
-  const after = await browser.tabs.query({ windowId });
-  const landed = landedAtTop(
-    after.map((t) => ({ id: t.id ?? -1, index: t.index, pinned: t.pinned })),
-    ids,
-  );
-  // Only what really moved is put back by Undo.
-  return {
-    from: from.filter((p) => landed.has(p.tabId)),
-    landed: [...landed],
-  };
+async function readOrderLayout(windowId: number): Promise<PlacedBlock[]> {
+  const tabs = await browser.tabs.query({ windowId });
+  return layoutFrom(tabs.map((tab) => toLiveTab(tab)).filter((tab) => tab !== null));
 }
 
 /**
- * Undo a Move to top: each tab back to its recorded index, highest first per
- * window (`restoreSequence`). A tab that has since closed, changed window, or
- * been pinned is skipped; the index is clamped to the window as it is now.
+ * One block, one call: `tabs.move` for an ungrouped tab, `tabGroups.move` for a
+ * whole group (Firefox 139 / Chrome 89, behind the manifest's `tabGroups`;
+ * typed through a narrow cast because it postdates the ambient types). Never a
+ * batch: on Zen a batch whose tabs start on both sides of its index lands one
+ * slot early.
  */
-async function restoreTabOrder(
-  from: TabPosition[],
-): Promise<{ restored: number; skipped: number }> {
-  let restored = 0;
-  let skipped = 0;
-  for (const p of restoreSequence(from)) {
-    try {
-      const tab = await browser.tabs.get(p.tabId);
-      if (tab.windowId !== p.windowId || tab.pinned) {
-        skipped++;
-        continue;
-      }
-      // Clamped to the highest index the listing shows, never to its length: on
-      // Zen another workspace's tabs are absent from the listing but hold
-      // indexes, and counting only the visible tabs would drop a tab among them.
-      const last = Math.max(
-        ...(await browser.tabs.query({ windowId: p.windowId })).map((t) => t.index),
-      );
-      await browser.tabs.move(p.tabId, {
-        windowId: p.windowId,
-        index: Math.min(p.index, last),
-      });
-      restored++;
-    } catch {
-      skipped++;
-    }
+async function moveOrderBlock(windowId: number, move: OrderMove): Promise<void> {
+  const { block, index } = move;
+  if (block.groupId === undefined) {
+    await browser.tabs.move(block.tabIds[0] as number, { windowId, index });
+    return;
   }
-  return { restored, skipped };
+  const tabGroups = (
+    browser as typeof browser & {
+      tabGroups?: { move?: (groupId: number, props: { index: number }) => Promise<unknown> };
+    }
+  ).tabGroups;
+  if (typeof tabGroups?.move !== "function") throw new Error("tabGroups.move is unavailable");
+  await tabGroups.move(block.groupId, { index });
 }
 
 const POPUP_URL = browser.runtime.getURL("popup/popup.html");
@@ -1804,14 +1769,16 @@ browser.runtime.onMessage.addListener(
       case "digest-set-fate":
       case "digest-act":
       case "digest-undo":
-      case "digest-undo-move":
+      case "digest-order":
+      case "digest-undo-order":
       case "digest-show":
         await settingsReady;
         if (!digestMessageAllowed(msg.type, sender)) {
           console.warn("[tabglutton] digest: refused a message from outside the full view");
           return undefined;
         }
-        return digestActions.handle(msg);
+        // The window the full view sits in is the one Focus and Clear order.
+        return digestActions.handle(msg, { windowId: sender.tab?.windowId });
     }
     return undefined;
   },

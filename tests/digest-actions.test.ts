@@ -6,8 +6,13 @@ import {
   type DigestRecord,
   type LiveTab,
 } from "../src/digest.js";
-import { DigestActions, isDigestMutation, type DigestActionDeps } from "../src/digest-actions.js";
-import type { TabPosition } from "../src/move-to-top.js";
+import {
+  DigestActions,
+  isDigestMutation,
+  ORDER_CHANGED,
+  type DigestActionDeps,
+} from "../src/digest-actions.js";
+import { layoutFrom, type OrderMove } from "../src/tab-order.js";
 import type { UndoBatch } from "../src/undo-log.js";
 
 // The actions reach storage and runtime messaging through the `browser`
@@ -79,17 +84,41 @@ interface Harness {
   live: LiveTab[];
   log: UndoBatch[];
   closed: number[][];
-  moves: Array<[number, number[]]>;
-  restored: TabPosition[][];
+  moves: Array<[number, OrderMove]>;
+}
+
+/**
+ * One window's tabs moved the way Chrome 148 measured: the moved tab or group
+ * ends up at `index`, everything else keeps its relative order.
+ */
+function simulateMove(h: Harness, windowId: number, move: OrderMove): void {
+  const order = h.live.filter((t) => t.windowId === windowId).sort((a, b) => a.index - b.index);
+  const moving = order.filter((t) =>
+    move.block.groupId !== undefined
+      ? t.groupId === move.block.groupId
+      : t.id === move.block.tabIds[0],
+  );
+  const rest = order.filter((t) => !moving.includes(t));
+  rest.splice(move.index, 0, ...moving);
+  rest.forEach((t, index) => {
+    t.index = index;
+  });
+}
+
+/** Tab ids of one window, in index order. */
+function windowOrder(h: Harness, windowId = 1): number[] {
+  return h.live
+    .filter((t) => t.windowId === windowId)
+    .sort((a, b) => a.index - b.index)
+    .map((t) => t.id);
 }
 
 function harness(live: LiveTab[], overrides: Partial<DigestActionDeps> = {}): Harness {
   const h: Harness = {
-    live,
+    live: live.map((t, i) => ({ ...t, index: t.index || i })),
     log: [],
     closed: [],
     moves: [],
-    restored: [],
     deps: undefined as never,
   };
   h.deps = {
@@ -120,16 +149,10 @@ function harness(live: LiveTab[], overrides: Partial<DigestActionDeps> = {}): Ha
       h.log = h.log.filter((b) => b.id !== batchId);
       return { batchId, restored: 1, failed: 0 };
     },
-    moveToTop: async (windowId, tabIds) => {
-      h.moves.push([windowId, tabIds]);
-      return {
-        from: tabIds.map((tabId, i) => ({ tabId, windowId, index: 10 + i })),
-        landed: tabIds,
-      };
-    },
-    restoreOrder: async (from) => {
-      h.restored.push(from);
-      return { restored: from.length, skipped: 0 };
+    readLayout: async (windowId) => layoutFrom(h.live.filter((t) => t.windowId === windowId)),
+    moveBlock: async (windowId, move) => {
+      h.moves.push([windowId, move]);
+      simulateMove(h, windowId, move);
     },
     pageFacts: async () => [],
     fileTo: () => ({ kind: "obsidian", zotero: false }),
@@ -263,90 +286,207 @@ describe("digest actions", () => {
     ]);
   });
 
-  test("move to top moves per window in digest order, excluding pinned and hidden", async () => {
+  // Window 1: a pinned tab, then a, [b c], d, e, f, the panel itself; window 2 holds g.
+  function orderFixture(): Harness {
     seed([
-      item(1, "https://a.test/", "worth-it"),
-      item(2, "https://b.test/", "worth-it"),
-      item(3, "https://c.test/", "worth-it"),
-      item(4, "https://d.test/", "worth-it"),
-      item(5, "https://e.test/", "worth-it"),
+      item(2, "https://a.test/", "close"),
+      item(3, "https://b.test/", "close"),
+      item(4, "https://c.test/", "worth-it"),
+      item(5, "https://d.test/", "file"),
+      { ...item(6, "https://e.test/", "close"), userFate: "worth-it" },
+      item(7, "https://f.test/", "could-not-read"),
+      { ...item(9, "https://g.test/", "worth-it"), anchor: { windowId: 2, incognito: false } },
     ]);
-    const live = [
-      tab(1, "https://a.test/"),
-      tab(2, "https://b.test/", { pinned: true }),
-      tab(3, "https://c.test/", { hidden: true }),
-      tab(4, "https://d.test/", { windowId: 2 }),
-      tab(5, "https://e.test/"),
-    ];
-    const items = stored().items;
-    items[3] = { ...items[3]!, anchor: { windowId: 2, incognito: false } };
-    const h = harness(live);
-    const res = await new DigestActions(h.deps).act(ID, "top");
-    expect(res.ok && res.outcomes).toEqual([
-      { index: 0, outcome: "moved" },
-      { index: 1, outcome: "pinned" },
-      { index: 2, outcome: "hidden" },
-      { index: 3, outcome: "moved" },
-      { index: 4, outcome: "moved" },
+    return harness([
+      tab(1, "https://pinned.test/", { index: 0, pinned: true }),
+      tab(2, "https://a.test/", { index: 1 }),
+      tab(3, "https://b.test/", { index: 2, groupId: 40 }),
+      tab(4, "https://c.test/", { index: 3, groupId: 40 }),
+      tab(5, "https://d.test/", { index: 4 }),
+      tab(6, "https://e.test/", { index: 5 }),
+      tab(7, "https://f.test/", { index: 6 }),
+      tab(8, "moz-extension://x/popup/devour.html", { index: 7 }),
+      tab(9, "https://g.test/", { index: 0, windowId: 2 }),
     ]);
-    expect(h.moves).toEqual([
-      [1, [1, 5]],
-      [2, [4]],
-    ]);
-    expect(stored().top?.from).toEqual([
-      { tabId: 1, windowId: 1, index: 10 },
-      { tabId: 5, windowId: 1, index: 11 },
-      { tabId: 4, windowId: 2, index: 10 },
-    ]);
-  });
+  }
 
-  test("a tab the engine did not put at the top is failed and not recorded for undo", async () => {
-    seed([item(1, "https://a.test/", "worth-it"), item(2, "https://b.test/", "worth-it")]);
-    const h = harness([tab(1, "https://a.test/"), tab(2, "https://b.test/")], {
-      moveToTop: async (windowId) => ({ from: [{ tabId: 1, windowId, index: 7 }], landed: [1] }),
-    });
-    const res = await new DigestActions(h.deps).act(ID, "top");
-    expect(res.ok && res.outcomes).toEqual([
-      { index: 0, outcome: "moved" },
-      { index: 1, outcome: "failed" },
-    ]);
-    expect(res.ok && res.done).toBe(1);
-    expect(stored().top?.from).toEqual([{ tabId: 1, windowId: 1, index: 7 }]);
-  });
-
-  test("a window whose move throws leaves its tabs alone, reported failed", async () => {
-    seed([item(1, "https://a.test/", "worth-it")]);
-    const h = harness([tab(1, "https://a.test/")], {
-      moveToTop: async () => {
-        throw new Error("no");
-      },
-    });
-    const res = await new DigestActions(h.deps).act(ID, "top");
-    expect(res.ok && res.outcomes).toEqual([{ index: 0, outcome: "failed" }]);
-    expect(stored().top?.from).toEqual([]);
-  });
-
-  test("undo of a move puts the recorded positions back, once", async () => {
-    seed([item(1, "https://a.test/", "worth-it")]);
-    const h = harness([tab(1, "https://a.test/")]);
+  test("focus orders the invoking window alone, by effective fate, groups whole", async () => {
+    const h = orderFixture();
     const actions = new DigestActions(h.deps);
-    await actions.act(ID, "top");
+    const res = await actions.handle(
+      { type: "digest-order", digestId: ID, direction: "focus" },
+      { windowId: 1 },
+    );
+    // [b c] holds a worth-it tab, e was moved to worth-it by the user, then
+    // could-not-read f, the neutral panel, file d, and close a last.
+    expect(windowOrder(h)).toEqual([1, 3, 4, 6, 7, 8, 5, 2]);
+    expect(windowOrder(h, 2)).toEqual([9]);
+    expect(h.moves.every(([w]) => w === 1)).toBe(true);
+    expect(res).toMatchObject({ ok: true, complete: true, ranked: 6, elsewhere: 1, fixed: 1 });
+    const order = stored().order;
+    expect(order?.windowId).toBe(1);
+    expect(order?.before.map((b) => b.tabIds)).toEqual([[1], [2], [3, 4], [5], [6], [7], [8]]);
+    expect(order?.after?.map((b) => b.tabIds)).toEqual([[1], [3, 4], [6], [7], [8], [5], [2]]);
+  });
+
+  test("clear reverses the buckets, and keeps the order inside each", async () => {
+    const h = orderFixture();
+    await new DigestActions(h.deps).handle(
+      { type: "digest-order", digestId: ID, direction: "clear" },
+      { windowId: 1 },
+    );
+    expect(windowOrder(h)).toEqual([1, 2, 5, 8, 7, 3, 4, 6]);
+  });
+
+  test("the window's starting layout is stored before the first move", async () => {
+    const h = orderFixture();
+    const seen: Array<boolean> = [];
+    const move = h.deps.moveBlock;
+    h.deps.moveBlock = async (windowId, m) => {
+      seen.push(stored().order?.before.length === 7 && stored().order?.after === undefined);
+      await move(windowId, m);
+    };
+    await new DigestActions(h.deps).handle(
+      { type: "digest-order", digestId: ID, direction: "focus" },
+      { windowId: 1 },
+    );
+    expect(seen.length).toBeGreaterThan(0);
+    expect(seen[0]).toBe(true);
+  });
+
+  test("without the sender's window nothing is ordered", async () => {
+    const h = orderFixture();
+    const res = await new DigestActions(h.deps).handle({
+      type: "digest-order",
+      digestId: ID,
+      direction: "focus",
+    });
+    expect(res).toMatchObject({ ok: false });
+    expect(h.moves).toEqual([]);
+    expect(stored().order).toBeUndefined();
+  });
+
+  test("undo puts the window back exactly, once", async () => {
+    const h = orderFixture();
+    const start = windowOrder(h);
+    const actions = new DigestActions(h.deps);
+    await actions.handle(
+      { type: "digest-order", digestId: ID, direction: "focus" },
+      { windowId: 1 },
+    );
     const view = (await actions.handle({ type: "get-digests", view: true })) as {
-      view: { moveUndo: number | null };
+      view: { order?: { undo: string | null } };
     };
-    expect(view.view.moveUndo).toBe(1);
+    expect(view.view.order?.undo).toBe("ready");
     const [first, second] = await Promise.all([
-      actions.handle({ type: "digest-undo-move", digestId: ID }),
-      actions.handle({ type: "digest-undo-move", digestId: ID }),
+      actions.handle({ type: "digest-undo-order", digestId: ID }),
+      actions.handle({ type: "digest-undo-order", digestId: ID }),
     ]);
-    expect([first, second]).toContainEqual({ ok: true, restored: 1, skipped: 0 });
-    expect([first, second]).toContainEqual({ ok: false, restored: 0, skipped: 0 });
-    expect(h.restored).toEqual([[{ tabId: 1, windowId: 1, index: 10 }]]);
-    expect(stored().top?.undoneAt).toEqual(expect.any(Number));
+    expect([first, second]).toContainEqual(expect.objectContaining({ ok: true, exact: true }));
+    expect([first, second]).toContainEqual(expect.objectContaining({ ok: false }));
+    expect(windowOrder(h)).toEqual(start);
+    expect(stored().order?.undoneAt).toEqual(expect.any(Number));
     const after = (await actions.handle({ type: "get-digests", view: true })) as {
-      view: { moveUndo: number | null };
+      view: { order?: { undo: string | null } };
     };
-    expect(after.view.moveUndo).toBeNull();
+    expect(after.view.order?.undo).toBeNull();
+  });
+
+  test("undo refuses once the window changed, and moves nothing", async () => {
+    const h = orderFixture();
+    const actions = new DigestActions(h.deps);
+    await actions.handle(
+      { type: "digest-order", digestId: ID, direction: "focus" },
+      { windowId: 1 },
+    );
+    // The user drags the panel to the front.
+    simulateMove(h, 1, { block: { tabIds: [8], start: 5, end: 5 }, index: 1 });
+    const dragged = windowOrder(h);
+    const moves = h.moves.length;
+    const view = (await actions.handle({ type: "get-digests", view: true })) as {
+      view: { order?: { undo: string | null } };
+    };
+    expect(view.view.order?.undo).toBe("changed");
+    expect(await actions.handle({ type: "digest-undo-order", digestId: ID })).toEqual({
+      ok: false,
+      error: ORDER_CHANGED,
+    });
+    expect(windowOrder(h)).toEqual(dragged);
+    expect(h.moves.length).toBe(moves);
+    expect(stored().order?.undoneAt).toBeUndefined();
+  });
+
+  test("a closed tab, a new one, or a regroup also refuse", async () => {
+    for (const change of [
+      (h: Harness) => (h.live = h.live.filter((t) => t.id !== 5)),
+      (h: Harness) => h.live.push(tab(20, "https://new.test/", { index: 99 })),
+      (h: Harness) => (h.live = h.live.map((t) => (t.id === 4 ? { ...t, groupId: 41 } : t))),
+      (h: Harness) => (h.live = h.live.map((t) => (t.id === 2 ? { ...t, pinned: true } : t))),
+    ]) {
+      const h = orderFixture();
+      const actions = new DigestActions(h.deps);
+      await actions.handle(
+        { type: "digest-order", digestId: ID, direction: "focus" },
+        { windowId: 1 },
+      );
+      change(h);
+      const moves = h.moves.length;
+      expect(await actions.handle({ type: "digest-undo-order", digestId: ID })).toEqual({
+        ok: false,
+        error: ORDER_CHANGED,
+      });
+      expect(h.moves.length).toBe(moves);
+    }
+  });
+
+  test("orders in a row keep the first starting point, so one Undo goes all the way back", async () => {
+    const h = orderFixture();
+    const start = windowOrder(h);
+    const actions = new DigestActions(h.deps);
+    await actions.handle(
+      { type: "digest-order", digestId: ID, direction: "focus" },
+      { windowId: 1 },
+    );
+    await actions.handle(
+      { type: "digest-order", digestId: ID, direction: "focus" },
+      { windowId: 1 },
+    );
+    expect(stored().order?.moves).toBe(0);
+    await actions.handle(
+      { type: "digest-order", digestId: ID, direction: "clear" },
+      { windowId: 1 },
+    );
+    expect(windowOrder(h)).toEqual([1, 2, 5, 8, 7, 3, 4, 6]);
+    expect(await actions.handle({ type: "digest-undo-order", digestId: ID })).toMatchObject({
+      ok: true,
+      exact: true,
+    });
+    expect(windowOrder(h)).toEqual(start);
+  });
+
+  test("a run cut short by a drag is recorded as such, and Undo still goes back exactly", async () => {
+    const h = orderFixture();
+    const start = windowOrder(h);
+    const move = h.deps.moveBlock;
+    let calls = 0;
+    h.deps.moveBlock = async (windowId, m) => {
+      await move(windowId, m);
+      // The user drags a tab while the order runs.
+      if (++calls === 1) simulateMove(h, 1, { block: { tabIds: [5], start: 0, end: 0 }, index: 7 });
+    };
+    const actions = new DigestActions(h.deps);
+    const res = await actions.handle(
+      { type: "digest-order", digestId: ID, direction: "focus" },
+      { windowId: 1 },
+    );
+    expect(res).toMatchObject({ ok: true, complete: false, moves: 1 });
+    expect(stored().order?.complete).toBe(false);
+    h.deps.moveBlock = move;
+    expect(await actions.handle({ type: "digest-undo-order", digestId: ID })).toMatchObject({
+      ok: true,
+      exact: true,
+    });
+    expect(windowOrder(h)).toEqual(start);
   });
 
   test("unticking a close row moves it to could-not-read; ticking returns it", async () => {

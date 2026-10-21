@@ -217,10 +217,13 @@ muted). All have hover / active / disabled / focus-visible (3px accent ring) sta
   labelled "Agent" is the agent's claim; a quote that only repeats the description is not
   shown. Compact rows pop B's hover card (`.dk-peek`) after 350ms, never on the focused row,
   below the desk width, or without a hover pointer. A missing image is the favicon tile, not
-  a blank. Fate sections reuse `.section-head`; **Move to top** is `.primary` (the only fill
-  on the page), **Close n** `.danger`, and after an action the head carries the result line
-  and a `.quiet` Undo. After Close the closed rows fold into one `.dk-fold` line. A strip of
-  fate bars under the provenance line jumps to each section. The popup's `#digest-ready`
+  a blank. Fate sections reuse `.section-head`; **Close n** is `.danger`, and after it ran
+  the head carries the result line and a `.quiet` Undo. After Close the closed rows fold into
+  one `.dk-fold` line. A strip of fate bars under the provenance line jumps to each section,
+  and under it the window-wide order bar (`.digest-order`, set off by a hairline) holds
+  **Focus**, `.primary` and still the only fill on the page, beside a plain **Clear**; after
+  either it carries the result line and a `.quiet` Undo, or says the window can no longer be
+  put back. The popup's `#digest-ready`
   line is a bordered strip above the list with one `Open`, and disappears once the panel has
   been opened.
 - Chrome stacks — `.chrome` positions and insets; in the **popup** the stack owns the
