@@ -6,6 +6,7 @@ import type {
   GetScopedTabsResponse,
   PopupTab,
 } from "../src/background.js";
+import type { SyncedTab } from "../src/dedup.js";
 import { freshDigest } from "../src/digest.js";
 import type { GetDigestsResponse } from "../src/digest-actions.js";
 import { openOptionsUi } from "../src/open-options.js";
@@ -37,6 +38,8 @@ import {
 
 interface PopupState {
   scopedTabs: PopupTab[];
+  /** Every window's tabs on Zen, so duplicate sets pair synced copies as the background does. */
+  syncedWindows: SyncedTab[] | undefined;
   settings: Settings | null;
   filter: string;
   selected: Set<number>;
@@ -91,6 +94,7 @@ const listGate = createPressGate();
 
 const state: PopupState = {
   scopedTabs: [],
+  syncedWindows: undefined,
   settings: null,
   filter: "",
   selected: new Set(),
@@ -332,7 +336,7 @@ function renderTab(tab: PopupTab, group: TabGroup): HTMLDivElement {
   checkbox.checked = state.selected.has(tab.id);
   checkbox.title = "Select this tab (Shift-click to select a range)";
   checkbox.addEventListener("click", (e) => {
-    const groups = visibleGroups(state.scopedTabs, state.filter, state.settings, state.stickyOrder);
+    const groups = currentGroups();
     state.selectionAnchor = selectTabRange(
       state.selected,
       visibleTabIds(groups),
@@ -405,7 +409,7 @@ function renderSelectionSummary(visibleIds: number[]): void {
 }
 
 function renderDedupBadge(): void {
-  state.dedupCount = computeDedupCount(state.scopedTabs, state.settings);
+  state.dedupCount = computeDedupCount(state.scopedTabs, state.settings, state.syncedWindows);
   dedupBtn.disabled = state.dedupCount === 0;
   if (state.dedupCount > 0) {
     dedupCountEl.hidden = false;
@@ -483,9 +487,21 @@ function renderList(groups: TabGroup[]): HTMLLIElement[] {
   return items;
 }
 
+/** The one place the list model is built, so every reader sees the same duplicate sets. */
+function currentGroups(): TabGroup[] {
+  return visibleGroups(
+    state.scopedTabs,
+    state.filter,
+    state.settings,
+    state.stickyOrder,
+    "all",
+    state.syncedWindows,
+  );
+}
+
 function render(): void {
   renderWarning();
-  const groups = visibleGroups(state.scopedTabs, state.filter, state.settings, state.stickyOrder);
+  const groups = currentGroups();
   if (state.stickyOrder === null) {
     state.stickyOrder = groups.map((g) => g.key);
   }
@@ -501,6 +517,7 @@ async function refresh(): Promise<void> {
   const res = await sendMessage<GetScopedTabsResponse>({ type: "get-scoped-tabs" });
   if (!res) return;
   state.scopedTabs = res.tabs;
+  state.syncedWindows = res.syncedWindows;
   state.settings = res.settings;
   const live = new Set(state.scopedTabs.map((t) => t.id));
   for (const id of state.selected) {
@@ -528,7 +545,7 @@ async function closeTabs(tabIds: number[]): Promise<void> {
 }
 
 function selectedForOps(): PopupTab[] {
-  const groups = visibleGroups(state.scopedTabs, state.filter, state.settings, state.stickyOrder);
+  const groups = currentGroups();
   return selectedTabsInUiOrder(groups, state.selected);
 }
 
@@ -780,7 +797,7 @@ filterInput.addEventListener("input", () => {
   render();
 });
 selectAllBtn.addEventListener("click", () => {
-  const groups = visibleGroups(state.scopedTabs, state.filter, state.settings, state.stickyOrder);
+  const groups = currentGroups();
   const ids = visibleTabIds(groups);
   const allSelected = ids.length > 0 && ids.every((id) => state.selected.has(id));
   if (allSelected) {

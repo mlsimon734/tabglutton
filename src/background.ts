@@ -48,7 +48,7 @@ import { getFilePlatformOnce } from "./platform.js";
 import { createTaskQueue, delay } from "./serialize.js";
 import type { PlannedGroup } from "./grouping.js";
 import { pickRule, ruleLabel, type SiteRule } from "./site-rules.js";
-import { groupDuplicates, pickKeeper, type Tab } from "./dedup.js";
+import { groupDuplicates, pickKeeper, type SyncedTab, type Tab } from "./dedup.js";
 import {
   clipsToFile,
   defaults,
@@ -227,6 +227,8 @@ export interface ClosedTabRecord {
 export interface GetScopedTabsResponse {
   tabs: PopupTab[];
   settings: Settings;
+  /** Every window's tabs on Zen, for duplicate grouping; see `syncedWindowTabs`. */
+  syncedWindows?: SyncedTab[];
 }
 
 export interface CloseDuplicatesResponse {
@@ -369,10 +371,23 @@ async function queryScopedTabs(): Promise<Tab[]> {
   return browser.tabs.query({ hidden: false });
 }
 
+/**
+ * Every window's tabs when they may be Zen's synced copies of one another, for
+ * `groupDuplicates` to pair; undefined on Firefox and Chrome. Zen's sync setting
+ * is not readable, so Zen is taken to sync: a wrong guess only hides
+ * duplicates. The default scope already spans every window; a current-window
+ * scope still needs the others, because a copy reporting an address its page
+ * has left is only visible as such beside the copy that shows where it went.
+ */
+async function syncedWindowTabs(scoped: Tab[]): Promise<Tab[] | undefined> {
+  if (IS_CHROME || !(await getBrowserInfoOnce())?.zen) return undefined;
+  return settings.scope === "current-window" ? browser.tabs.query({ hidden: false }) : scoped;
+}
+
 async function refreshBadge(tabsHint?: Tab[]): Promise<void> {
   const tabs = tabsHint ?? (await queryScopedTabs());
   const opts = normalizeOptsFrom(settings);
-  const groups = groupDuplicates(tabs, opts);
+  const groups = groupDuplicates(tabs, opts, await syncedWindowTabs(tabs));
   const dupCount = groups.reduce((n, g) => n + (g.tabs.length - 1), 0);
   // Tabs whose navigation has not committed carry no URL the grouping can read
   // — Chrome reports `""`, Gecko `about:blank` — so while any is in flight the
@@ -1464,7 +1479,7 @@ async function clipSelectedTabs(requestedTabIds: number[]): Promise<ClipSelected
 async function closeDuplicateTabs(): Promise<CloseDuplicatesResponse> {
   const tabs = await queryScopedTabs();
   const opts = normalizeOptsFrom(settings);
-  const groups = groupDuplicates(tabs, opts);
+  const groups = groupDuplicates(tabs, opts, await syncedWindowTabs(tabs));
   const restorable: ClosedTabRecord[] = [];
   const closeIds: number[] = [];
   for (const group of groups) {
@@ -1655,12 +1670,14 @@ browser.runtime.onMessage.addListener(
         // Both read once for the whole listing, not once per tab.
         const memory = await loadClipMemory();
         const opts = normalizeOptsFrom(settings);
+        const synced = await syncedWindowTabs(tabs);
         const response: GetScopedTabsResponse = {
           tabs: tabs
             .map((t) => tabToPopupTab(t, memory, opts))
             .sort((a, b) => (a.windowId ?? 0) - (b.windowId ?? 0) || a.index - b.index),
           settings,
         };
+        if (synced) response.syncedWindows = synced.map((t) => ({ url: t.url, index: t.index }));
         return response;
       }
       case "clip-selected-tabs":
@@ -1838,10 +1855,11 @@ async function collectDiagnostics(): Promise<GetDiagnosticsResponse> {
   // block cannot disagree. That still matches the badge: `refreshBadge` groups
   // the unfiltered scoped list, and the only tabs `tabInScope` drops beyond it
   // have no URL, which `groupDuplicates` skips anyway.
-  const duplicates = groupDuplicates(inScope, normalizeOptsFrom(settings)).reduce(
-    (n, group) => n + (group.tabs.length - 1),
-    0,
-  );
+  const duplicates = groupDuplicates(
+    inScope,
+    normalizeOptsFrom(settings),
+    await syncedWindowTabs(inScope),
+  ).reduce((n, group) => n + (group.tabs.length - 1), 0);
   return {
     engine: await engineLabel(),
     platform: await platformLabel(),

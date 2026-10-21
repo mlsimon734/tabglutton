@@ -7,10 +7,13 @@ All notable changes to Tabglutton are documented here.
 ### Fixes
 
 - **Dedup no longer closes pages on Zen when you have more than one window open.** Zen's
-  window sync shows each page's copy in another window as a blank tab, and closing that copy
-  closes the page. Dedup counted those blank tabs as duplicates of each other, so one press
-  could close every synced page, and Undo brought them back blank. Dedup now only compares
-  web pages.
+  window sync gives every window its own copy of each page, and closing any copy closes the
+  page everywhere. Dedup counted those copies as duplicates of each other, whether they
+  showed as blank tabs, under the page's address, or under an address the page had already
+  left, so one press could close pages that had no duplicate, and Undo could bring them back
+  blank or on the old address. On Zen, Dedup now counts a page's copies as one tab and skips
+  a page whose copies disagree about its address. The badge, the duplicate notice and the
+  popup count the same way.
 
 ## [0.5.1](https://github.com/mlsimon734/tabglutton/compare/v0.5.0...v0.5.1) (2026-10-19)
 
