@@ -15,7 +15,8 @@ All notable changes to Tabglutton are documented here.
   tabs, hidden tabs and Zen folders stay where they are. Nothing moves in other windows; the
   panel says how many of the digest's tabs it left there. **Undo** puts the window back
   exactly as it was, and once you have moved, opened, closed, pinned or regrouped a tab in
-  that window it says it can no longer do that instead of guessing. No tab is woken,
+  that window it says it can no longer do that instead of guessing; it is offered only in
+  that window's full view. No tab is woken,
   ungrouped or unpinned along the way.
 
 ## [0.5.2](https://github.com/mlsimon734/tabglutton/compare/v0.5.1...v0.5.2) (unreleased)

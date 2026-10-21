@@ -1660,6 +1660,8 @@ async function recordFactsForRead(tabId: number, payload: ClipPayload): Promise<
  */
 async function readOrderLayout(windowId: number): Promise<PlacedBlock[]> {
   const tabs = await browser.tabs.query({ windowId });
+  // A window that is open has a tab; the query answers [] for one that is gone.
+  if (tabs.length === 0) throw new Error("window gone");
   return layoutFrom(tabs.map((tab) => toLiveTab(tab)).filter((tab) => tab !== null));
 }
 

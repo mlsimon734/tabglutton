@@ -27,6 +27,7 @@ import {
   layoutFrom,
   sameLayout,
   stripIndexes,
+  undoTarget,
   type OrderBlock,
   type OrderDirection,
 } from "./tab-order.js";
@@ -106,13 +107,15 @@ export interface DigestOrderRecord {
    * nothing changed in between, so one Undo goes back to where the user started.
    */
   before: OrderBlock[];
-  /** The window as read back once the moves stopped. Absent until then. */
+  /**
+   * The window as read back once the moves stopped. Absent until then, and for
+   * good when the window could not be read, so no Undo is offered.
+   */
   after?: OrderBlock[];
-  at?: number;
   /** The read-back matched the plan after every move. */
   complete?: boolean;
   moves?: number;
-  /** Digest tabs ranked in this window. */
+  /** Digest tabs this window's order could move. */
   ranked: number;
   /** Digest tabs open in other windows, left alone. */
   elsewhere: number;
@@ -470,7 +473,7 @@ export function orderUndoState(
   // Nothing moved, so there is nothing to put back.
   if (sameLayout(order.before, order.after)) return null;
   const now = stripIndexes(layoutFrom(live.filter((t) => t.windowId === order.windowId)));
-  return sameLayout(now, order.after) ? "ready" : "changed";
+  return undoTarget(now, order.before, order.after) ? "ready" : "changed";
 }
 
 // --- ids, retention, parsing ---------------------------------------------------
@@ -601,7 +604,6 @@ function isOrder(value: unknown): value is DigestOrderRecord {
     isNum(o.startedAt) &&
     isLayout(o.before) &&
     (o.after === undefined || isLayout(o.after)) &&
-    optNum(o.at) &&
     (o.complete === undefined || typeof o.complete === "boolean") &&
     optNum(o.moves) &&
     isNum(o.ranked) &&
@@ -780,11 +782,12 @@ export interface DigestView {
 
 export interface DigestOrderView {
   direction: OrderDirection;
-  at?: number;
   complete?: boolean;
   moves?: number;
   ranked: number;
   elsewhere: number;
+  /** Undo ran: the line no longer describes where the tabs are. */
+  undone?: true;
   /** See `orderUndoState`. */
   undo: "ready" | "changed" | null;
 }
@@ -824,7 +827,12 @@ export function buildDigestView(
   live: readonly LiveTab[],
   log: readonly UndoBatch[],
   opts: NormalizeOpts,
-  context: { facts?: readonly PageFacts[]; fileTo?: FileDestination } = {},
+  context: {
+    facts?: readonly PageFacts[];
+    fileTo?: FileDestination;
+    /** The window the view is shown in: a reorder of another window is not this one's to show or undo. */
+    windowId?: number;
+  } = {},
 ): DigestView {
   const resolutions = resolveDigestItems(record.items, live, opts);
   const lastClose = record.closes[0];
@@ -878,7 +886,9 @@ export function buildDigestView(
     sitting: record.sitting,
     mirror: record.mirror,
     items,
-    ...(record.order ? { order: orderView(record, live) } : {}),
+    ...(record.order && record.order.windowId === context.windowId
+      ? { order: orderView(record, live) }
+      : {}),
     ...(lastClose ? { lastClose } : {}),
     undo: digestUndoState(record, log, opts),
     ...(context.fileTo ? { fileTo: context.fileTo } : {}),
@@ -886,14 +896,15 @@ export function buildDigestView(
 }
 
 function orderView(record: DigestRecord, live: readonly LiveTab[]): DigestOrderView {
-  const { direction, at, complete, moves, ranked, elsewhere } = record.order as DigestOrderRecord;
+  const { direction, complete, moves, ranked, elsewhere, undoneAt } =
+    record.order as DigestOrderRecord;
   return {
     direction,
-    ...(at !== undefined ? { at } : {}),
     ...(complete !== undefined ? { complete } : {}),
     ...(moves !== undefined ? { moves } : {}),
     ranked,
     elsewhere,
+    ...(undoneAt !== undefined ? { undone: true as const } : {}),
     undo: orderUndoState(record, live),
   };
 }

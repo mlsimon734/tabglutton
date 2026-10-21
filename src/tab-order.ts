@@ -2,17 +2,19 @@
 // window the panel was invoked from by the digest's verdicts, and Undo puts
 // that window back exactly or refuses. Pure, so the plan, the move sequence and
 // the layout comparison are unit-tested; the browser half is `readOrderLayout`
-// and `arrangeWindow` in `background.ts`.
+// and `moveOrderBlock` in `background.ts`.
 //
 // Measured on Chrome for Testing 148, Firefox 154 and Zen 1.23.3b
 // (docs/ENGINEERING.md §Order by priority):
 // - `tabs.move(id, { index })` and `tabGroups.move(id, { index })` put the
 //   first moved tab at `index` after the move, leftward or rightward, and a
 //   group moves whole with its inner order intact.
-// - A tab moved into a group's span joins the group. On Gecko that includes
-//   the group's first index, so an ungrouped tab is never moved directly in
-//   front of a group: the group steps aside instead (`nextStep`). Chrome does
-//   not need this, and does not mind it.
+// - A tab moved into a group's span joins the group. On Gecko a tab moved to a
+//   group's edge does too: it takes the group of the tab whose index it takes,
+//   the one on its right when it moves left and the one on its left when it
+//   moves right. So an ungrouped tab only ever lands beside another ungrouped
+//   tab, on that side (`nextStep`). Chrome does not need this, and does not
+//   mind it.
 // - A batch move whose tabs start on both sides of its target lands one slot
 //   early on Zen, so every move here is one tab or one group.
 // - The target index is read from the listing, never counted: an index inside
@@ -68,8 +70,14 @@ export interface OrderMove {
   index: number;
 }
 
+/**
+ * A block's name in a target. A fixed block goes by its first tab, so the two
+ * pieces of a group the listing shows split never share a name.
+ */
 export function blockKey(block: OrderBlock): string {
-  return block.groupId !== undefined ? `g${block.groupId}` : `t${block.tabIds[0] ?? -1}`;
+  return block.groupId !== undefined && !block.fixed
+    ? `g${block.groupId}`
+    : `t${block.tabIds[0] ?? -1}`;
 }
 
 /** The window's tabs as blocks, in index order. */
@@ -196,31 +204,144 @@ export function restoreTarget(
 }
 
 /**
- * The next move toward `target`, as positions in `layout`: the block at `from`
- * goes immediately before or after the block at `to`. Left to right, slot by
- * slot: the block that belongs in the first wrong slot moves left into it,
- * unless it is an ungrouped tab and the slot holds a group. Gecko would add the
- * tab to that group, so the group moves right, to just after the tab, and the
- * slot is tried again; every such step leaves one block fewer between the slot
- * and the tab. Null when `layout` already is `target`, or is not a permutation
- * of it.
+ * Undo's whole check, shared by the panel's button and the action: the window
+ * must still be exactly as the order left it, and `before` reachable from there.
  */
-function nextStep(
-  layout: readonly OrderBlock[],
-  target: readonly string[],
-): { from: number; to: number; after: boolean } | null {
-  const keys = layout.map(blockKey);
-  for (let slot = 0; slot < keys.length; slot++) {
-    const want = target[slot];
-    if (keys[slot] === want) continue;
-    const at = want === undefined ? -1 : keys.indexOf(want, slot + 1);
-    const here = layout[slot];
-    const mover = layout[at];
-    if (at < 0 || !here || !mover || here.fixed || mover.fixed) return null;
-    if (mover.groupId === undefined && here.groupId !== undefined) {
-      return { from: slot, to: at, after: true };
+export function undoTarget(
+  live: readonly OrderBlock[],
+  before: readonly OrderBlock[],
+  after: readonly OrderBlock[],
+): string[] | null {
+  return sameLayout(live, after) ? restoreTarget(live, before) : null;
+}
+
+type Step = { from: number; to: number; after: boolean };
+
+/** Positions of one longest strictly increasing subsequence of `values`. */
+function increasingRun(values: readonly number[]): number[] {
+  const tails: number[] = [];
+  const prev: number[] = [];
+  values.forEach((v, i) => {
+    let lo = 0;
+    let hi = tails.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if ((values[tails[mid] as number] as number) < v) lo = mid + 1;
+      else hi = mid;
     }
-    return { from: at, to: slot, after: false };
+    prev[i] = lo > 0 ? (tails[lo - 1] as number) : -1;
+    tails[lo] = i;
+  });
+  const out: number[] = [];
+  for (
+    let i = tails.length ? (tails[tails.length - 1] as number) : -1;
+    i >= 0;
+    i = prev[i] as number
+  ) {
+    out.push(i);
+  }
+  return out.reverse();
+}
+
+/** The first position in `stays` (in target order) whose block belongs after `want`. */
+function firstAfter(stays: readonly number[], posOf: (i: number) => number, want: number): number {
+  let lo = 0;
+  let hi = stays.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (posOf(stays[mid] as number) < want) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo;
+}
+
+/**
+ * The next move toward `target`, as positions in `layout`: the block at `from`
+ * goes immediately before or after the block at `to`. Two passes, each with the
+ * fewest moves of its kind, so one far-off tab costs one move rather than one
+ * for every tab behind it:
+ *
+ * 1. Ungrouped tabs, until they stand in target order among themselves. In each
+ *    run the longest sequence of them already in order stays, and every other
+ *    one moves once, beside a tab that stays: moving left it lands in front of
+ *    one, moving right it lands behind one, so the tab whose index it takes is
+ *    never in a group. A tab that could go neither way would already be in
+ *    order, so one of the two always applies.
+ * 2. Groups, which land anywhere: every ungrouped tab stays, with the longest
+ *    sequence of groups already in order between them, and every other group
+ *    moves once, beside a block that stays.
+ *
+ * Null when `layout` already is `target`, or cannot reach it: a block missing,
+ * a fixed block out of place, or a block in another run.
+ */
+function nextStep(layout: readonly OrderBlock[], target: readonly string[]): Step | null {
+  const keys = layout.map(blockKey);
+  if (keys.length !== target.length || keys.every((k, i) => k === target[i])) return null;
+  const pos = new Map(target.map((k, i) => [k, i] as const));
+  if (pos.size !== target.length) return null;
+  const posOf = (i: number): number => pos.get(keys[i] as string) as number;
+  // Fixed blocks hold the same places in both, so a position's run is the same in both.
+  const runAt: number[] = [];
+  let run = 0;
+  for (const block of layout) runAt.push(block.fixed ? ++run : run);
+  const runs: number[][] = [];
+  for (let i = 0; i < keys.length; i++) {
+    const block = layout[i] as OrderBlock;
+    const at = pos.get(keys[i] as string);
+    if (at === undefined || runAt[at] !== runAt[i]) return null;
+    if (block.fixed !== (layout[at] as OrderBlock).fixed || (block.fixed && at !== i)) return null;
+    if (block.fixed) continue;
+    if (runs.length === 0 || runAt[i] !== runAt[(runs[runs.length - 1] as number[])[0] as number]) {
+      runs.push([]);
+    }
+    (runs[runs.length - 1] as number[]).push(i);
+  }
+  const isTab = (i: number): boolean => (layout[i] as OrderBlock).groupId === undefined;
+
+  for (const blocks of runs) {
+    const tabs = blocks.filter(isTab);
+    const stays = increasingRun(tabs.map(posOf)).map((j) => tabs[j] as number);
+    if (stays.length === tabs.length) continue;
+    const staying = new Set(stays);
+    for (const i of tabs) {
+      if (staying.has(i)) continue;
+      const k = firstAfter(stays, posOf, posOf(i));
+      const before = stays[k];
+      const after = stays[k - 1];
+      if (before !== undefined && before < i) return { from: i, to: before, after: false };
+      if (after !== undefined && after > i) return { from: i, to: after, after: true };
+    }
+    return null;
+  }
+
+  for (const blocks of runs) {
+    const stays: number[] = [];
+    let floor = -1;
+    let gap: number[] = [];
+    // The groups between two staying tabs that already belong between them.
+    const close = (ceiling: number): void => {
+      const fits = gap.filter((i) => posOf(i) > floor && posOf(i) < ceiling);
+      stays.push(...increasingRun(fits.map(posOf)).map((j) => fits[j] as number));
+      gap = [];
+    };
+    for (const i of blocks) {
+      if (!isTab(i)) {
+        gap.push(i);
+        continue;
+      }
+      close(posOf(i));
+      stays.push(i);
+      floor = posOf(i);
+    }
+    close(Infinity);
+    if (stays.length === blocks.length) continue;
+    const staying = new Set(stays);
+    const i = blocks.find((b) => !staying.has(b)) as number;
+    const k = firstAfter(stays, posOf, posOf(i));
+    const after = stays[k - 1];
+    return after !== undefined
+      ? { from: i, to: after, after: true }
+      : { from: i, to: stays[k] as number, after: false };
   }
   return null;
 }
@@ -241,8 +362,9 @@ function applyStep<T extends OrderBlock>(
 /**
  * The next browser move toward `target`, with the index the engine needs, and
  * the layout the read-back must then show; null when the window is in order.
- * A block moving left lands where the slot's block starts; a group stepping
- * right past a tab lands where that tab's last index is, less its own size.
+ * The index comes from the listing: a block moving left lands where its new
+ * right-hand neighbour starts; a block moving right lands where its new
+ * left-hand neighbour ends, less its own size.
  */
 export function nextMove(
   layout: readonly PlacedBlock[],
@@ -251,25 +373,32 @@ export function nextMove(
   const step = nextStep(layout, target);
   if (!step) return null;
   const block = layout[step.from] as PlacedBlock;
-  const anchor = layout[step.to] as PlacedBlock;
-  const index = step.after ? anchor.end - block.tabIds.length + 1 : anchor.start;
-  return { move: { block, index }, expect: stripIndexes(applyStep(layout, step)) };
+  const moved = applyStep(layout, step);
+  const at = moved.indexOf(block);
+  const index =
+    step.to > step.from
+      ? (moved[at - 1] as PlacedBlock).end - block.tabIds.length + 1
+      : (moved[at + 1] as PlacedBlock).start;
+  return { move: { block, index }, expect: stripIndexes(moved) };
 }
 
 /**
  * Every step from `layout` to `target`, without indexes: what `nextMove` will
- * ask for one read-back at a time. Its length bounds the browser loop.
+ * ask for one read-back at a time. Its length bounds the browser loop. Null when
+ * the steps would not end in `target`, so nothing is moved toward it.
  */
 export function planMoves(
   layout: readonly OrderBlock[],
   target: readonly string[],
-): Array<{ key: string; beside: string; after: boolean }> {
+): Array<{ key: string; beside: string; after: boolean }> | null {
   const out: Array<{ key: string; beside: string; after: boolean }> = [];
   let current = [...layout];
-  // Each slot takes at most one step per block still to its right.
   for (let guard = layout.length * layout.length + 1; guard > 0; guard--) {
     const step = nextStep(current, target);
-    if (!step) break;
+    if (!step) {
+      const keys = current.map(blockKey);
+      return keys.length === target.length && keys.every((k, i) => k === target[i]) ? out : null;
+    }
     out.push({
       key: blockKey(current[step.from] as OrderBlock),
       beside: blockKey(current[step.to] as OrderBlock),
@@ -277,7 +406,7 @@ export function planMoves(
     });
     current = applyStep(current, step);
   }
-  return out;
+  return null;
 }
 
 export interface ArrangeIo {
@@ -288,8 +417,11 @@ export interface ArrangeIo {
 }
 
 export interface ArrangeResult {
-  /** The window as last read. */
-  layout: PlacedBlock[];
+  /**
+   * The window as last read, or as the last move should have left it when that
+   * read-back failed; absent when the window could not be read at all.
+   */
+  layout?: OrderBlock[];
   moves: number;
   /** The window ended in `target`'s order, every read-back as planned. */
   complete: boolean;
@@ -299,33 +431,41 @@ export interface ArrangeResult {
  * Move a window toward `target` one block at a time, reading it back after
  * every move. It stops, incomplete, as soon as a read-back is not what the move
  * should have left (a tab dragged, opened or closed meanwhile, or an engine
- * that ignored the index) or a move throws, and it never makes more moves than
- * the plan has.
+ * that ignored the index), a move or a read throws, or the plan runs out. It
+ * never throws, so the caller always records where the window was left.
  */
 export async function arrange(io: ArrangeIo, target: readonly string[]): Promise<ArrangeResult> {
-  let layout = await io.read();
-  const limit = planMoves(layout, target).length;
+  let layout: PlacedBlock[];
+  try {
+    layout = await io.read();
+  } catch {
+    return { moves: 0, complete: false };
+  }
+  const plan = planMoves(layout, target);
   let moves = 0;
   for (;;) {
-    const next = nextMove(layout, target);
+    const next = plan ? nextMove(layout, target) : null;
     if (!next) {
       const keys = layout.map(blockKey);
       const complete = keys.length === target.length && keys.every((k, i) => k === target[i]);
-      return { layout, moves, complete };
+      return { layout: stripIndexes(layout), moves, complete };
     }
-    if (moves >= limit) return { layout, moves, complete: false };
+    if (moves >= (plan?.length ?? 0))
+      return { layout: stripIndexes(layout), moves, complete: false };
     try {
       await io.move(next.move);
     } catch {
-      return { layout: await io.read().catch(() => layout), moves, complete: false };
+      const now = await io.read().catch(() => null);
+      return { ...(now ? { layout: stripIndexes(now) } : {}), moves, complete: false };
     }
     moves++;
-    layout = await io.read();
-    if (!sameLayout(stripIndexes(layout), next.expect)) return { layout, moves, complete: false };
+    try {
+      layout = await io.read();
+    } catch {
+      return { layout: next.expect, moves, complete: false };
+    }
+    if (!sameLayout(stripIndexes(layout), next.expect)) {
+      return { layout: stripIndexes(layout), moves, complete: false };
+    }
   }
-}
-
-/** Tabs a window's order leaves in place: pinned, hidden, and the members of fixed groups. */
-export function fixedTabs(layout: readonly OrderBlock[]): number {
-  return layout.reduce((n, b) => n + (b.fixed ? b.tabIds.length : 0), 0);
 }

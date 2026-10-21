@@ -415,16 +415,17 @@ describe("views", () => {
       startedAt: 1,
       before: [{ tabIds: [1], fixed: true }, { tabIds: [2, 4], groupId: 9 }, { tabIds: [3] }],
       after: [{ tabIds: [1], fixed: true }, { tabIds: [3] }, { tabIds: [2, 4], groupId: 9 }],
-      at: 2,
       complete: true,
       moves: 1,
       ranked: 1,
       elsewhere: 0,
     });
-    const view = buildDigestView(r, live, [], opts);
+    const view = buildDigestView(r, live, [], opts, { windowId: 1 });
+    // Another window's full view neither shows this reorder nor offers its Undo.
+    expect(buildDigestView(r, live, [], opts, { windowId: 2 }).order).toBeUndefined();
+    expect(buildDigestView(r, live, [], opts).order).toBeUndefined();
     expect(view.order).toEqual({
       direction: "focus",
-      at: 2,
       complete: true,
       moves: 1,
       ranked: 1,
@@ -441,6 +442,10 @@ describe("views", () => {
     expect(orderUndoState(r, [])).toBe("changed");
     // Spent, or never moved anything: nothing to offer.
     expect(orderUndoState({ order: { ...r.order!, undoneAt: 3 } }, live)).toBeNull();
+    const spent = buildDigestView(withOrder(r, { ...r.order!, undoneAt: 3 }), live, [], opts, {
+      windowId: 1,
+    });
+    expect(spent.order).toMatchObject({ undone: true, undo: null });
     expect(orderUndoState({ order: { ...r.order!, after: r.order!.before } }, live)).toBeNull();
     expect(orderUndoState({ order: { ...r.order!, after: undefined } }, live)).toBeNull();
   });

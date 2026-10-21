@@ -2,7 +2,6 @@ import { describe, expect, test } from "bun:test";
 import {
   FOCUS_RANK,
   blockKey,
-  fixedTabs,
   layoutFrom,
   nextMove,
   orderTarget,
@@ -30,9 +29,10 @@ type EngineRule = "gecko" | "chromium";
 
 /**
  * `tabs.move` and `tabGroups.move` as measured on Chrome 148, Firefox 154 and
- * Zen 1.23.3b: the first moved tab ends up at `index`. A moved tab joins the
- * group of the tab now to its right on Gecko, and only a group on both sides
- * on Chromium.
+ * Zen 1.23.3b: the first moved tab ends up at `index`. On Gecko a moved tab
+ * takes the group of the tab that held `index` before the move (its right-hand
+ * neighbour when it moves left, its left-hand one when it moves right, the
+ * window's end included); on Chromium it joins only a group on both sides.
  */
 class SimWindow {
   tabs: SimTab[];
@@ -58,6 +58,7 @@ class SimWindow {
   }
 
   moveTab(id: number, index: number): void {
+    const held = this.tabs[index];
     const at = this.tabs.findIndex((t) => t.id === id);
     const [tab] = this.tabs.splice(at, 1);
     if (!tab) throw new Error("no tab");
@@ -66,7 +67,9 @@ class SimWindow {
     const right = this.tabs[index + 1];
     const group =
       this.rule === "gecko"
-        ? (right?.groupId ?? -1)
+        ? held && held !== tab
+          ? held.groupId
+          : -1
         : left && right && left.groupId === right.groupId
           ? left.groupId
           : -1;
@@ -82,7 +85,7 @@ class SimWindow {
 
   /** Run the background's loop: next move, make it, read back, compare. */
   arrange(target: string[]): { moves: number; complete: boolean } {
-    const limit = planMoves(stripIndexes(layoutFrom(this.listing())), target).length;
+    const limit = planMoves(stripIndexes(layoutFrom(this.listing())), target)?.length ?? 0;
     for (let moves = 0; moves <= limit; moves++) {
       const next = nextMove(layoutFrom(this.listing()), target);
       if (!next) return { moves, complete: true };
@@ -192,7 +195,6 @@ describe("layoutFrom", () => {
     ]);
     // The unlisted tab's index is skipped, never counted.
     expect(layout[2]?.start).toBe(4);
-    expect(fixedTabs(layout)).toBe(4);
   });
 
   test("a group the listing shows in two pieces is fixed", () => {
@@ -296,18 +298,34 @@ describe("nextMove", () => {
     expect(next?.move.index).toBe(2);
   });
 
-  test("a tab never moves in front of a group: the group steps right past it", () => {
+  test("a tab lands only beside a tab, on the side it comes from; groups move after", () => {
     const { tabs, id } = build("[bc] a d");
     const sim = new SimWindow(tabs, "gecko");
     const target = orderTarget(sim.layout(), ranks(id, { d: "worth-it" }), "focus");
+    // a moves right, behind d: the tab whose index it takes is d, not the group.
     const next = nextMove(layoutFrom(sim.listing()), target);
-    expect(next?.move.block.groupId).toBe(100);
-    // [bc] at 0-1 goes to just after d (index 3): its first tab ends at 3 - 2 + 1.
-    expect(next?.move.index).toBe(2);
-    // Then d moves into the first slot, and [bc] back in front of a.
-    expect(sim.arrange(target)).toEqual({ moves: 3, complete: true });
+    expect(next?.move.block.tabIds).toEqual([id("a")]);
+    expect(next?.move.index).toBe(3);
+    // Then [bc] moves in behind d.
+    expect(sim.arrange(target)).toEqual({ moves: 2, complete: true });
     expect(names(sim, id, "abcd")).toBe("d[bc]a");
     expect(sim.joins).toBe(0);
+  });
+
+  test("one tab far from its place costs one move, however many tabs it passes", () => {
+    const { tabs, id } = build("a [bc] d e f g h i j k [lm] n");
+    const sim = new SimWindow(tabs, "gecko");
+    const target = orderTarget(sim.layout(), ranks(id, { a: "close" }), "focus");
+    expect(sim.arrange(target)).toEqual({ moves: 1, complete: true });
+    expect(names(sim, id, "abcdefghijklmn")).toBe("[bc]defghijk[lm]na");
+    const back = new SimWindow(tabs, "gecko");
+    expect(back.arrange(orderTarget(back.layout(), ranks(id, { n: "worth-it" }), "focus"))).toEqual(
+      {
+        moves: 1,
+        complete: true,
+      },
+    );
+    expect(sim.joins + back.joins).toBe(0);
   });
 
   test("every permutation reaches its target and comes back, on both engines' rules", () => {
@@ -346,7 +364,9 @@ describe("nextMove", () => {
           const target = orderTarget(before, rankOf, direction);
           const res = sim.arrange(target);
           expect(res.complete).toBe(true);
-          expect(res.moves).toBe(planMoves(before, target).length);
+          expect(res.moves).toBe(planMoves(before, target)?.length ?? -1);
+          // Each block moves at most once.
+          expect(res.moves).toBeLessThanOrEqual(before.length);
           const after = sim.layout();
           expect(after.map(blockKey)).toEqual(target);
           // Nothing joined or left a group, and no group changed inside.
@@ -367,6 +387,34 @@ describe("nextMove", () => {
       }
     }
     expect(windows).toBe(1600);
+  });
+
+  test("a 600-tab window with a scattered digest takes one move per misplaced block at most", () => {
+    const random = rng(600);
+    let spec = "";
+    for (let i = 0; i < 600; i++) {
+      // Every 50th position opens a three-tab group.
+      if (i % 50 === 10) spec += "[";
+      spec += String.fromCharCode(0x4e00 + i);
+      if (i % 50 === 12) spec += "]";
+    }
+    const { tabs } = build(spec);
+    const fates = ["worth-it", "could-not-read", "file", "close"] as const;
+    // A 40-item digest scattered through the window; the rest are neutral.
+    const rank = new Map<number, number>();
+    while (rank.size < 40) {
+      const tab = tabs[Math.floor(random() * tabs.length)] as SimTab;
+      rank.set(tab.id, FOCUS_RANK[fates[Math.floor(random() * 4)] as (typeof fates)[number]]);
+    }
+    const rankOf = (tabId: number) => rank.get(tabId) ?? FOCUS_RANK.neutral;
+    for (const rule of ["gecko", "chromium"] as const) {
+      const sim = new SimWindow(tabs, rule);
+      const before = sim.layout();
+      const res = sim.arrange(orderTarget(before, rankOf, "focus"));
+      expect(res.complete).toBe(true);
+      expect(res.moves).toBeLessThanOrEqual(40);
+      expect(sim.joins).toBe(0);
+    }
   });
 
   test("Undo restores every permutation of a window exactly (the shortlist restore did not)", () => {

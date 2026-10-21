@@ -179,6 +179,7 @@ const CLEAR_TITLE =
 export function orderSummary(order: Omit<DigestOrderView, "undo">): string {
   const parts: string[] = [];
   const name = order.direction === "focus" ? "Focus" : "Clear";
+  if (order.undone) return `${name} undone`;
   if (order.ranked === 0) {
     parts.push(`${name}: no tab from this digest is open in this window`);
   } else {
@@ -383,6 +384,8 @@ export class DigestPanel {
         change.status === "complete" ||
         change.pinned !== undefined ||
         change.discarded !== undefined ||
+        // A hidden tab is fixed in the order's layout, so showing or hiding one retires Undo too.
+        (change as { hidden?: boolean }).hidden !== undefined ||
         (change as { groupId?: number }).groupId !== undefined
       ) {
         soon();
