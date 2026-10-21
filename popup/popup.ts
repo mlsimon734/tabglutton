@@ -517,7 +517,7 @@ async function refresh(): Promise<void> {
   const res = await sendMessage<GetScopedTabsResponse>({ type: "get-scoped-tabs" });
   if (!res) return;
   state.scopedTabs = res.tabs;
-  state.syncedWindows = res.syncedWindows;
+  state.syncedWindows = res.syncedElsewhere && [...res.tabs, ...res.syncedElsewhere];
   state.settings = res.settings;
   const live = new Set(state.scopedTabs.map((t) => t.id));
   for (const id of state.selected) {

@@ -40,6 +40,9 @@ function webKey(url: string | undefined, opts: NormalizeOpts): string | null {
   return isWebUrl(url) ? normalizeUrl(url, opts) : null;
 }
 
+/** Never a `normalizeUrl` key, so it only ever makes an index disagree. */
+const NOT_WEB = "\0not-web";
+
 /** One candidate for a duplicate set: a page, and the tab that stands for it. */
 interface Page<T> {
   key: string;
@@ -78,20 +81,23 @@ function syncedPages<T extends DedupTab>(
   opts: NormalizeOpts,
 ): Page<T>[] {
   const keysAt = new Map<number, Set<string>>();
-  const note = (index: number, key: string): void => {
-    let keys = keysAt.get(index);
-    if (!keys) keysAt.set(index, (keys = new Set()));
-    keys.add(key);
-  };
-  for (const tab of syncedWindows) {
+  const note = (tab: SyncedTab): string | null => {
     const key = webKey(tab.url, opts);
-    if (key) note(tab.index, key);
-  }
+    // `about:blank` is what a stand-in copy reports, so it says nothing about
+    // the page. Any other address that is not a web page is the page itself
+    // (it navigated to `about:addons`, say) and disagrees with a stale copy.
+    const seen = key ?? (tab.url === undefined || tab.url === "about:blank" ? null : NOT_WEB);
+    if (seen !== null) {
+      let keys = keysAt.get(tab.index);
+      if (!keys) keysAt.set(tab.index, (keys = new Set()));
+      keys.add(seen);
+    }
+    return key;
+  };
+  for (const tab of syncedWindows) note(tab);
   const copiesAt = new Map<number, T[]>();
   for (const tab of tabs) {
-    const key = webKey(tab.url, opts);
-    if (!key) continue;
-    note(tab.index, key);
+    if (!note(tab)) continue;
     let copies = copiesAt.get(tab.index);
     if (!copies) copiesAt.set(tab.index, (copies = []));
     copies.push(tab);

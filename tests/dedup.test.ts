@@ -244,6 +244,32 @@ describe("groupDuplicates with Zen's synced windows", () => {
     expect(closes(groupDuplicates(four, {}, four))).toEqual([292]);
   });
 
+  test("a page that left the web disagrees with its stale copy, so it is never closed", () => {
+    // Window 1's tab navigated from P1 to an about: page; window 2's copy of it
+    // still says P1, and P1 is open again at index 3. Only an about:blank
+    // stand-in is ignored, so the about: address leaves index 2 out.
+    const tabs = [
+      makeTab({ id: 1, windowId: 1, index: 2, url: "about:addons", lastAccessed: 9 }),
+      makeTab({
+        id: 2,
+        windowId: 2,
+        index: 2,
+        url: "https://example.com/?zcopy=P1",
+        lastAccessed: 9,
+      }),
+      makeTab({
+        id: 3,
+        windowId: 1,
+        index: 3,
+        url: "https://example.com/?zcopy=P1",
+        lastAccessed: 5,
+      }),
+      makeTab({ id: 4, windowId: 2, index: 3, url: "about:blank", lastAccessed: 5 }),
+    ];
+    expect(closes(groupDuplicates(tabs, {}))).toEqual([3]);
+    expect(groupDuplicates(tabs, {}, tabs)).toEqual([]);
+  });
+
   test("an unsynced window paired by position only hides duplicates", () => {
     // Zen opens a link sent to a new window unsynced, so its tabs are not
     // copies; pairing them by index is the mistake the rule allows.

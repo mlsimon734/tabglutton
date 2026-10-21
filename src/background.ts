@@ -227,8 +227,12 @@ export interface ClosedTabRecord {
 export interface GetScopedTabsResponse {
   tabs: PopupTab[];
   settings: Settings;
-  /** Every window's tabs on Zen, for duplicate grouping; see `syncedWindowTabs`. */
-  syncedWindows?: SyncedTab[];
+  /**
+   * On Zen, the synced windows' tabs that `tabs` leaves out (none under the
+   * default scope). Present only on Zen: `tabs` plus these is the listing
+   * `groupDuplicates` pairs copies across; see `syncedWindowTabs`.
+   */
+  syncedElsewhere?: SyncedTab[];
 }
 
 export interface CloseDuplicatesResponse {
@@ -387,13 +391,16 @@ async function syncedWindowTabs(scoped: Tab[]): Promise<Tab[] | undefined> {
 async function refreshBadge(tabsHint?: Tab[]): Promise<void> {
   const tabs = tabsHint ?? (await queryScopedTabs());
   const opts = normalizeOptsFrom(settings);
-  const groups = groupDuplicates(tabs, opts, await syncedWindowTabs(tabs));
+  const synced = await syncedWindowTabs(tabs);
+  const groups = groupDuplicates(tabs, opts, synced);
   const dupCount = groups.reduce((n, g) => n + (g.tabs.length - 1), 0);
   // Tabs whose navigation has not committed carry no URL the grouping can read
   // — Chrome reports `""`, Gecko `about:blank` — so while any is in flight the
   // count above is a floor. The badge paints it regardless, as it always has;
-  // the notice's memory must not treat it as the pile having gone.
-  const settled = !tabs.some((t) => t.status === "loading" && !isHttpUrl(t.url));
+  // the notice's memory must not treat it as the pile having gone. On Zen the
+  // other windows' tabs feed the grouping too, so they are checked as well.
+  const inFlight = (t: Tab): boolean => t.status === "loading" && !isHttpUrl(t.url);
+  const settled = !tabs.some(inFlight) && !synced?.some(inFlight);
   try {
     // The duplicate count is the badge's primary job. A live agent connection
     // only claims the badge when there is nothing to report, as a terracotta
@@ -1677,7 +1684,12 @@ browser.runtime.onMessage.addListener(
             .sort((a, b) => (a.windowId ?? 0) - (b.windowId ?? 0) || a.index - b.index),
           settings,
         };
-        if (synced) response.syncedWindows = synced.map((t) => ({ url: t.url, index: t.index }));
+        if (synced) {
+          const listed = new Set(tabs.map((t) => t.id));
+          response.syncedElsewhere = synced
+            .filter((t) => !listed.has(t.id))
+            .map((t) => ({ url: t.url, index: t.index }));
+        }
         return response;
       }
       case "clip-selected-tabs":
