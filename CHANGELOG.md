@@ -4,6 +4,15 @@ All notable changes to Tabglutton are documented here.
 
 ## [0.5.2](https://github.com/mlsimon734/tabglutton/compare/v0.5.1...v0.5.2) (unreleased)
 
+### Features
+
+- **A digest keeps a receipt of what you did with it.** Once its Close has run, the Digest
+  panel's header says how many tabs it closed and how long after you first opened the
+  digest, how many of those pages you opened again within 48 hours (Undo is counted on its
+  own, never as a reopen), and how many rows you moved out of the agent's sections. "Copy
+  diagnostics" lists the same counts per stored digest, with no page, feed, or agent text,
+  so a digest's track record can be shared without its contents.
+
 ### Fixes
 
 - **Dedup no longer closes pages on Zen when you have more than one window open.** Zen's
