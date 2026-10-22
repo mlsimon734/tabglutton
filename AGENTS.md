@@ -42,7 +42,7 @@ Bun-powered TypeScript WebExtension ("Tabglutton") for Zen Browser, Firefox, and
 
 ## Tabs and the bridge (extension side)
 
-- **Dedup groups `http(s)` URLs only.** Zen's window sync turns each page's copy in another window into an `about:blank` stand-in, and closing the stand-in closes the page; grouping stand-ins closed every synced page ([#117](https://github.com/mlsimon734/tabglutton/issues/117)). §Zen window sync.
+- **Dedup groups `http(s)` URLs only, and on Zen (`getBrowserInfo().zen`) the web tabs at one index across windows are one page.** Zen's window sync gives each window a copy of every page that closes the page with it and may report a blank, real or stale URL; an index whose copies disagree is left out, so a mistaken pairing only hides a duplicate ([#117](https://github.com/mlsimon734/tabglutton/issues/117)). §Zen window sync.
 - Chrome mints a **new tab id on discard** (Firefox keeps it), so `bridge-methods.ts` appends `STALE_ID_HINT` to every "no such tab id" error. Measurement in `docs/LAUNCH.md` ("Chrome assigns a new tab id"); the unreadable-discarded-tab side is `docs/BRIDGE.md` §The discarded-tab problem.
 - **Waking is `tabs.reload()`, never `tabs.update({ discarded: false })`.** `ensureTabReady` owns it for Devour and `tabs_load`, attaches its `onUpdated` listener before reading the tab, and reads no status after the reload. §Waking tabs.
 - **Grouping** (`tabs.group()`) churns no tab ids and wakes no discarded tab, needs the `tabGroups` permission, and **silently unpins pinned tabs** — a rule pass excludes them or says so ([#33](https://github.com/mlsimon734/tabglutton/issues/33)). §Tab grouping.

@@ -1,6 +1,6 @@
 import type { ClipFailureReason, ClipSelectedTabsResponse, PopupTab } from "../src/background.js";
 import { clipMarkFor, type ClipMemoryEntry, type ClipTarget } from "../src/clip-memory.js";
-import { groupDuplicates, pickKeeper } from "../src/dedup.js";
+import { groupDuplicates, pickKeeper, type SyncedTab } from "../src/dedup.js";
 import { normalizeOptsFrom, type Settings } from "../src/storage.js";
 
 /**
@@ -85,9 +85,13 @@ function sortSection(groups: TabGroup[], rank: Map<string, number> | null): void
  * `pickKeeper` itself, not a copy of its rule: the pill this puts on a row is a
  * claim about what the Dedup button will do, and it has to stay true.
  */
-export function duplicateGroups(tabs: PopupTab[], settings: Settings | null): TabGroup[] {
+export function duplicateGroups(
+  tabs: PopupTab[],
+  settings: Settings | null,
+  syncedWindows?: readonly SyncedTab[],
+): TabGroup[] {
   if (!settings) return [];
-  return groupDuplicates(tabs, normalizeOptsFrom(settings)).map((set) => {
+  return groupDuplicates(tabs, normalizeOptsFrom(settings), syncedWindows).map((set) => {
     const keeper = pickKeeper(set.tabs);
     const extras = set.tabs.filter((t) => t.id !== keeper.id).sort(byPosition);
     return {
@@ -192,6 +196,7 @@ export function visibleGroups(
   settings: Settings | null,
   stickyOrder?: readonly string[] | null,
   clipFilter: ClipFilter = "all",
+  syncedWindows?: readonly SyncedTab[],
 ): TabGroup[] {
   const ts = tokens(filter);
   // Both filters answer the same question — is this row worth looking at — so
@@ -208,7 +213,7 @@ export function visibleGroups(
   // one copy matches the filter. Detecting them among the matching tabs instead
   // would let a filter split a set and pin `keep` on a copy Dedup is about to
   // close — the button has never been filtered, and the pill is a claim about it.
-  const dups = duplicateGroups(scopedTabs, settings).filter((g) =>
+  const dups = duplicateGroups(scopedTabs, settings, syncedWindows).filter((g) =>
     g.tabs.some((t) => matching.has(t.id)),
   );
   const claimed = new Set<number>();
@@ -267,9 +272,13 @@ export function markdownForTabs(tabs: PopupTab[]): string {
  * What the Dedup button would close, over the whole scope — deliberately not
  * filtered, because the button is not either.
  */
-export function computeDedupCount(scopedTabs: PopupTab[], settings: Settings | null): number {
+export function computeDedupCount(
+  scopedTabs: PopupTab[],
+  settings: Settings | null,
+  syncedWindows?: readonly SyncedTab[],
+): number {
   if (!settings) return 0;
-  return groupDuplicates(scopedTabs, normalizeOptsFrom(settings)).reduce(
+  return groupDuplicates(scopedTabs, normalizeOptsFrom(settings), syncedWindows).reduce(
     (n, g) => n + g.tabs.length - 1,
     0,
   );
