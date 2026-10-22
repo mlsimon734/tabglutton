@@ -221,4 +221,44 @@ The notice is the extension's own page (`notice/dup-notice.html`) framed into th
 
 ## Zen window sync
 
-- **Only web URLs can be duplicates, because Zen's window sync makes every other window's copy of a page an `about:blank` stand-in that closes the page with it** ([#117](https://github.com/mlsimon734/tabglutton/issues/117)). Measured on Zen 1.23.3b (Firefox 158.0), where `zen.window-sync.enabled` is on by default: a second window mirrors every tab of the workspace under different tab ids, and only one copy holds the page at a time. Viewing the copy in the other window moves the page there and turns the copy left behind into a discarded `about:blank` tab (3/3). `tabs.remove` on any copy closes every copy, in both directions, singly or in a batch (3/3 each). Apart from `url`, `discarded` and the tab's size, a stand-in's fields match its page, and Zen pairs them through an id that only its own code can read. `normalizeUrl` passes non-http URLs through unchanged, so before the fix Dedup treated every stand-in in every window as one duplicate set. With two windows, one press closed every page that had no duplicate (6/6), and Undo restored blank tabs, because the close records said `about:blank` (2/2). With one window, the same press closed only the real duplicate (3/3). `groupDuplicates` now skips any tab whose URL is not `http(s)`, which covers the popup, the full view, the badge and the duplicate notice, since they all group through it. The cost is that blank and `about:` tabs are never deduped. Still open in #117: whether `tabs_list` should mark stand-ins, since an agent closing "blank tabs" would lose pages the same way, and how pinned tabs and essentials behave under sync.
+- **Zen's window sync gives every window its own copy of every page, and closing any copy closes the page** ([#117](https://github.com/mlsimon734/tabglutton/issues/117)). Measured on Zen 1.23.3b (Firefox 158.0), where `zen.window-sync.enabled` is on by default (it shipped in 1.18b). A second window mirrors every tab of the space under different tab ids. `tabs.remove` on any copy closes every copy, in both directions, singly or in a batch (3/3 each). Zen pairs copies through a DOM id that only its own code can read. `normalizeUrl` passes non-http URLs through unchanged, so before #118 Dedup treated every `about:blank` copy in every window as one duplicate set; #118 made it skip non-`http(s)` URLs, and with one window the press still closes only the real duplicate (3/3).
+- **That was not enough, because many copies report a real address, and some report the wrong one.** What the other window's copy reports, three runs each (`scratch-chrome/zen-copies.ts signature`):
+
+  | The page, when its copy is made or changes     | What the copy reports                                                                  |
+  | ---------------------------------------------- | -------------------------------------------------------------------------------------- |
+  | Loaded, unpinned, not in a group               | `about:blank`, the page's title, discarded                                             |
+  | Discarded, pinned, an essential, or in a group | the page's real URL, discarded                                                         |
+  | Its copy is selected in the other window       | the copy left behind keeps the real URL, not discarded                                 |
+  | Navigated                                      | the old URL: Zen never updates a background copy. A lazy copy also keeps the old title |
+  | Opened as a new tab                            | `about:blank` titled `about:blank`, `lastAccessed` 5 to 8 ms later                     |
+  | Restored by session restore                    | in both windows, every copy: real URL, discarded, equal `lastAccessed`                 |
+
+  With two synced windows, the #118 build lost pages that had no duplicate in every run. Undo reopens what the close records say, so a page closed through a copy that still showed its old address came back on that old address (D2N 2/2, P2N 1/1), and one run reopened a real duplicate twice:
+
+  | Build and scenario | Runs | Closed per press | Pages lost that had no duplicate              | Badge, notice                 |
+  | ------------------ | ---- | ---------------- | --------------------------------------------- | ----------------------------- |
+  | #118, signature    | 3    | 7, 3, 4          | 4, 2, 3                                       | 7, 3, 4                       |
+  | #118, verify       | 3    | 5                | 3, and the real duplicate lost both its pages | 5, `#count=5` (read in 1 run) |
+  | this fix, verify   | 3    | 1                | 0: all 8 pages still open in both windows     | 1, `#count=1`                 |
+
+- **The copies of a page share one thing: their position.** Zen replays every open, move, pin and group into each window, so a page sits at the same `index` everywhere. Pooled over every state of the three signature runs, a space-switching run and a session-restore run:
+
+  | Field          | Copy pairs that agree | Real duplicates across windows that agree |
+  | -------------- | --------------------- | ----------------------------------------- |
+  | `index`        | 422 of 422            | 0 of 51                                   |
+  | Same web URL   | 156 of 422            | 51 of 51                                  |
+  | `title`        | 323 of 422            | 51 of 51                                  |
+  | `lastAccessed` | 305 of 422            | 0 of 51                                   |
+
+  Pairs are counted once per state, so one pair appears in several rows of the run. The index is relative to the active space, and the unlisted zen-empty-tab leaves a gap that stayed aligned through space round trips (1 run).
+
+- **So on Zen, the web tabs at one index are one page, and a position whose copies disagree is left out.** `groupDuplicates` takes the synced windows' tabs as an optional third argument; with it, `syncedPages` turns each index into one candidate represented by its most recently used copy (`pickKeeper`), and drops any index whose copies normalize to more than one key, in any window, scoped or not, so a copy still showing an old address never closes the page that moved on. A copy on `about:blank` is a stand-in and says nothing; any other address outside the web (a page that went to `about:addons`) counts as disagreeing. Replayed over every measured snapshot, that rule closes no page that has no duplicate and misses no real duplicate (19 states, 0 lost, 0 missed); the URL-plus-index, index-plus-`lastAccessed` and first-window-only rules each lost a page somewhere. For a real duplicate, four tabs stand for two pages, and Zen bears out that closing one tab is enough (`realdup`, three runs each, all four copies reporting D):
+
+  | Closed                                                                | D pages left |
+  | --------------------------------------------------------------------- | ------------ |
+  | One tab: the extra in either window, or the keeper's copy in window 2 | 1            |
+  | Both copies of the extra page                                         | 1            |
+  | One copy of each page                                                 | 0            |
+
+- **The synced listing is passed only when `getBrowserInfo()` has a `zen` field**, which Zen adds from 1.18.6b (zen-browser/desktop 466d089f) while still answering `name: "Firefox"`; Firefox 154 and Chrome have none, so their grouping is unchanged, including a duplicate across windows at the same index (Firefox 154, two live presses, one of them at the same index). `syncedWindowTabs` in `background.ts` feeds the press, the badge (and with it the notice) and the diagnostics count; `get-scoped-tabs` carries the same listing to the popup and the full view. A current-window scope still queries every window, because a copy showing an old address is only visible as such next to the copy that shows where its page went (1 live run of the verify scenario: badge, popup count, notice and press all 1, nothing lost).
+- **Every mistake the rule can make hides a duplicate; none closes a page.** Known costs: on Zen with window sync off, or for windows Zen leaves unsynced, two different tabs at one index across windows read as one candidate or as a conflict, so duplicates across windows are often missed. Zen 1.18b to 1.18.5b sync without the `zen` field and get only #118's protection. Inferred, not measured: a page that navigates in one window, which then switches to another space, leaves its stale copy as the only one listed, so reopening the old address could pair with it. A glance tab and its parent swap positions between windows, and whether the extension lists glance tabs at all is unmeasured. `tabs_list` is unchanged and still lists every copy as its own tab (#117).

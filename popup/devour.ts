@@ -7,6 +7,7 @@ import type {
   GetScopedTabsResponse,
   PopupTab,
 } from "../src/background.js";
+import type { SyncedTab } from "../src/dedup.js";
 import { planGrouping, plannedTabCount, type GroupingPlan } from "../src/grouping.js";
 import { DigestPanel } from "./digest-panel.js";
 import { clipMarkFor } from "../src/clip-memory.js";
@@ -48,6 +49,8 @@ import {
 
 interface CockpitState {
   scopedTabs: PopupTab[];
+  /** Every window's tabs on Zen, so duplicate sets pair synced copies as the background does. */
+  syncedWindows: SyncedTab[] | undefined;
   settings: Settings | null;
   filter: string;
   /** Deliberately not persisted: a hidden filter surviving a reopen is a bug report. */
@@ -120,6 +123,7 @@ const listGate = createPressGate();
 
 const state: CockpitState = {
   scopedTabs: [],
+  syncedWindows: undefined,
   settings: null,
   filter: "",
   clipFilter: "all",
@@ -503,7 +507,7 @@ function renderSelectionSummary(visibleIds: number[]): void {
 }
 
 function renderDedupBadge(): void {
-  state.dedupCount = computeDedupCount(state.scopedTabs, state.settings);
+  state.dedupCount = computeDedupCount(state.scopedTabs, state.settings, state.syncedWindows);
   dedupBtn.disabled = state.dedupCount === 0 || state.clipping;
   if (state.dedupCount > 0) {
     dedupCountEl.hidden = false;
@@ -947,6 +951,7 @@ function currentGroups(): TabGroup[] {
     state.settings,
     state.stickyOrder,
     state.clipFilter,
+    state.syncedWindows,
   );
 }
 
@@ -976,6 +981,7 @@ async function refresh(): Promise<void> {
   const res = await sendMessage<GetScopedTabsResponse>({ type: "get-scoped-tabs" });
   if (!res) return;
   state.scopedTabs = res.tabs;
+  state.syncedWindows = res.syncedElsewhere && [...res.tabs, ...res.syncedElsewhere];
   state.settings = res.settings;
   const live = new Set(state.scopedTabs.map((t) => t.id));
   for (const id of state.selected) {
