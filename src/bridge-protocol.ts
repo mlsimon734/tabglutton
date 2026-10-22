@@ -239,7 +239,7 @@ export type BridgeErrorCode =
    */
   | "thin-content"
   | "vault-missing"
-  /** A tab the user routes to Zotero, which the Connector could not take. */
+  /** A tab the user routes to Zotero, which could not be read or saved there. */
   | "zotero-failed"
   | "unsupported"
   /** The capability exists but the user has not switched it on. Distinct from
@@ -963,12 +963,10 @@ export type ClipDestination = "obsidian" | "file";
  *
  * - `browser` — the extension watched the filing happen, which is the one thing
  *   it can never do for Obsidian. Two destinations can say it: a file whose
- *   download was **seen** to reach `state: "complete"`, and a Zotero save the
- *   Connector answered `status: "saved"` for. The second is weaker in one
- *   stated way — it is the Connector's word that its own save resolved, not an
- *   inspection of the resulting library item, and nothing outside Zotero can
- *   supply that — but it is the same evidence the popup's Devour closes a
- *   routed tab on, and it is the strongest that path has.
+ *   download was **seen** to reach `state: "complete"`, and a Zotero item read
+ *   back from the library through the local API after it was written, under
+ *   the title that was sent (and, with a PDF, carrying the checksum of the
+ *   bytes that were sent).
  * - `gullet` — the Obsidian destination, verified against the vault on disk by
  *   the sidecar (see gullet/src/clip-verify.ts). The extension never reports
  *   this: an `obsidian://` handoff is unobservable from inside the browser.
@@ -993,7 +991,7 @@ interface TabClipFiling {
    * Where the note went. Vault-relative and extension-less for Obsidian (which
    * appends `.md`); the absolute path the browser reported writing, for a file.
    * A file clip can lack it (see `FileClipResult`) and a Zotero clip never has
-   * one — no note is written, and the Connector names no library item.
+   * one — no note is written; the item lives in the library.
    */
   file?: string;
   /**
@@ -1048,20 +1046,29 @@ export interface FileClipResult extends TabClipFiling {
 }
 
 /**
- * A tab the Zotero Connector took, because the user routes papers there and
- * this tab was one (`zoteroDestination` in background.ts — the same routing the
- * popup's Devour runs, so the two surfaces cannot disagree about a verdict; they
- * differ only in that the bridge may not wake a tab to obtain one).
+ * A tab filed into Zotero, because the user routes papers there and this tab
+ * carries citation data (`zoteroDestination` in background.ts — the same
+ * routing the popup's Devour runs, so the two surfaces cannot disagree about a
+ * verdict; they differ only in that the bridge may not wake a tab to obtain
+ * one).
  *
- * It carries no `file` and no `vault`: nothing here writes a note, and the
- * Connector's reply names no library item. `confirmedBy` is `"browser"` and
- * cannot be anything else — the save either resolved, which is what licenses
- * the close, or the call failed with `zotero-failed` and no result at all.
- * There is consequently nothing for Gullet to verify, and it does not try.
+ * It carries no `file` and no `vault`: nothing here writes a note. `confirmedBy`
+ * is `"browser"` and cannot be anything else — the item was read back from the
+ * library, which is what licenses the close, or the call failed with
+ * `zotero-failed` and no result at all. There is consequently nothing for
+ * Gullet to verify, and it does not try.
  */
 export interface ZoteroClipResult extends TabClipFiling {
   destination: "zotero";
   confirmedBy: "browser";
+  /**
+   * Whether the PDF the page names is attached: `none` when the page names
+   * none, `failed` when it could not be fetched or attached (`pdfNote` says
+   * why). The item is in the library either way. Optional because an older
+   * extension does not send it.
+   */
+  pdf?: "attached" | "none" | "failed";
+  pdfNote?: string;
 }
 
 export type TabClipResult = ObsidianClipResult | FileClipResult | ZoteroClipResult;
