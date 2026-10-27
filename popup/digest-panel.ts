@@ -15,21 +15,30 @@
 // host is parsed from its URL by the extension, so a title cannot pass itself
 // off as a different site.
 //
-// Nothing here acts on a tab by itself. The section buttons send the
-// background a request; the background re-resolves every row against the
-// browser at that moment and reports what it did per row.
+// Nothing here acts on a tab by itself. The buttons send the background a
+// request; the background re-resolves every row against the browser at that
+// moment and reports what it did. Focus and Clear reorder the window this page
+// is open in, and nothing else.
 
 import type { DigestFate } from "../src/bridge-protocol.js";
-import type { DigestActResponse, GetDigestsResponse } from "../src/digest-actions.js";
+import type {
+  DigestActResponse,
+  DigestOrderResponse,
+  DigestUndoOrderResponse,
+  GetDigestsResponse,
+} from "../src/digest-actions.js";
 import type {
   DigestAction,
   DigestActionRecord,
   DigestItemOutcome,
   DigestItemView,
+  DigestOrderView,
   DigestSummary,
   DigestView,
 } from "../src/digest.js";
+import { receiptSegments, REOPEN_WINDOW_MS, type DigestReceipt } from "../src/digest-receipt.js";
 import { quoteRepeatsDescription, shortPublished } from "../src/page-facts.js";
+import type { OrderDirection } from "../src/tab-order.js";
 import { hostInitial, sendMessage } from "./lib.js";
 
 export interface DigestPanelHost {
@@ -47,7 +56,7 @@ interface SectionSpec {
 }
 
 const SECTIONS: SectionSpec[] = [
-  { fate: "worth-it", title: "Worth your time", note: "kept open", action: "top" },
+  { fate: "worth-it", title: "Worth your time", note: "kept open" },
   {
     fate: "file",
     title: "File for reference",
@@ -82,12 +91,9 @@ const UNREADABLE: Record<NonNullable<DigestItemView["unreadable"]>, string> = {
 
 /** What a row's last action outcome says, as a mark. */
 const OUTCOME_LABEL: Record<DigestItemOutcome, string> = {
-  moved: "moved to top",
   closed: "closed",
   pinned: "pinned — left alone",
   active: "active tab — left alone",
-  hidden: "hidden — left alone",
-  "in-group": "in a tab group — left alone",
   gone: "not open",
   ambiguous: "ambiguous — left alone",
   changed: "changed — left alone",
@@ -144,45 +150,56 @@ function cssUrl(url: string): string {
 }
 
 /**
- * The line a section head carries after an action: what happened, counted by
+ * The line Close's section head carries after it ran: what happened, counted by
  * outcome, in the order a reader cares about.
  */
-export function actionSummary(action: DigestAction, record: DigestActionRecord): string {
+export function actionSummary(record: DigestActionRecord): string {
   const counts = new Map<DigestItemOutcome, number>();
   for (const { outcome } of record.outcomes) counts.set(outcome, (counts.get(outcome) ?? 0) + 1);
-  const parts: string[] = [];
-  const done = counts.get(action === "top" ? "moved" : "closed") ?? 0;
-  parts.push(action === "top" ? `Moved ${done} to the top` : `Closed ${done}`);
+  const parts: string[] = [`Closed ${counts.get("closed") ?? 0}`];
   const pinned = counts.get("pinned") ?? 0;
   if (pinned) parts.push(`${pinned} pinned, left in place`);
   const active = counts.get("active") ?? 0;
   if (active) parts.push(`${active} active, left open`);
-  const hidden = counts.get("hidden") ?? 0;
-  if (hidden) parts.push(`${hidden} hidden, left out`);
-  const inGroup = counts.get("in-group") ?? 0;
-  if (inGroup) parts.push(`${inGroup} in a tab group, left in it`);
   const gone = counts.get("gone") ?? 0;
   if (gone) parts.push(`${gone} no longer open`);
   const unsure = (counts.get("ambiguous") ?? 0) + (counts.get("changed") ?? 0);
   if (unsure) parts.push(`${unsure} changed or ambiguous, left alone`);
   const failed = counts.get("failed") ?? 0;
-  if (failed) parts.push(`${failed} could not be ${action === "top" ? "moved" : "closed"}`);
+  if (failed) parts.push(`${failed} could not be closed`);
+  return parts.join(" · ");
+}
+
+const FOCUS_TITLE =
+  "Reorder this window: worth-it tabs first, then could-not-read, tabs this digest does not name, File, and Close last. Groups move whole; pinned tabs stay put. Undo puts it back.";
+const CLEAR_TITLE =
+  "Reorder this window the other way round: Close first, so a sweep starts with what is cheapest to close. Undo puts it back.";
+
+/** What the latest Focus or Clear did, as the order bar's line. */
+export function orderSummary(order: Omit<DigestOrderView, "undo">): string {
+  const parts: string[] = [];
+  const name = order.direction === "focus" ? "Focus" : "Clear";
+  if (order.undone) return `${name} undone`;
+  if (order.ranked === 0) {
+    parts.push(`${name}: no tab from this digest is open in this window`);
+  } else {
+    parts.push(
+      `${name}: ${plural(order.ranked, "digest tab")} ranked, ${order.direction === "focus" ? "worth it first" : "Close first"}`,
+    );
+  }
+  if (order.elsewhere > 0) parts.push(`${order.elsewhere} in other windows, left alone`);
+  if (order.complete === false) parts.push("stopped early: the window changed while it ran");
+  else if (order.moves === 0 && order.ranked > 0) parts.push("already in this order");
   return parts.join(" · ");
 }
 
 /**
- * Rows the section's button would act on right now, by the view's live state —
- * the same exclusions `planDigestAction` applies, so the count on the button is
- * the count the background will attempt.
+ * Rows Close would act on right now, by the view's live state — the same
+ * exclusions `planDigestAction` applies, so the count on the button is the
+ * count the background will attempt.
  */
-function actionable(items: DigestItemView[], action: DigestAction): DigestItemView[] {
-  return items.filter(
-    (i) =>
-      i.live === "open" &&
-      !i.pinned &&
-      !(action === "close" && i.active) &&
-      !(action === "top" && (i.hidden || i.grouped)),
-  );
+function actionable(items: DigestItemView[]): DigestItemView[] {
+  return items.filter((i) => i.live === "open" && !i.pinned && !i.active);
 }
 
 /** A close row the user unticked: it sits in could-not-read, and ticking it returns it. */
@@ -199,14 +216,8 @@ function isClosed(row: DigestItemView): boolean {
 function stateFor(
   row: DigestItemView,
 ): { text: string; tone: "" | "is-done" | "is-refused" } | null {
-  if (row.outcome === "moved" && row.live === "open")
-    return { text: "moved to top", tone: "is-done" };
   if (isClosed(row)) return { text: "closed", tone: "is-done" };
-  const refused =
-    row.outcome !== undefined &&
-    row.outcome !== "moved" &&
-    row.outcome !== "closed" &&
-    row.outcome !== "gone";
+  const refused = row.outcome !== undefined && row.outcome !== "closed" && row.outcome !== "gone";
   if (refused && row.outcome) return { text: OUTCOME_LABEL[row.outcome], tone: "is-refused" };
   if (row.live === "gone") return { text: "not open in this workspace", tone: "" };
   if (row.live === "ambiguous") return { text: "ambiguous — left alone", tone: "is-refused" };
@@ -365,12 +376,17 @@ export class DigestPanel {
     browser.tabs.onRemoved.addListener(soon);
     browser.tabs.onAttached.addListener(soon);
     browser.tabs.onDetached.addListener(soon);
+    // A drag or a regroup is what retires the order's Undo.
+    browser.tabs.onMoved.addListener(soon);
     browser.tabs.onUpdated.addListener((_id, change) => {
       if (
         change.url !== undefined ||
         change.status === "complete" ||
         change.pinned !== undefined ||
-        change.discarded !== undefined
+        change.discarded !== undefined ||
+        // A hidden tab is fixed in the order's layout, so showing or hiding one retires Undo too.
+        (change as { hidden?: boolean }).hidden !== undefined ||
+        (change as { groupId?: number }).groupId !== undefined
       ) {
         soon();
       }
@@ -533,8 +549,64 @@ export class DigestPanel {
         break;
     }
     head.append(mirror);
-    head.append(this.renderStrip(view));
+    if (view.receipt) head.append(this.renderReceipt(view.receipt));
+    head.append(this.renderStrip(view), this.renderOrder(view));
     return head;
+  }
+
+  /**
+   * Focus and Clear: the one window-wide action, so it sits with the digest
+   * rather than in a section. After it ran, the line says what it did, with
+   * Undo while the window is still as the order left it.
+   */
+  private renderOrder(view: DigestView): HTMLElement {
+    const bar = el("div", "digest-order");
+    bar.append(el("span", "digest-order-label", "Order this window"));
+    const acts = el("span", "digest-order-acts");
+    const focus = button("primary digest-focus", "Focus", FOCUS_TITLE);
+    const clear = button("digest-clear", "Clear", CLEAR_TITLE);
+    for (const [b, direction] of [
+      [focus, "focus"],
+      [clear, "clear"],
+    ] as const) {
+      b.disabled = this.busy;
+      b.addEventListener("click", () => void this.order(direction));
+      acts.append(b);
+    }
+    bar.append(acts);
+    const order = view.order;
+    const note = el(
+      "span",
+      "digest-order-note",
+      order ? orderSummary(order) : "Worth it first, or Close first · groups move whole",
+    );
+    if (order?.undo === "changed") {
+      note.append(" · ", el("span", "digest-order-stale", "can no longer be undone"));
+      note.title = "The window’s tabs changed since, so Undo could not put them back exactly.";
+    }
+    bar.append(note);
+    if (order?.undo === "ready") {
+      const undo = button(
+        "quiet digest-undo",
+        "Undo",
+        "Put this window’s tabs back exactly where they were",
+      );
+      undo.disabled = this.busy;
+      undo.addEventListener("click", () => void this.undoOrder());
+      bar.append(undo);
+    }
+    return bar;
+  }
+
+  /** What the user did with the digest's closes. Counts only; the rows say which. */
+  private renderReceipt(receipt: DigestReceipt): HTMLElement {
+    const line = el("p", "digest-receipt");
+    line.title = `Reopened counts pages this digest closed that you opened again within ${REOPEN_WINDOW_MS / 3_600_000} hours. Undo is counted on its own.`;
+    receiptSegments(receipt).forEach((part, i) => {
+      if (i > 0) line.append(" · ");
+      line.append(part.lead, el("strong", undefined, String(part.n)), part.tail);
+    });
+    return line;
   }
 
   /** One bar per fate, proportional, with a legend that jumps to its section. */
@@ -574,31 +646,14 @@ export class DigestPanel {
       el("span", "count-badge", String(rows.length)),
     );
 
-    const record =
-      spec.action === "top"
-        ? view.top?.undoneAt === undefined
-          ? view.top
-          : undefined
-        : spec.action === "close"
-          ? view.lastClose
-          : undefined;
-    const note = el(
-      "span",
-      "section-note",
-      spec.action && record ? actionSummary(spec.action, record) : spec.note,
-    );
+    const record = spec.action === "close" ? view.lastClose : undefined;
+    const note = el("span", "section-note", record ? actionSummary(record) : spec.note);
     head.append(note);
 
     if (spec.action) {
-      const targets = actionable(rows, spec.action);
+      const targets = actionable(rows);
       const acts = el("span", "section-acts");
-      if (spec.action === "top" && view.moveUndo !== null) {
-        const undo = button("quiet digest-undo", "Undo", "Put these tabs back where they were");
-        undo.disabled = this.busy;
-        undo.addEventListener("click", () => void this.undoMove());
-        acts.append(undo);
-      }
-      if (spec.action === "close" && view.undo) {
+      if (view.undo) {
         const undo = button(
           "quiet digest-undo",
           `Undo ${view.undo.restorable}`,
@@ -608,31 +663,20 @@ export class DigestPanel {
         undo.addEventListener("click", () => void this.undo());
         acts.append(undo);
       }
-      const act =
-        spec.action === "top"
-          ? button(
-              "primary digest-act",
-              "Move to top",
-              "Move these tabs to the top of their window, after the pinned tabs. Undo puts them back.",
-            )
-          : button(
-              "danger digest-act",
-              "Close",
-              "Close these tabs as one batch — Undo brings them back",
-            );
+      const act = button(
+        "danger digest-act",
+        "Close",
+        "Close these tabs as one batch — Undo brings them back",
+      );
       act.append(el("span", "count-badge", String(targets.length)));
       act.disabled = this.busy || targets.length === 0;
       if (targets.length === 0 && rows.every((r) => r.live !== "open")) {
         note.textContent = "none of these are open in this workspace";
       }
       act.addEventListener("click", () => void this.act(spec.action as DigestAction));
-      // Once an action has run and left nothing to do, its result line and its
-      // Undo say what happened; a disabled "Close 0" only adds noise. A move
-      // that can still be undone hides its button for the same reason.
-      const spent =
-        (spec.action === "close" && record && targets.length === 0) ||
-        (spec.action === "top" && view.moveUndo !== null);
-      if (!spent) acts.append(act);
+      // Once Close has run and left nothing to do, its result line and its Undo
+      // say what happened; a disabled "Close 0" only adds noise.
+      if (!(record && targets.length === 0)) acts.append(act);
       head.append(acts);
     }
     section.append(head);
@@ -862,14 +906,33 @@ export class DigestPanel {
       this.host.toast(res.error);
       return;
     }
-    const summary = actionSummary(action, { startedAt: 0, outcomes: res.outcomes });
-    const undo =
-      res.done === 0
-        ? undefined
-        : action === "close"
-          ? () => void this.undo()
-          : () => void this.undoMove();
-    this.host.toast(summary, undo);
+    const summary = actionSummary({ startedAt: 0, outcomes: res.outcomes });
+    this.host.toast(summary, res.done === 0 ? undefined : () => void this.undo());
+  }
+
+  private async order(direction: OrderDirection): Promise<void> {
+    if (!this.view || this.busy) return;
+    this.busy = true;
+    this.render();
+    const res = await sendMessage<DigestOrderResponse>({
+      type: "digest-order",
+      digestId: this.view.id,
+      direction,
+    });
+    this.busy = false;
+    await this.refresh();
+    if (!res) {
+      this.host.toast("Nothing happened — the background page did not answer.");
+      return;
+    }
+    if (!res.ok) {
+      this.host.toast(res.error);
+      return;
+    }
+    this.host.toast(
+      orderSummary(res),
+      this.view?.order?.undo === "ready" ? () => void this.undoOrder() : undefined,
+    );
   }
 
   private async undo(): Promise<void> {
@@ -890,22 +953,29 @@ export class DigestPanel {
     }
   }
 
-  private async undoMove(): Promise<void> {
+  private async undoOrder(): Promise<void> {
     if (!this.view || this.busy) return;
     this.busy = true;
-    const res = await sendMessage<{ ok: boolean; restored: number; skipped: number }>({
-      type: "digest-undo-move",
+    this.render();
+    const res = await sendMessage<DigestUndoOrderResponse>({
+      type: "digest-undo-order",
       digestId: this.view.id,
     });
     this.busy = false;
     await this.refresh();
-    if (res?.ok) {
-      this.host.toast(
-        res.skipped > 0
-          ? `Put ${res.restored} back · ${res.skipped} had moved or closed, left where they are`
-          : `Put ${res.restored} back where they were`,
-      );
+    if (!res) {
+      this.host.toast("Nothing happened — the background page did not answer.");
+      return;
     }
+    if (!res.ok) {
+      this.host.toast(res.error);
+      return;
+    }
+    this.host.toast(
+      res.exact
+        ? "Put this window back as it was"
+        : "Undo stopped early: the window changed while it ran",
+    );
   }
 
   /** Rows in reading order, for j/k — folded closed rows are skipped. */

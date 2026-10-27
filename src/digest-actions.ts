@@ -3,8 +3,10 @@
 // right before touching it (`recheckTarget`), and reports per item what it did.
 // The destructive half goes through the bridge's own `tabs_close` and
 // `undo_close`, so every undo invariant holds with no second implementation
-// (docs/ENGINEERING.md §Undo invariants). Move to top only reorders; it keeps
-// the positions it moved tabs from on the digest, and its Undo puts them back.
+// (docs/ENGINEERING.md §Undo invariants). Focus and Clear only reorder the
+// window the panel is in (`tab-order.ts`); they keep that window's layout from
+// before and after on the digest, and their Undo puts it back exactly or
+// refuses.
 
 import {
   DIGEST_FATES,
@@ -14,25 +16,39 @@ import {
 } from "./bridge-protocol.js";
 import {
   buildDigestView,
+  effectiveFate,
   planDigestAction,
   recheckTarget,
+  resolveDigestItems,
   summarizeDigest,
   withClose,
-  withMove,
+  withOrder,
   type DigestAction,
   type DigestActionRecord,
   type DigestItemOutcome,
   type DigestRecord,
   type DigestSummary,
-  type DigestTarget,
   type DigestView,
   type FileDestination,
   type LiveTab,
 } from "./digest.js";
+import { digestReceipt } from "./digest-receipt.js";
 import { announceDigestsChanged, readDigests, toLiveTab, updateDigest } from "./digest-store.js";
-import type { TabPosition } from "./move-to-top.js";
 import type { NormalizeOpts } from "./normalize.js";
 import type { PageFacts } from "./page-facts.js";
+import { createTaskQueue } from "./serialize.js";
+import {
+  arrange,
+  FOCUS_RANK,
+  orderTarget,
+  undoTarget,
+  sameLayout,
+  stripIndexes,
+  type ArrangeIo,
+  type OrderDirection,
+  type OrderMove,
+  type PlacedBlock,
+} from "./tab-order.js";
 import type { UndoBatch } from "./undo-log.js";
 
 export type GetDigestsMessage = { type: "get-digests"; digestId?: string; view?: boolean };
@@ -46,8 +62,14 @@ export type DigestSetFateMessage = {
 };
 export type DigestActMessage = { type: "digest-act"; digestId: string; action: DigestAction };
 export type DigestUndoMessage = { type: "digest-undo"; digestId: string };
-/** Put the latest Move to top's tabs back where they were. */
-export type DigestUndoMoveMessage = { type: "digest-undo-move"; digestId: string };
+/** Reorder the window the full view is in by this digest's verdicts. */
+export type DigestOrderMessage = {
+  type: "digest-order";
+  digestId: string;
+  direction: OrderDirection;
+};
+/** Put that window back as it was before the latest Focus or Clear. */
+export type DigestUndoOrderMessage = { type: "digest-undo-order"; digestId: string };
 export type DigestShowMessage = { type: "digest-show"; digestId: string; index: number };
 
 export type DigestMessage =
@@ -56,8 +78,14 @@ export type DigestMessage =
   | DigestSetFateMessage
   | DigestActMessage
   | DigestUndoMessage
-  | DigestUndoMoveMessage
+  | DigestOrderMessage
+  | DigestUndoOrderMessage
   | DigestShowMessage;
+
+/** Where a message came from: the window of the tab the full view is in. */
+export interface DigestSender {
+  windowId?: number;
+}
 
 export interface GetDigestsResponse {
   /** Newest first. */
@@ -70,12 +98,35 @@ export type DigestActResponse =
   | {
       ok: true;
       action: DigestAction;
-      /** Items moved or closed. */
+      /** Items closed. */
       done: number;
       outcomes: Array<{ index: number; outcome: DigestItemOutcome }>;
       batchId?: string;
     }
   | { ok: false; error: string };
+
+export type DigestOrderResponse =
+  | {
+      ok: true;
+      direction: OrderDirection;
+      /** The window ended in the planned order, every read-back as planned. */
+      complete: boolean;
+      moves: number;
+      /** Digest tabs this window's order could move: pinned, hidden and folder tabs stay put. */
+      ranked: number;
+      /** Digest tabs open in other windows, left alone. */
+      elsewhere: number;
+    }
+  | { ok: false; error: string };
+
+export type DigestUndoOrderResponse =
+  | { ok: true; exact: boolean; moves: number }
+  | { ok: false; error: string };
+
+export const ORDER_CHANGED =
+  "Not undone: this window’s tabs changed since the reorder (a tab moved, opened, closed, or changed pin or group), so it can no longer be put back exactly.";
+const ORDER_WINDOW_GONE = "Not undone: that window is no longer open.";
+const ORDER_OTHER_WINDOW = "Not undone: undo a reorder from the window it reordered.";
 
 export interface DigestActionDeps {
   opts: () => NormalizeOpts;
@@ -84,17 +135,10 @@ export interface DigestActionDeps {
   readUndoLog: () => Promise<UndoBatch[]>;
   closeTabs: (tabIds: number[]) => Promise<TabsCloseResult>;
   undoClose: (batchId: string) => Promise<UndoCloseResult>;
-  /**
-   * Move these tabs, in this order, to the head of their window's unpinned
-   * tabs. Answers where each sat before and which ones the engine really put
-   * at the top.
-   */
-  moveToTop: (
-    windowId: number,
-    tabIds: number[],
-  ) => Promise<{ from: TabPosition[]; landed: number[] }>;
-  /** Put moved tabs back at their recorded indexes. */
-  restoreOrder: (from: TabPosition[]) => Promise<{ restored: number; skipped: number }>;
+  /** One window's tabs, as blocks, from a fresh listing. Throws when the window is gone (no tabs). */
+  readLayout: (windowId: number) => Promise<PlacedBlock[]>;
+  /** One `tabs.move` (a tab) or `tabGroups.move` (a group) in that window. */
+  moveBlock: (windowId: number, move: OrderMove) => Promise<void>;
   pageFacts: () => Promise<PageFacts[]>;
   fileTo: () => FileDestination;
   focusTab: (tabId: number) => Promise<void>;
@@ -107,15 +151,17 @@ export function isDigestMutation(type: string): boolean {
 
 export class DigestActions {
   private readonly deps: DigestActionDeps;
+  /** Focus, Clear and their Undo, one at a time: each reads a window, then moves it. */
+  private readonly ordering = createTaskQueue();
 
   constructor(deps: DigestActionDeps) {
     this.deps = deps;
   }
 
-  async handle(msg: DigestMessage): Promise<unknown> {
+  async handle(msg: DigestMessage, from: DigestSender = {}): Promise<unknown> {
     switch (msg.type) {
       case "get-digests":
-        return this.get(msg);
+        return this.get(msg, from.windowId);
       case "digest-seen":
         return this.seen(msg.digestId);
       case "digest-set-fate":
@@ -124,8 +170,10 @@ export class DigestActions {
         return this.act(msg.digestId, msg.action);
       case "digest-undo":
         return this.undo(msg.digestId);
-      case "digest-undo-move":
-        return this.undoMove(msg.digestId);
+      case "digest-order":
+        return this.order(msg.digestId, msg.direction, from.windowId);
+      case "digest-undo-order":
+        return this.undoOrder(msg.digestId, from.windowId);
       case "digest-show":
         return this.show(msg.digestId, msg.index);
     }
@@ -136,24 +184,28 @@ export class DigestActions {
     return (await readDigests()).find((d) => d.id === id) ?? null;
   }
 
-  private async view(record: DigestRecord): Promise<DigestView> {
+  /** `windowId` is the window the full view is in: only its own reorder is shown there. */
+  private async view(record: DigestRecord, windowId?: number): Promise<DigestView> {
     const [live, log, facts] = await Promise.all([
       this.deps.liveTabs(),
       this.deps.readUndoLog(),
       this.deps.pageFacts().catch(() => []),
     ]);
-    return buildDigestView(record, live, log, this.deps.opts(), {
+    const view = buildDigestView(record, live, log, this.deps.opts(), {
       facts,
       fileTo: this.deps.fileTo(),
+      ...(windowId !== undefined ? { windowId } : {}),
     });
+    const receipt = digestReceipt(record, Date.now());
+    return receipt ? { ...view, receipt } : view;
   }
 
-  private async get(msg: GetDigestsMessage): Promise<GetDigestsResponse> {
+  private async get(msg: GetDigestsMessage, windowId?: number): Promise<GetDigestsResponse> {
     const list = await readDigests();
     const response: GetDigestsResponse = { list: list.map(summarizeDigest) };
     if (msg.view) {
       const record = list.find((d) => d.id === msg.digestId) ?? list[0];
-      if (record) response.view = await this.view(record);
+      if (record) response.view = await this.view(record, windowId);
     }
     return response;
   }
@@ -191,7 +243,7 @@ export class DigestActions {
   }
 
   async act(id: string, action: DigestAction): Promise<DigestActResponse> {
-    if (action !== "top" && action !== "close") return { ok: false, error: "Unknown action." };
+    if (action !== "close") return { ok: false, error: "Unknown action." };
     const record = await this.find(id);
     if (!record) return { ok: false, error: "That digest is no longer stored." };
     const opts = this.deps.opts();
@@ -211,18 +263,7 @@ export class DigestActions {
     let done = 0;
     let batchId: string | undefined;
 
-    if (action === "top") {
-      const moved = await this.moveToTop(targets);
-      outcomes.push(...moved.outcomes);
-      done = moved.outcomes.filter((o) => o.outcome === "moved").length;
-      outcomes.sort((a, b) => a.index - b.index);
-      const entry = { startedAt, at: Date.now(), outcomes, from: moved.from };
-      await updateDigest(record.id, (current) => withMove(current, entry)).catch((err) =>
-        console.warn("[tabglutton] digest: could not record a move", String(err?.name ?? "")),
-      );
-      announceDigestsChanged();
-      return { ok: true, action, done, outcomes };
-    } else if (targets.length > 0) {
+    if (targets.length > 0) {
       // Intent first. If the write after the close is lost, the panel finds the
       // batch again from this `startedAt` and the undo log (`findCloseBatch`);
       // if this write fails, nothing has been closed yet.
@@ -275,62 +316,151 @@ export class DigestActions {
   }
 
   /**
-   * One `moveToTop` per window, each tab in the digest's order. A window whose
-   * move throws leaves its tabs where they were, reported `failed`; only tabs
-   * the engine really put at the top count as `moved` and are recorded for Undo.
+   * Focus or Clear the window the full view is in. Only this digest's verdicts
+   * rank: a tab the digest resolves to in this window takes its effective
+   * fate's bucket, every other tab here is neutral, and digest tabs in other
+   * windows are counted and left alone. That window's layout is stored before
+   * the first move and read back after the last; when nothing changed since the
+   * previous order, its `before` is kept, so one Undo returns to the start.
    */
-  private async moveToTop(targets: DigestTarget[]): Promise<{
-    outcomes: Array<{ index: number; outcome: DigestItemOutcome }>;
-    from: TabPosition[];
-  }> {
-    const byWindow = new Map<number, DigestTarget[]>();
-    for (const t of [...targets].sort((a, b) => a.index - b.index)) {
-      const list = byWindow.get(t.windowId);
-      if (list) list.push(t);
-      else byWindow.set(t.windowId, [t]);
+  private async order(
+    id: string,
+    direction: OrderDirection,
+    windowId: number | undefined,
+  ): Promise<DigestOrderResponse> {
+    if (direction !== "focus" && direction !== "clear") {
+      return { ok: false, error: "Unknown order." };
     }
-    const outcomes: Array<{ index: number; outcome: DigestItemOutcome }> = [];
-    const from: TabPosition[] = [];
-    for (const [windowId, list] of byWindow) {
-      let landed = new Set<number>();
+    if (windowId === undefined) {
+      return { ok: false, error: "Open the full view in a tab of the window to order." };
+    }
+    return this.ordering(async () => {
+      const record = await this.find(id);
+      if (!record) return { ok: false, error: "That digest is no longer stored." };
+      const resolutions = resolveDigestItems(
+        record.items,
+        await this.deps.liveTabs(),
+        this.deps.opts(),
+      );
+      const rank = new Map<number, number>();
+      let elsewhere = 0;
+      record.items.forEach((item, i) => {
+        const r = resolutions[i];
+        if (r?.kind !== "exact" && r?.kind !== "fallback") return;
+        if (r.tab.windowId === windowId) rank.set(r.tab.id, FOCUS_RANK[effectiveFate(item)]);
+        else elsewhere++;
+      });
+      let before;
       try {
-        const res = await this.deps.moveToTop(
-          windowId,
-          list.map((t) => t.tabId),
-        );
-        landed = new Set(res.landed);
-        from.push(...res.from);
+        before = stripIndexes(await this.deps.readLayout(windowId));
       } catch {
-        // Nothing to record: a move that threw put nothing anywhere.
+        return { ok: false, error: "That window is no longer open." };
       }
-      for (const t of list) {
-        outcomes.push({ index: t.index, outcome: landed.has(t.tabId) ? "moved" : "failed" });
-      }
-    }
-    return { outcomes, from };
+      // Pinned, hidden and folder tabs keep their places, so they are not ranked.
+      const movable = new Set(before.filter((b) => !b.fixed).flatMap((b) => b.tabIds));
+      const ranked = [...rank.keys()].filter((tabId) => movable.has(tabId)).length;
+      const target = orderTarget(
+        before,
+        (tabId) => rank.get(tabId) ?? FOCUS_RANK.neutral,
+        direction,
+      );
+      const previous = record.order;
+      const origin =
+        previous &&
+        previous.undoneAt === undefined &&
+        previous.after &&
+        previous.windowId === windowId &&
+        sameLayout(previous.after, before)
+          ? previous.before
+          : before;
+      // Before anything moves: a run cut short still has its starting point.
+      const startedAt = Date.now();
+      const intent = await updateDigest(record.id, (current) =>
+        withOrder(current, {
+          direction,
+          windowId,
+          startedAt,
+          before: origin,
+          ranked,
+          elsewhere,
+        }),
+      );
+      if (!intent) return { ok: false, error: "That digest is no longer stored." };
+      const result = await arrange(this.windowIo(windowId), target);
+      // Without a layout (the window could not be read) there is no `after`,
+      // so no Undo is offered.
+      await updateDigest(record.id, (current) =>
+        current.order?.startedAt === startedAt
+          ? withOrder(current, {
+              ...current.order,
+              ...(result.layout ? { after: result.layout } : {}),
+              complete: result.complete,
+              moves: result.moves,
+            })
+          : null,
+      ).catch((err) =>
+        console.warn("[tabglutton] digest: could not record an order", String(err?.name ?? "")),
+      );
+      announceDigestsChanged();
+      return {
+        ok: true,
+        direction,
+        complete: result.complete,
+        moves: result.moves,
+        ranked,
+        elsewhere,
+      };
+    });
   }
 
-  /** Put the latest Move to top's tabs back, once. */
-  private async undoMove(id: string): Promise<{ ok: boolean; restored: number; skipped: number }> {
-    const record = await this.find(id);
-    const top = record?.top;
-    if (!record || !top || top.undoneAt !== undefined || top.from.length === 0) {
-      return { ok: false, restored: 0, skipped: 0 };
-    }
-    // Spent before the tabs move, under the lock, so a double click cannot run
-    // it twice and a newer Move to top is never undone by an older click.
-    let claimed = false;
-    await updateDigest(record.id, (current) => {
-      if (current.top?.startedAt !== top.startedAt || current.top.undoneAt !== undefined) {
-        return null;
+  private windowIo(windowId: number): ArrangeIo {
+    return {
+      read: () => this.deps.readLayout(windowId),
+      move: (move) => this.deps.moveBlock(windowId, move),
+    };
+  }
+
+  /**
+   * Put the latest order's window back, once, and only exactly: the live layout
+   * must still be the one the order left, or nothing moves and the answer says
+   * why. The claim is spent under the digest lock before the first move.
+   */
+  private async undoOrder(
+    id: string,
+    windowId: number | undefined,
+  ): Promise<DigestUndoOrderResponse> {
+    return this.ordering(async () => {
+      const record = await this.find(id);
+      const order = record?.order;
+      if (!record || !order || order.undoneAt !== undefined || !order.after) {
+        return { ok: false, error: "There is no reorder to undo." };
       }
-      claimed = true;
-      return withMove(current, { ...current.top, undoneAt: Date.now() });
+      if (windowId !== order.windowId) return { ok: false, error: ORDER_OTHER_WINDOW };
+      let live;
+      try {
+        live = stripIndexes(await this.deps.readLayout(order.windowId));
+      } catch {
+        return { ok: false, error: ORDER_WINDOW_GONE };
+      }
+      const target = undoTarget(live, order.before, order.after);
+      if (!target) return { ok: false, error: ORDER_CHANGED };
+      let claimed = false;
+      await updateDigest(record.id, (current) => {
+        if (current.order?.startedAt !== order.startedAt || current.order.undoneAt !== undefined) {
+          return null;
+        }
+        claimed = true;
+        return withOrder(current, { ...current.order, undoneAt: Date.now() });
+      });
+      if (!claimed) return { ok: false, error: "That reorder was already undone." };
+      const result = await arrange(this.windowIo(order.windowId), target);
+      announceDigestsChanged();
+      return {
+        ok: true,
+        exact: result.complete && !!result.layout && sameLayout(result.layout, order.before),
+        moves: result.moves,
+      };
     });
-    if (!claimed) return { ok: false, restored: 0, skipped: 0 };
-    const res = await this.deps.restoreOrder(top.from);
-    announceDigestsChanged();
-    return { ok: true, ...res };
   }
 
   /** Reopen the newest close batch that still has something to reopen. */

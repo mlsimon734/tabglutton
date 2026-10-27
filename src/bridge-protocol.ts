@@ -1128,8 +1128,8 @@ export interface UndoCloseResult {
 /**
  * What the agent thinks should happen to one item.
  *
- * - `worth-it` — the user would reopen it or act on it; kept, and offered a
- *   Move to top of its window's tab list.
+ * - `worth-it` — the user would reopen it or act on it; kept, and first when
+ *   Focus orders its window.
  * - `file` — reference material to keep but not reopen. Display only in this
  *   slice: there is no bulk File action (deferred with its own design).
  * - `close` — read, judged, and offered for one undoable close.

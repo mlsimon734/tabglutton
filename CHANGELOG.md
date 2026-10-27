@@ -2,7 +2,33 @@
 
 All notable changes to Tabglutton are documented here.
 
+## [0.5.3](https://github.com/mlsimon734/tabglutton/compare/v0.5.2...v0.5.3) (unreleased)
+
+### Features
+
+- **Order a window by its digest: Focus and Clear replace Move to top.** The Digest panel's
+  header gains one action in two directions for the window the full view is open in.
+  **Focus** puts the tabs worth your time first, then the ones the agent could not read,
+  the tabs the digest does not name, the ones to file, and the close candidates last.
+  **Clear** is the reverse, so a sweep starts with what is cheapest to close. Your own moves
+  between sections count, tab groups move whole and keep their order inside, and pinned
+  tabs, hidden tabs and Zen folders stay where they are. Nothing moves in other windows; the
+  panel says how many of the digest's tabs it left there. **Undo** puts the window back
+  exactly as it was, and once you have moved, opened, closed, pinned or regrouped a tab in
+  that window it says it can no longer do that instead of guessing; it is offered only in
+  that window's full view. No tab is woken,
+  ungrouped or unpinned along the way.
+
 ## [0.5.2](https://github.com/mlsimon734/tabglutton/compare/v0.5.1...v0.5.2) (unreleased)
+
+### Features
+
+- **A digest keeps a receipt of what you did with it.** Once its Close has run, the Digest
+  panel's header says how many tabs it closed and how long after you first opened the
+  digest, how many of those pages you opened again within 48 hours (Undo is counted on its
+  own, never as a reopen), and how many rows you moved out of the agent's sections. "Copy
+  diagnostics" lists the same counts per stored digest, with no page, feed, or agent text,
+  so a digest's track record can be shared without its contents.
 
 ### Fixes
 

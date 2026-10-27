@@ -6,7 +6,12 @@
 // is unresolvable in a Firefox module service worker and aborts registration.
 import { BridgeClient, type BridgeStatus } from "./bridge-client.js";
 import { BridgeMethodRunner, isHttpUrl, queryAllTabs, readUndoLog } from "./bridge-methods.js";
-import type { ClipMark, TabsCloseResult, UndoCloseResult } from "./bridge-protocol.js";
+import {
+  digestCounts,
+  type ClipMark,
+  type TabsCloseResult,
+  type UndoCloseResult,
+} from "./bridge-protocol.js";
 import { getBrowserInfoOnce } from "./browser-info.js";
 import { clipDownloadPath, saveClipFile, type SavedClipFile } from "./clip-file.js";
 import { thinClipVerdict, type ClipGuardReason, type ThinClipVerdict } from "./clip-guard.js";
@@ -18,8 +23,9 @@ import {
   liveTabById,
   type DigestMessage,
 } from "./digest-actions.js";
-import { toLiveTab } from "./digest-store.js";
-import { landedAtTop, restoreSequence, topIndex, type TabPosition } from "./move-to-top.js";
+import { digestReceipt, reopenWatchList, type ReopenWatch } from "./digest-receipt.js";
+import { noteDigestReopen, onDigestsWritten, readDigests, toLiveTab } from "./digest-store.js";
+import { layoutFrom, type OrderMove, type PlacedBlock } from "./tab-order.js";
 import { readPageFacts, recordPageFacts } from "./page-facts-store.js";
 import {
   dupNoticeAfterReopen,
@@ -42,7 +48,7 @@ import {
   type ClipPayload,
   type ObsidianClipRequest,
 } from "./clip-format.js";
-import type { NormalizeOpts } from "./normalize.js";
+import { normalizeUrl, type NormalizeOpts } from "./normalize.js";
 import { DOWNLOADS_GONE, downloadsGrant } from "./permissions.js";
 import { getFilePlatformOnce } from "./platform.js";
 import { createTaskQueue, delay } from "./serialize.js";
@@ -595,15 +601,24 @@ async function probeHeuristic(): Promise<void> {
   }
 }
 
+type TabUpdatedListener = Parameters<typeof browser.tabs.onUpdated.addListener>[0];
+type TabUpdatedProperty = NonNullable<
+  NonNullable<Parameters<typeof browser.tabs.onUpdated.addListener>[1]>["properties"]
+>[number];
+
 // Firefox supports tabs.onUpdated event filters; Chrome throws
 // "This event does not support filters" — and at top level that error aborts
-// service-worker registration entirely. Both listeners below already guard on
-// changeInfo.status, so on Chrome we register them unfiltered.
-function onTabUpdated(listener: Parameters<typeof browser.tabs.onUpdated.addListener>[0]): void {
+// service-worker registration entirely. Every listener registered through here
+// guards on the `changeInfo` field it filters for, so on Chrome it is
+// registered unfiltered.
+function onTabUpdated(
+  listener: TabUpdatedListener,
+  properties: TabUpdatedProperty[] = ["status"],
+): void {
   if (IS_CHROME) {
     browser.tabs.onUpdated.addListener(listener);
   } else {
-    browser.tabs.onUpdated.addListener(listener, { properties: ["status"] });
+    browser.tabs.onUpdated.addListener(listener, { properties });
   }
 }
 
@@ -656,6 +671,8 @@ browser.storage.onChanged.addListener(async (changes, area) => {
   if (!Object.keys(changes).some((key) => SETTING_KEYS.has(key))) return;
   settings = await loadSettings();
   bridge.sync();
+  // The URL rules decide which pages the receipt watches.
+  refreshReopenWatch();
   // Repainting the badge means a tabs.query plus a full duplicate grouping —
   // ~1000 URL normalizations at this project's scale — so it runs only when a
   // badge input truly changed. Presence alone is not that: Firefox reports
@@ -1547,8 +1564,8 @@ const digestActions = new DigestActions({
     (await bridgeRunner.run("tabs_close", { tabIds })) as TabsCloseResult,
   undoClose: async (batchId) =>
     (await bridgeRunner.run("undo_close", { batchId })) as UndoCloseResult,
-  moveToTop: moveTabsToTop,
-  restoreOrder: restoreTabOrder,
+  readLayout: readOrderLayout,
+  moveBlock: moveOrderBlock,
   pageFacts: readPageFacts,
   fileTo: () => ({
     kind: settings.clipDestination === "file" ? "file" : "obsidian",
@@ -1559,6 +1576,84 @@ const digestActions = new DigestActions({
     await browser.tabs.create({ url, active: true });
   },
 });
+
+/**
+ * A closed page coming back, for the digest receipt (`src/digest-receipt.ts`).
+ * Every navigation passes through here, so the closed items still watched are
+ * held by URL key and rebuilt after each digest write or URL-rule change, not
+ * per navigation; with nothing watched, a navigation costs one size check. The
+ * committed `tab.url` only (docs/ENGINEERING.md §Uncommitted URLs): a tab still
+ * loading has not come back to anything yet, and its commit fires this again.
+ */
+interface ReopenWatchState {
+  opts: NormalizeOpts;
+  watched: Map<string, ReopenWatch[]>;
+  /**
+   * Tabs on a watched page, by its key, as of the rebuild and every navigation
+   * since. A URL change that leaves a tab on the page it was already on (an
+   * anchor, a pushState, a duplicate the digest did not close) is not the user
+   * coming back.
+   */
+  onPage: Map<number, string>;
+}
+
+async function buildReopenWatch(): Promise<ReopenWatchState> {
+  await settingsReady;
+  const opts = normalizeOptsFrom(settings);
+  const watched = new Map<string, ReopenWatch[]>();
+  for (const watch of reopenWatchList(await readDigests(), opts, Date.now())) {
+    const same = watched.get(watch.key);
+    if (same) same.push(watch);
+    else watched.set(watch.key, [watch]);
+  }
+  const onPage = new Map<number, string>();
+  if (watched.size > 0) {
+    for (const tab of await browser.tabs.query({})) {
+      const key = tab.id !== undefined && tab.url ? normalizeUrl(tab.url, opts) : null;
+      if (tab.id !== undefined && key !== null && watched.has(key)) onPage.set(tab.id, key);
+    }
+  }
+  return { opts, watched, onPage };
+}
+
+// A failed read watches nothing until the next write rebuilds it.
+const watchOrNothing = (): Promise<ReopenWatchState> =>
+  buildReopenWatch().catch(() => ({ opts: {}, watched: new Map(), onPage: new Map() }));
+
+let reopenWatch = watchOrNothing();
+
+function refreshReopenWatch(): void {
+  reopenWatch = watchOrNothing();
+}
+
+onDigestsWritten(refreshReopenWatch);
+
+async function noteReopen(tabId: number, tab: browser.tabs.Tab): Promise<void> {
+  const state = await reopenWatch;
+  if (state.watched.size === 0) return;
+  const key = tab.url && isHttpUrl(tab.url) ? normalizeUrl(tab.url, state.opts) : null;
+  const before = state.onPage.get(tabId);
+  if (key === null || !state.watched.has(key)) {
+    state.onPage.delete(tabId);
+    return;
+  }
+  state.onPage.set(tabId, key);
+  if (before === key) return;
+  for (const watch of state.watched.get(key) ?? []) {
+    if (watch.incognito !== tab.incognito) continue;
+    await noteDigestReopen(watch.digestId, watch.index, Date.now());
+  }
+}
+
+onTabUpdated(
+  (tabId, changeInfo, tab) => {
+    if (changeInfo.url === undefined) return;
+    noteReopen(tabId, tab).catch((err) =>
+      console.warn("[tabglutton] digest: could not check a reopened page", String(err?.name ?? "")),
+    );
+  },
+  ["url"],
+);
 
 async function recordFactsForRead(tabId: number, payload: ClipPayload): Promise<void> {
   let tab: browser.tabs.Tab;
@@ -1579,72 +1674,39 @@ async function recordFactsForRead(tabId: number, payload: ClipPayload): Promise<
 }
 
 /**
- * Move to top, browser half (`src/move-to-top.ts` has the arithmetic and the
- * measurements). One listing is the source for both the recorded positions and
- * the target index, and the result is read back rather than trusted: an index
- * the engine ignores (Firefox does, inside the pinned block; Zen may, as it
- * does for `tabs.create`) leaves the tab where it was and reports it unmoved.
+ * Focus and Clear, browser half (`src/tab-order.ts` has the plan, the
+ * measurements, and the read-back loop). A window's layout comes from one
+ * listing of that window and nothing else: the panel acts on its own window
+ * only, which on Zen is also what keeps window sync replaying each move once.
+ * A window that no longer exists answers with no tabs, never a guess.
  */
-async function moveTabsToTop(
-  windowId: number,
-  tabIds: number[],
-): Promise<{ from: TabPosition[]; landed: number[] }> {
-  const listing = await browser.tabs.query({ windowId });
-  const byId = new Map(listing.map((t) => [t.id, t] as const));
-  const ids = tabIds.filter((id) => {
-    const tab = byId.get(id);
-    return tab !== undefined && !tab.pinned;
-  });
-  const order = listing.map((t) => ({ id: t.id ?? -1, index: t.index, pinned: t.pinned }));
-  const top = topIndex(order);
-  if (ids.length === 0 || top === null) return { from: [], landed: [] };
-  const from = ids.map((id) => ({ tabId: id, windowId, index: byId.get(id)?.index ?? top }));
-  await browser.tabs.move(ids, { windowId, index: top });
-  const after = await browser.tabs.query({ windowId });
-  const landed = landedAtTop(
-    after.map((t) => ({ id: t.id ?? -1, index: t.index, pinned: t.pinned })),
-    ids,
-  );
-  // Only what really moved is put back by Undo.
-  return {
-    from: from.filter((p) => landed.has(p.tabId)),
-    landed: [...landed],
-  };
+async function readOrderLayout(windowId: number): Promise<PlacedBlock[]> {
+  const tabs = await browser.tabs.query({ windowId });
+  // A window that is open has a tab; the query answers [] for one that is gone.
+  if (tabs.length === 0) throw new Error("window gone");
+  return layoutFrom(tabs.map((tab) => toLiveTab(tab)).filter((tab) => tab !== null));
 }
 
 /**
- * Undo a Move to top: each tab back to its recorded index, highest first per
- * window (`restoreSequence`). A tab that has since closed, changed window, or
- * been pinned is skipped; the index is clamped to the window as it is now.
+ * One block, one call: `tabs.move` for an ungrouped tab, `tabGroups.move` for a
+ * whole group (Firefox 139 / Chrome 89, behind the manifest's `tabGroups`;
+ * typed through a narrow cast because it postdates the ambient types). Never a
+ * batch: on Zen a batch whose tabs start on both sides of its index lands one
+ * slot early.
  */
-async function restoreTabOrder(
-  from: TabPosition[],
-): Promise<{ restored: number; skipped: number }> {
-  let restored = 0;
-  let skipped = 0;
-  for (const p of restoreSequence(from)) {
-    try {
-      const tab = await browser.tabs.get(p.tabId);
-      if (tab.windowId !== p.windowId || tab.pinned) {
-        skipped++;
-        continue;
-      }
-      // Clamped to the highest index the listing shows, never to its length: on
-      // Zen another workspace's tabs are absent from the listing but hold
-      // indexes, and counting only the visible tabs would drop a tab among them.
-      const last = Math.max(
-        ...(await browser.tabs.query({ windowId: p.windowId })).map((t) => t.index),
-      );
-      await browser.tabs.move(p.tabId, {
-        windowId: p.windowId,
-        index: Math.min(p.index, last),
-      });
-      restored++;
-    } catch {
-      skipped++;
-    }
+async function moveOrderBlock(windowId: number, move: OrderMove): Promise<void> {
+  const { block, index } = move;
+  if (block.groupId === undefined) {
+    await browser.tabs.move(block.tabIds[0] as number, { windowId, index });
+    return;
   }
-  return { restored, skipped };
+  const tabGroups = (
+    browser as typeof browser & {
+      tabGroups?: { move?: (groupId: number, props: { index: number }) => Promise<unknown> };
+    }
+  ).tabGroups;
+  if (typeof tabGroups?.move !== "function") throw new Error("tabGroups.move is unavailable");
+  await tabGroups.move(block.groupId, { index });
 }
 
 const POPUP_URL = browser.runtime.getURL("popup/popup.html");
@@ -1738,14 +1800,16 @@ browser.runtime.onMessage.addListener(
       case "digest-set-fate":
       case "digest-act":
       case "digest-undo":
-      case "digest-undo-move":
+      case "digest-order":
+      case "digest-undo-order":
       case "digest-show":
         await settingsReady;
         if (!digestMessageAllowed(msg.type, sender)) {
           console.warn("[tabglutton] digest: refused a message from outside the full view");
           return undefined;
         }
-        return digestActions.handle(msg);
+        // The window the full view sits in is the one Focus and Clear order.
+        return digestActions.handle(msg, { windowId: sender.tab?.windowId });
     }
     return undefined;
   },
@@ -1872,6 +1936,15 @@ async function collectDiagnostics(): Promise<GetDiagnosticsResponse> {
     normalizeOptsFrom(settings),
     await syncedWindowTabs(inScope),
   ).reduce((n, group) => n + (group.tabs.length - 1), 0);
+  const now = Date.now();
+  const digests = (await readDigests().catch(() => [])).map((record) => {
+    const receipt = digestReceipt(record, now);
+    return {
+      receivedAt: record.receivedAt,
+      fates: digestCounts(record.items),
+      ...(receipt ? { receipt } : {}),
+    };
+  });
   return {
     engine: await engineLabel(),
     platform: await platformLabel(),
@@ -1893,6 +1966,7 @@ async function collectDiagnostics(): Promise<GetDiagnosticsResponse> {
       allowTabLoad: settings.bridgeAllowTabLoad,
       errors: bridge.recentErrors,
     },
+    digests,
   };
 }
 
