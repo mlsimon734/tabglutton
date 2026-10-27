@@ -54,7 +54,13 @@ import {
   type ClipTarget,
 } from "./clip-memory.js";
 import { digestCounts, digestId, noteSourceFor, observeReport } from "./digest.js";
-import { announceDigestsChanged, insertDigest, toLiveTab, updateDigest } from "./digest-store.js";
+import {
+  announceDigestsChanged,
+  insertDigest,
+  noteDigestUndo,
+  toLiveTab,
+  updateDigest,
+} from "./digest-store.js";
 import type { NormalizeOpts } from "./normalize.js";
 import { getFilePlatformOnce } from "./platform.js";
 import { createTaskQueue, delay } from "./serialize.js";
@@ -1257,7 +1263,10 @@ export class BridgeMethodRunner {
     // The whole undo runs under the log's lock, restores included — see
     // `withUndoLog`. Reading, restoring, and writing back are one transaction
     // as far as any concurrent close is concerned.
-    return withUndoLog(async () => {
+    const { result, batch, restored, startedAt } = await withUndoLog(async () => {
+      // Taken once the lock is held: a reopen the user made while this Undo was
+      // still waiting on another close is theirs, not the Undo's.
+      const startedAt = Date.now();
       const batch = findBatch(await readUndoLog(), params.batchId);
       if (!batch) {
         fail(
@@ -1291,8 +1300,23 @@ export class BridgeMethodRunner {
       // slow, and the lock orders concurrent closes against us but does not stop
       // this process's own view from going stale across those awaits.
       await writeUndoLog(retainEntries(await readUndoLog(), batch.id, failed));
-      return { batchId: batch.id, restored: ordered.length - failed.length, failed: failed.length };
+      const result: UndoCloseResult = {
+        batchId: batch.id,
+        restored: ordered.length - failed.length,
+        failed: failed.length,
+      };
+      const restored = ordered.filter((entry) => !failed.includes(entry));
+      return { result, batch, restored, startedAt };
     });
+    // A digest's receipt counts Undo apart from pages the user reopened. After
+    // the lock, so the digest store's queue is never taken inside the undo log's.
+    if (restored.length > 0) {
+      const opts = normalizeOptsFrom(this.deps.getSettings());
+      await noteDigestUndo(batch, restored, startedAt, opts).catch((err) =>
+        console.warn("[tabglutton] undo: could not tell the digests", String(err?.name ?? "")),
+      );
+    }
+    return result;
   }
 
   /**

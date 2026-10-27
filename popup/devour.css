@@ -1513,11 +1513,18 @@ body.digest-mode .kbd-legend {
 }
 
 .digest-provenance,
-.digest-mirror {
+.digest-mirror,
+.digest-receipt {
   margin: 0;
   font-size: var(--fs-small);
   line-height: 1.5;
   color: var(--muted);
+}
+
+.digest-receipt strong {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-soft);
 }
 
 .digest-provenance strong {

@@ -6,7 +6,12 @@
 // is unresolvable in a Firefox module service worker and aborts registration.
 import { BridgeClient, type BridgeStatus } from "./bridge-client.js";
 import { BridgeMethodRunner, isHttpUrl, queryAllTabs, readUndoLog } from "./bridge-methods.js";
-import type { ClipMark, TabsCloseResult, UndoCloseResult } from "./bridge-protocol.js";
+import {
+  digestCounts,
+  type ClipMark,
+  type TabsCloseResult,
+  type UndoCloseResult,
+} from "./bridge-protocol.js";
 import { getBrowserInfoOnce } from "./browser-info.js";
 import { clipDownloadPath, saveClipFile, type SavedClipFile } from "./clip-file.js";
 import { thinClipVerdict, type ClipGuardReason, type ThinClipVerdict } from "./clip-guard.js";
@@ -18,7 +23,8 @@ import {
   liveTabById,
   type DigestMessage,
 } from "./digest-actions.js";
-import { toLiveTab } from "./digest-store.js";
+import { digestReceipt, reopenWatchList, type ReopenWatch } from "./digest-receipt.js";
+import { noteDigestReopen, onDigestsWritten, readDigests, toLiveTab } from "./digest-store.js";
 import { landedAtTop, restoreSequence, topIndex, type TabPosition } from "./move-to-top.js";
 import { readPageFacts, recordPageFacts } from "./page-facts-store.js";
 import {
@@ -42,7 +48,7 @@ import {
   type ClipPayload,
   type ObsidianClipRequest,
 } from "./clip-format.js";
-import type { NormalizeOpts } from "./normalize.js";
+import { normalizeUrl, type NormalizeOpts } from "./normalize.js";
 import { DOWNLOADS_GONE, downloadsGrant } from "./permissions.js";
 import { getFilePlatformOnce } from "./platform.js";
 import { createTaskQueue, delay } from "./serialize.js";
@@ -595,15 +601,24 @@ async function probeHeuristic(): Promise<void> {
   }
 }
 
+type TabUpdatedListener = Parameters<typeof browser.tabs.onUpdated.addListener>[0];
+type TabUpdatedProperty = NonNullable<
+  NonNullable<Parameters<typeof browser.tabs.onUpdated.addListener>[1]>["properties"]
+>[number];
+
 // Firefox supports tabs.onUpdated event filters; Chrome throws
 // "This event does not support filters" — and at top level that error aborts
-// service-worker registration entirely. Both listeners below already guard on
-// changeInfo.status, so on Chrome we register them unfiltered.
-function onTabUpdated(listener: Parameters<typeof browser.tabs.onUpdated.addListener>[0]): void {
+// service-worker registration entirely. Every listener registered through here
+// guards on the `changeInfo` field it filters for, so on Chrome it is
+// registered unfiltered.
+function onTabUpdated(
+  listener: TabUpdatedListener,
+  properties: TabUpdatedProperty[] = ["status"],
+): void {
   if (IS_CHROME) {
     browser.tabs.onUpdated.addListener(listener);
   } else {
-    browser.tabs.onUpdated.addListener(listener, { properties: ["status"] });
+    browser.tabs.onUpdated.addListener(listener, { properties });
   }
 }
 
@@ -656,6 +671,8 @@ browser.storage.onChanged.addListener(async (changes, area) => {
   if (!Object.keys(changes).some((key) => SETTING_KEYS.has(key))) return;
   settings = await loadSettings();
   bridge.sync();
+  // The URL rules decide which pages the receipt watches.
+  refreshReopenWatch();
   // Repainting the badge means a tabs.query plus a full duplicate grouping —
   // ~1000 URL normalizations at this project's scale — so it runs only when a
   // badge input truly changed. Presence alone is not that: Firefox reports
@@ -1560,6 +1577,84 @@ const digestActions = new DigestActions({
   },
 });
 
+/**
+ * A closed page coming back, for the digest receipt (`src/digest-receipt.ts`).
+ * Every navigation passes through here, so the closed items still watched are
+ * held by URL key and rebuilt after each digest write or URL-rule change, not
+ * per navigation; with nothing watched, a navigation costs one size check. The
+ * committed `tab.url` only (docs/ENGINEERING.md §Uncommitted URLs): a tab still
+ * loading has not come back to anything yet, and its commit fires this again.
+ */
+interface ReopenWatchState {
+  opts: NormalizeOpts;
+  watched: Map<string, ReopenWatch[]>;
+  /**
+   * Tabs on a watched page, by its key, as of the rebuild and every navigation
+   * since. A URL change that leaves a tab on the page it was already on (an
+   * anchor, a pushState, a duplicate the digest did not close) is not the user
+   * coming back.
+   */
+  onPage: Map<number, string>;
+}
+
+async function buildReopenWatch(): Promise<ReopenWatchState> {
+  await settingsReady;
+  const opts = normalizeOptsFrom(settings);
+  const watched = new Map<string, ReopenWatch[]>();
+  for (const watch of reopenWatchList(await readDigests(), opts, Date.now())) {
+    const same = watched.get(watch.key);
+    if (same) same.push(watch);
+    else watched.set(watch.key, [watch]);
+  }
+  const onPage = new Map<number, string>();
+  if (watched.size > 0) {
+    for (const tab of await browser.tabs.query({})) {
+      const key = tab.id !== undefined && tab.url ? normalizeUrl(tab.url, opts) : null;
+      if (tab.id !== undefined && key !== null && watched.has(key)) onPage.set(tab.id, key);
+    }
+  }
+  return { opts, watched, onPage };
+}
+
+// A failed read watches nothing until the next write rebuilds it.
+const watchOrNothing = (): Promise<ReopenWatchState> =>
+  buildReopenWatch().catch(() => ({ opts: {}, watched: new Map(), onPage: new Map() }));
+
+let reopenWatch = watchOrNothing();
+
+function refreshReopenWatch(): void {
+  reopenWatch = watchOrNothing();
+}
+
+onDigestsWritten(refreshReopenWatch);
+
+async function noteReopen(tabId: number, tab: browser.tabs.Tab): Promise<void> {
+  const state = await reopenWatch;
+  if (state.watched.size === 0) return;
+  const key = tab.url && isHttpUrl(tab.url) ? normalizeUrl(tab.url, state.opts) : null;
+  const before = state.onPage.get(tabId);
+  if (key === null || !state.watched.has(key)) {
+    state.onPage.delete(tabId);
+    return;
+  }
+  state.onPage.set(tabId, key);
+  if (before === key) return;
+  for (const watch of state.watched.get(key) ?? []) {
+    if (watch.incognito !== tab.incognito) continue;
+    await noteDigestReopen(watch.digestId, watch.index, Date.now());
+  }
+}
+
+onTabUpdated(
+  (tabId, changeInfo, tab) => {
+    if (changeInfo.url === undefined) return;
+    noteReopen(tabId, tab).catch((err) =>
+      console.warn("[tabglutton] digest: could not check a reopened page", String(err?.name ?? "")),
+    );
+  },
+  ["url"],
+);
+
 async function recordFactsForRead(tabId: number, payload: ClipPayload): Promise<void> {
   let tab: browser.tabs.Tab;
   try {
@@ -1872,6 +1967,15 @@ async function collectDiagnostics(): Promise<GetDiagnosticsResponse> {
     normalizeOptsFrom(settings),
     await syncedWindowTabs(inScope),
   ).reduce((n, group) => n + (group.tabs.length - 1), 0);
+  const now = Date.now();
+  const digests = (await readDigests().catch(() => [])).map((record) => {
+    const receipt = digestReceipt(record, now);
+    return {
+      receivedAt: record.receivedAt,
+      fates: digestCounts(record.items),
+      ...(receipt ? { receipt } : {}),
+    };
+  });
   return {
     engine: await engineLabel(),
     platform: await platformLabel(),
@@ -1893,6 +1997,7 @@ async function collectDiagnostics(): Promise<GetDiagnosticsResponse> {
       allowTabLoad: settings.bridgeAllowTabLoad,
       errors: bridge.recentErrors,
     },
+    digests,
   };
 }
 
