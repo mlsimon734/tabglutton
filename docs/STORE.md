@@ -401,14 +401,19 @@ own local agent to read that tab. Pages the user has not selected are never read
 **Host permission `http://127.0.0.1/*`**
 
 ```
-Reaches the optional local bridge: a small MCP server the user installs and runs on their
-own machine, so a coding agent they are already using can list and triage their tabs. The
-connection is a loopback WebSocket to 127.0.0.1 and nothing else; no external host is ever
-contacted, and no tab data leaves the machine.
+Reaches two optional services on the user's own machine, and nothing else on 127.0.0.1.
 
-It is off by default and optional in every sense: the permission is requested only when the
-user turns the bridge on in the extension's settings, and both ends authenticate with a
-token the user generates. With the bridge disabled the extension opens no sockets at all.
+The local bridge: a small MCP server the user installs and runs, so a coding agent they are
+already using can list and triage their tabs. The connection is a loopback WebSocket; no tab
+data leaves the machine, and both ends authenticate with a token the user generates.
+
+Zotero's local API (port 23119): when the user turns on "Route papers to Zotero", a paper
+they choose to file is saved into their own Zotero desktop library, with its PDF. Zotero
+itself asks the user to approve the extension before it accepts anything.
+
+Both are off by default, and the permission is requested only when the user turns one of
+them on in the extension's settings. With both disabled the extension opens no connections
+to this machine at all.
 ```
 
 **`scripting`**

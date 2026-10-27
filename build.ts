@@ -292,8 +292,9 @@ function writeManifest(target: Target, dist: string): void {
     // extension could say at install time — Chrome renders it as "Read and
     // change all your data on all websites" and routes the submission into
     // manual review. Nothing needs it until someone clips (the Defuddle
-    // extractor is injected into arbitrary tabs) or turns the bridge on (the
-    // loopback probe is a cross-origin fetch), and both of those start from a
+    // extractor is injected into arbitrary tabs), turns the bridge on (the
+    // loopback probe is a cross-origin fetch), or routes papers to Zotero (its
+    // local API is the same loopback origin), and all of those start from a
     // click, so `src/permissions.ts` asks for them there instead. Dedup, the
     // default flow, needs neither and is never interrupted.
     //

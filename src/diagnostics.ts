@@ -157,6 +157,8 @@ export interface DiagnosticsBackgroundFacts {
   scope: ScopeMode;
   clipDestination: ClipDestination;
   zoteroRouting: boolean;
+  /** Whether a Zotero key is held. The key itself is a credential and never crosses here. */
+  zoteroConnected: boolean;
   /** The in-page duplicate notice: whether it is on, and the badge count it fires at. */
   dupNotice: { enabled: boolean; threshold: number };
   bridge: DiagnosticsBridgeFacts;
@@ -195,6 +197,12 @@ export function agoLabel(elapsedMs: number): string {
   if (elapsedMs < HOUR) return `${Math.floor(elapsedMs / MINUTE)}m ago`;
   if (elapsedMs < DAY) return `${Math.floor(elapsedMs / HOUR)}h ago`;
   return `${Math.floor(elapsedMs / DAY)}d ago`;
+}
+
+/** Routing, and whether it can actually save: on without a key fails every paper. */
+function zoteroLine(bg: DiagnosticsBackgroundFacts): string {
+  if (!bg.zoteroRouting) return "zotero routing off";
+  return `zotero routing on · ${bg.zoteroConnected ? "connected" : "not connected"}`;
 }
 
 function bridgeLine(bridge: DiagnosticsBridgeFacts): string {
@@ -252,7 +260,7 @@ export function renderDiagnostics(facts: DiagnosticsFacts, now: number): string 
         `${bg.windows} window${bg.windows === 1 ? "" : "s"}`,
     ),
     row("scope", bg.scope),
-    row("clips", `${bg.clipDestination} · zotero routing ${bg.zoteroRouting ? "on" : "off"}`),
+    row("clips", `${bg.clipDestination} · ${zoteroLine(bg)}`),
     row("notice", bg.dupNotice.enabled ? `on at ${bg.dupNotice.threshold} duplicates` : "off"),
     row("bridge", bridgeLine(bg.bridge)),
   );

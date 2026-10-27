@@ -8,7 +8,6 @@ import { DEFAULT_DUP_NOTICE_THRESHOLD, isDupNoticeThreshold } from "./dup-notice
 import type { NormalizeOpts } from "./normalize.js";
 import { sanitizeSiteRules, seedRules, type SiteRule } from "./site-rules.js";
 import { IS_CHROME } from "./target.js";
-import { DEFAULT_ZOTERO_CONNECTOR_ID } from "./zotero.js";
 
 export type ScopeMode = "hidden-false" | "current-window";
 export type ClipMode = "clipboard" | "legacy-uri";
@@ -47,10 +46,19 @@ export interface Settings {
    * reorder — parked, not grouped, whatever the rules say.
    */
   groupingSkipList: string[];
-  /** Route scholarly items detected by Zotero Connector there instead of Obsidian. */
+  /**
+   * File pages that carry citation data into Zotero, through its local API,
+   * instead of the clip destination. See `src/zotero.ts`.
+   */
   zoteroRoutingEnabled: boolean;
-  /** Published Connector ID by default; overrideable for an unpacked POC build. */
-  zoteroConnectorId: string;
+  /**
+   * The local API key Zotero granted when the user pressed Connect and chose
+   * Always Allow. A credential, under `bridgeToken`'s rules: never logged
+   * (`loggableSettings`), never in Copy diagnostics. Empty until connected.
+   */
+  zoteroApiKey: string;
+  /** Top-level Zotero collection papers are filed into, created if missing; empty is the library root. */
+  zoteroCollection: string;
   /**
    * Whether Tabglutton's own settings buttons open the page in a full tab or
    * inside Firefox's Add-ons Manager. Firefox-only: the Chrome build ships
@@ -89,7 +97,8 @@ const DEFAULTS: Readonly<Settings> = Object.freeze({
   siteRules: seedRules(),
   groupingSkipList: [],
   zoteroRoutingEnabled: false,
-  zoteroConnectorId: DEFAULT_ZOTERO_CONNECTOR_ID,
+  zoteroApiKey: "",
+  zoteroCollection: "",
   optionsInTab: true,
   onboardingComplete: false,
   bridgeEnabled: false,
@@ -143,14 +152,16 @@ export function hasClipDestination(settings: Settings | null): boolean {
 }
 
 /**
- * Whether the run will inject the Defuddle extractor, and so needs the host
- * grant Chrome only hands out from a click. Both destinations that produce a
- * note extract the page; only a Zotero-only run does not. Must stay
- * synchronous — its callers evaluate it before the first `await` in a click
- * handler, which is where `requestOrigins` has to be.
+ * Whether the run will inject into the pages it clips, and so needs the host
+ * grant Chrome only hands out from a click. Both note destinations extract the
+ * page, and Zotero routing reads each page's citation data to decide whether
+ * it is a paper, so every configured destination does: this is
+ * `hasClipDestination` under the name its callers ask by. Must stay synchronous
+ * — its callers evaluate it before the first `await` in a click handler, which
+ * is where `requestOrigins` has to be.
  */
 export function clipNeedsPageAccess(settings: Settings | null): boolean {
-  return clipsToFile(settings) || hasVault(settings);
+  return hasClipDestination(settings);
 }
 
 export async function loadSettings(): Promise<Settings> {

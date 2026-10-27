@@ -345,7 +345,12 @@ export function ruleMark(disposition: "never-devour" | "auto-close" | "zotero"):
  */
 export function clipSummary(res: ClipSelectedTabsResponse): string {
   const named: string[] = [];
-  if (res.zoteroSaved) named.push(`${res.zoteroSaved} to Zotero`);
+  if (res.zoteroSaved) {
+    // Said here because the tab is already closed: the summary is the one place
+    // a run can tell the user an item went in without the PDF it came for.
+    const noPdf = res.zoteroPdfMissing ? ` (${res.zoteroPdfMissing} without its PDF)` : "";
+    named.push(`${res.zoteroSaved} to Zotero${noPdf}`);
+  }
   if (res.fileSaved) named.push(`${res.fileSaved} to files`);
   if (res.obsidianSaved) named.push(`${res.obsidianSaved} to Obsidian`);
   const obsidianOnly = named.length === 1 && res.obsidianSaved > 0;

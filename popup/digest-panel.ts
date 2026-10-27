@@ -313,7 +313,7 @@ function renderDestination(view: DigestView): HTMLElement | null {
   if (!view.fileTo) return null;
   const chip = el("span", "dk-dest", view.fileTo.kind === "file" ? "Markdown file" : "Obsidian");
   chip.title = view.fileTo.zotero
-    ? "Where Devour files it; papers the Zotero Connector recognises go to Zotero"
+    ? "Where Devour files it; pages that carry citation data go to Zotero"
     : "Where Devour files it, by your setting";
   return chip;
 }
