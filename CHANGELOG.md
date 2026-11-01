@@ -17,6 +17,12 @@ All notable changes to Tabglutton are documented here.
   way and now says whether the PDF was attached. The manifest's permissions and the bridge
   protocol are unchanged; on Chrome, turning routing on asks for the same local access the
   bridge uses ([#113](https://github.com/mlsimon734/tabglutton/issues/113)).
+- **A digest keeps a receipt of what you did with it.** Once its Close has run, the Digest
+  panel's header says how many tabs it closed and how long after you first opened the
+  digest, how many of those pages you opened again within 48 hours (Undo is counted on its
+  own, never as a reopen), and how many rows you moved out of the agent's sections. "Copy
+  diagnostics" lists the same counts per stored digest, with no page, feed, or agent text,
+  so a digest's track record can be shared without its contents.
 
 ### Fixes
 

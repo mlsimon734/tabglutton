@@ -20,6 +20,7 @@ import {
   type DigestReportParams,
   type DigestReporter,
 } from "./bridge-protocol.js";
+import type { DigestReceipt } from "./digest-receipt.js";
 import type { TabPosition } from "./move-to-top.js";
 import { displayUrl, normalizeUrl, type NormalizeOpts } from "./normalize.js";
 import { factsFor, type PageFacts } from "./page-facts.js";
@@ -94,6 +95,19 @@ export interface DigestMoveRecord extends DigestActionRecord {
   undoneAt?: number;
 }
 
+/**
+ * What the user did with a digest's closes afterwards, recorded as it happens so
+ * a sitting measures itself; `digest-receipt.ts` reads it into the receipt. The
+ * moves and the review time are already on the record (`userFate`, `openedAt`,
+ * `closes`), so only the two facts nothing else holds are kept here.
+ */
+export interface DigestUse {
+  /** Closed pages opened again within the watch window, once per item, never by Undo. */
+  reopened: Array<{ index: number; at: number }>;
+  /** Undos of this digest's closes: when, and which items they put back. */
+  undone: Array<{ at: number; indexes: number[] }>;
+}
+
 export interface DigestRecord {
   id: string;
   receivedAt: number;
@@ -107,6 +121,7 @@ export interface DigestRecord {
   /** Close actions, newest first. */
   closes: DigestActionRecord[];
   mirror: DigestMirrorState;
+  use?: DigestUse;
 }
 
 export interface DigestStore {
@@ -546,6 +561,23 @@ function isMove(value: unknown): value is DigestMoveRecord {
   );
 }
 
+function isUse(value: unknown): value is DigestUse {
+  const o = asRecord(value);
+  return (
+    o !== null &&
+    Array.isArray(o.reopened) &&
+    o.reopened.every((x) => {
+      const r = asRecord(x);
+      return r !== null && isNum(r.index) && isNum(r.at);
+    }) &&
+    Array.isArray(o.undone) &&
+    o.undone.every((x) => {
+      const r = asRecord(x);
+      return r !== null && isNum(r.at) && Array.isArray(r.indexes) && r.indexes.every(isNum);
+    })
+  );
+}
+
 function isMirror(value: unknown): value is DigestMirrorState {
   const o = asRecord(value);
   if (!o) return false;
@@ -588,7 +620,8 @@ function isRecord(value: unknown): value is DigestRecord {
     (o.top === undefined || isMove(o.top)) &&
     Array.isArray(o.closes) &&
     o.closes.every(isAction) &&
-    isMirror(o.mirror)
+    isMirror(o.mirror) &&
+    (o.use === undefined || isUse(o.use))
   );
 }
 
@@ -690,6 +723,8 @@ export interface DigestView {
   moveUndo: number | null;
   /** Where Devour would file the File section, by the user's own setting. */
   fileTo?: FileDestination;
+  /** What the user did with the digest's closes, once a close has taken anything. */
+  receipt?: DigestReceipt;
 }
 
 /** The destination the File section names. Zotero routing is per page, so it is a note, not a chip. */

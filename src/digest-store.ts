@@ -9,6 +9,8 @@
 // `tabs_close`, and records its outcome here in a separate step, so no
 // operation ever holds both queues and they cannot deadlock.
 
+import type { ClosedTabEntry } from "./bridge-protocol.js";
+import { withReopen, withUndone } from "./digest-receipt.js";
 import {
   DIGESTS_KEY,
   DIGEST_STORE_VERSION,
@@ -17,10 +19,23 @@ import {
   type DigestRecord,
   type LiveTab,
 } from "./digest.js";
+import type { NormalizeOpts } from "./normalize.js";
 import { createTaskQueue } from "./serialize.js";
 import { IS_CHROME } from "./target.js";
+import type { UndoBatch } from "./undo-log.js";
 
 export const withDigests = createTaskQueue();
+
+const written = new Set<() => void>();
+
+/**
+ * Call `listener` after every digest write this context makes. Every write
+ * happens in the background, so a cache built there from `readDigests` and
+ * refreshed from here is never stale.
+ */
+export function onDigestsWritten(listener: () => void): void {
+  written.add(listener);
+}
 
 /** Only call inside `withDigests`, unless the answer is read-only. */
 export async function readDigests(): Promise<DigestRecord[]> {
@@ -40,6 +55,7 @@ async function writeDigests(list: readonly DigestRecord[]): Promise<void> {
   await browser.storage.local.set({
     [DIGESTS_KEY]: { v: DIGEST_STORE_VERSION, digests: retainDigests(list) },
   });
+  for (const listener of written) listener();
 }
 
 /**
@@ -62,6 +78,45 @@ export function updateDigest(
     await writeDigests(list);
     return next;
   });
+}
+
+/**
+ * Record an Undo on whichever digest the batch was one of the closes of. Every
+ * digest is offered the batch, because an agent's `undo_close` names no digest.
+ */
+export function noteDigestUndo(
+  batch: UndoBatch,
+  restored: readonly ClosedTabEntry[],
+  startedAt: number,
+  opts: NormalizeOpts,
+): Promise<void> {
+  return withDigests(async () => {
+    const list = await readDigests();
+    const at = Date.now();
+    let changed = false;
+    const next = list.map((record) => {
+      const updated = withUndone(record, batch, restored, startedAt, at, opts);
+      if (updated === null) return record;
+      changed = true;
+      return updated;
+    });
+    if (changed) {
+      await writeDigests(next);
+      announceDigestsChanged();
+    }
+  });
+}
+
+/** Count a closed item as reopened. Resolves whether it counted. */
+export async function noteDigestReopen(id: string, index: number, at: number): Promise<boolean> {
+  let counted = false;
+  await updateDigest(id, (record) => {
+    const next = withReopen(record, index, at);
+    counted = next !== null;
+    return next;
+  });
+  if (counted) announceDigestsChanged();
+  return counted;
 }
 
 /**
