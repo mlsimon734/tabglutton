@@ -3,9 +3,7 @@ repos:
     rev: v5.0.0
     hooks:
       - id: trailing-whitespace
-        exclude: ^poc/.*\.patch$
       - id: end-of-file-fixer
-        exclude: ^poc/.*\.patch$
       - id: check-json
       - id: check-yaml
       - id: mixed-line-ending

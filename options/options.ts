@@ -24,6 +24,9 @@ import {
   requestOrigins,
   SITES_REFUSED_FOR_NOTICE,
   SITES_REVOKED_FOR_NOTICE,
+  ZOTERO_ACCESS_REFUSED,
+  ZOTERO_ACCESS_REVOKED,
+  ZOTERO_ORIGINS,
 } from "../src/permissions.js";
 import {
   newRuleId,
@@ -42,7 +45,13 @@ import {
 } from "../src/storage.js";
 import { IS_CHROME, TARGET } from "../src/target.js";
 import { vaultWarningFor } from "../src/vault-warning.js";
-import { DEFAULT_ZOTERO_CONNECTOR_ID } from "../src/zotero.js";
+import {
+  connectZotero,
+  ZOTERO_ALLOWED_ONCE,
+  ZoteroError,
+  zoteroFailureMessage,
+  zoteroReachability,
+} from "../src/zotero.js";
 
 const FALLBACK_SCOPE: ScopeMode = IS_CHROME ? "current-window" : "hidden-false";
 
@@ -57,7 +66,10 @@ const obsidianVault = document.getElementById("obsidianVault") as HTMLInputEleme
 const clippingsBaseFolder = document.getElementById("clippingsBaseFolder") as HTMLInputElement;
 const groupingSkipList = document.getElementById("groupingSkipList") as HTMLInputElement;
 const zoteroRoutingEnabled = document.getElementById("zoteroRoutingEnabled") as HTMLInputElement;
-const zoteroConnectorId = document.getElementById("zoteroConnectorId") as HTMLInputElement;
+const zoteroStatusEl = document.getElementById("zoteroStatus") as HTMLSpanElement;
+const zoteroConnect = document.getElementById("zoteroConnect") as HTMLButtonElement;
+const zoteroCollection = document.getElementById("zoteroCollection") as HTMLInputElement;
+const zoteroWarning = document.getElementById("zoteroWarning") as HTMLParagraphElement;
 const vaultWarning = document.getElementById("vaultWarning") as HTMLParagraphElement;
 const downloadsWarning = document.getElementById("downloadsWarning") as HTMLParagraphElement;
 const scopeRadios = document.querySelectorAll<HTMLInputElement>('input[name="scope"]');
@@ -116,7 +128,18 @@ async function load(): Promise<void> {
   clippingsBaseFolder.value = settings.clippingsBaseFolder;
   groupingSkipList.value = settings.groupingSkipList.join(", ");
   zoteroRoutingEnabled.checked = settings.zoteroRoutingEnabled;
-  zoteroConnectorId.value = settings.zoteroConnectorId;
+  zoteroCollection.value = settings.zoteroCollection;
+  zoteroKeyHeld = settings.zoteroApiKey.length > 0;
+  // Routing writes through the loopback grant, which Chrome lets the user take
+  // back. Same shape as the notice and the file destination: revert, say why,
+  // persist, so the switch is off and clickable — the whole recovery path. Only
+  // for a grant seen to be missing.
+  if (settings.zoteroRoutingEnabled && (await originsGrant(ZOTERO_ORIGINS)) === "missing") {
+    zoteroRoutingEnabled.checked = false;
+    setZoteroWarning(ZOTERO_ACCESS_REVOKED);
+    await saveSettings({ zoteroRoutingEnabled: false });
+  }
+  renderZoteroStatus();
   rules = settings.siteRules;
   renderRules();
   updateVaultWarning();
@@ -215,7 +238,9 @@ async function save(): Promise<void> {
     groupingSkipList: parseParams(groupingSkipList.value),
     clipMode,
     zoteroRoutingEnabled: zoteroRoutingEnabled.checked,
-    zoteroConnectorId: zoteroConnectorId.value.trim() || DEFAULT_ZOTERO_CONNECTOR_ID,
+    zoteroCollection: zoteroCollection.value.trim(),
+    // `zoteroApiKey` is deliberately absent: only Connect writes it, so no
+    // switch or keystroke on this page can disconnect Zotero as a side effect.
     optionsInTab: [...optionsInTabRadios].find((r) => r.checked)?.value !== "embedded",
     bridgeEnabled: bridgeEnabled.checked,
     bridgeAllowTabLoad: bridgeAllowTabLoad.checked,
@@ -292,7 +317,6 @@ function queueSave(): void {
 
 for (const el of [
   stripFragment,
-  zoteroRoutingEnabled,
   bridgeAllowTabLoad,
   ...scopeRadios,
   ...clipModeRadios,
@@ -395,7 +419,93 @@ obsidianVault.addEventListener("input", () => {
 });
 clippingsBaseFolder.addEventListener("input", queueSave);
 groupingSkipList.addEventListener("input", queueSave);
-zoteroConnectorId.addEventListener("input", queueSave);
+zoteroCollection.addEventListener("input", queueSave);
+
+// ---------- Zotero ----------
+
+/** Whether a key is stored. The key itself never reaches this page's DOM. */
+let zoteroKeyHeld = false;
+
+/** Like `setDupNoticeWarning`: never `hidden`, so it is a live region when the text lands. */
+function setZoteroWarning(message: string): void {
+  zoteroWarning.textContent = message;
+}
+
+function renderZoteroStatus(waiting = false): void {
+  const state = waiting ? "connecting" : zoteroKeyHeld ? "connected" : "disabled";
+  zoteroStatusEl.dataset.state = state;
+  zoteroStatusEl.textContent = waiting
+    ? "Waiting for Zotero…"
+    : zoteroKeyHeld
+      ? "Connected"
+      : "Not connected";
+  zoteroConnect.textContent = zoteroKeyHeld ? "Connect again" : "Connect to Zotero";
+}
+
+/**
+ * Say so now if Zotero is not there to take a paper, rather than at the first
+ * Devour. A local GET with no key, so asking costs nothing; never overwrites a
+ * message already showing, which is about something the user just did.
+ */
+async function checkZoteroReachable(): Promise<void> {
+  const reach = await zoteroReachability();
+  if (reach !== "ready" && !zoteroWarning.textContent) {
+    setZoteroWarning(zoteroFailureMessage(reach));
+  }
+}
+
+// Routing writes to Zotero over loopback, which on Chrome needs a host grant
+// only a click can ask for — the background page that saves never has one. A
+// refusal leaves the switch off rather than persisting routing whose every
+// paper could only fail.
+zoteroRoutingEnabled.addEventListener("change", () => {
+  void (async () => {
+    // First await in the handler; see requestOrigins on why nothing may precede it.
+    if (zoteroRoutingEnabled.checked && !(await requestOrigins(ZOTERO_ORIGINS))) {
+      zoteroRoutingEnabled.checked = false;
+      setZoteroWarning(ZOTERO_ACCESS_REFUSED);
+      renderZoteroStatus();
+      return;
+    }
+    setZoteroWarning("");
+    renderZoteroStatus();
+    await save();
+    if (zoteroRoutingEnabled.checked) await checkZoteroReachable();
+  })();
+});
+
+// Zotero shows its own dialog and holds the request open until it is answered,
+// so this can wait as long as the user does. Only an Always Allow is kept: a
+// one-time key is spent by the first of the several writes a paper takes.
+zoteroConnect.addEventListener("click", () => {
+  void (async () => {
+    // First await in the handler, for the same reason as the switch: the grant
+    // may have been revoked since routing was switched on.
+    if (!(await requestOrigins(ZOTERO_ORIGINS))) {
+      setZoteroWarning(ZOTERO_ACCESS_REFUSED);
+      return;
+    }
+    zoteroConnect.disabled = true;
+    setZoteroWarning("");
+    renderZoteroStatus(true);
+    try {
+      const result = await connectZotero();
+      if (result.kind === "connected") {
+        await saveSettings({ zoteroApiKey: result.key });
+        zoteroKeyHeld = true;
+      } else {
+        setZoteroWarning(ZOTERO_ALLOWED_ONCE);
+      }
+    } catch (err) {
+      setZoteroWarning(
+        err instanceof ZoteroError ? err.message : zoteroFailureMessage("unreachable"),
+      );
+    } finally {
+      zoteroConnect.disabled = false;
+      renderZoteroStatus();
+    }
+  })();
+});
 
 // ---------- site rules ----------
 
@@ -929,4 +1039,5 @@ if (logoMark) {
 void (async () => {
   await load();
   await refreshBridgeStatus();
+  if (zoteroRoutingEnabled.checked) await checkZoteroReachable();
 })();
