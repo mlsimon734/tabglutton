@@ -20,9 +20,17 @@ import {
   type DigestReportParams,
   type DigestReporter,
 } from "./bridge-protocol.js";
-import type { TabPosition } from "./move-to-top.js";
+import type { DigestReceipt } from "./digest-receipt.js";
 import { displayUrl, normalizeUrl, type NormalizeOpts } from "./normalize.js";
 import { factsFor, type PageFacts } from "./page-facts.js";
+import {
+  layoutFrom,
+  sameLayout,
+  stripIndexes,
+  undoTarget,
+  type OrderBlock,
+  type OrderDirection,
+} from "./tab-order.js";
 import type { UndoBatch } from "./undo-log.js";
 
 export { digestCounts };
@@ -63,16 +71,13 @@ export interface DigestItemRecord extends DigestNoteItem {
 }
 
 /**
- * What one action did to one item. `moved`/`closed` are successes; the rest
- * say why an item was left alone, and every one of them leaves the tab as it was.
+ * What a close did to one item. `closed` is the success; the rest say why an
+ * item was left alone, and every one of them leaves the tab as it was.
  */
 export type DigestItemOutcome =
-  | "moved"
   | "closed"
   | "pinned"
   | "active"
-  | "hidden"
-  | "in-group"
   | "gone"
   | "ambiguous"
   | "changed"
@@ -87,11 +92,48 @@ export interface DigestActionRecord {
   outcomes: Array<{ index: number; outcome: DigestItemOutcome }>;
 }
 
-/** A Move to top, with where each moved tab sat before so Undo can put it back. */
-export interface DigestMoveRecord extends DigestActionRecord {
-  from: TabPosition[];
-  /** Undo ran; the positions are spent. */
+/**
+ * The latest Focus or Clear (`tab-order.ts`): the one window it reordered, that
+ * window's layout before and after, and what it ranked. Undo puts `before`
+ * back only while the window still is `after`.
+ */
+export interface DigestOrderRecord {
+  direction: OrderDirection;
+  windowId: number;
+  /** Written with `before`, before anything moves. */
+  startedAt: number;
+  /**
+   * The window before this order, or before the first of a run of orders with
+   * nothing changed in between, so one Undo goes back to where the user started.
+   */
+  before: OrderBlock[];
+  /**
+   * The window as read back once the moves stopped. Absent until then, and for
+   * good when the window could not be read, so no Undo is offered.
+   */
+  after?: OrderBlock[];
+  /** The read-back matched the plan after every move. */
+  complete?: boolean;
+  moves?: number;
+  /** Digest tabs this window's order could move. */
+  ranked: number;
+  /** Digest tabs open in other windows, left alone. */
+  elsewhere: number;
+  /** Undo ran; the layout is spent. */
   undoneAt?: number;
+}
+
+/**
+ * What the user did with a digest's closes afterwards, recorded as it happens so
+ * a sitting measures itself; `digest-receipt.ts` reads it into the receipt. The
+ * moves and the review time are already on the record (`userFate`, `openedAt`,
+ * `closes`), so only the two facts nothing else holds are kept here.
+ */
+export interface DigestUse {
+  /** Closed pages opened again within the watch window, once per item, never by Undo. */
+  reopened: Array<{ index: number; at: number }>;
+  /** Undos of this digest's closes: when, and which items they put back. */
+  undone: Array<{ at: number; indexes: number[] }>;
 }
 
 export interface DigestRecord {
@@ -102,11 +144,12 @@ export interface DigestRecord {
   items: DigestItemRecord[];
   /** First render in the panel; turns the popup's line off. */
   openedAt?: number;
-  /** The latest Move to top. */
-  top?: DigestMoveRecord;
+  /** The latest Focus or Clear. */
+  order?: DigestOrderRecord;
   /** Close actions, newest first. */
   closes: DigestActionRecord[];
   mirror: DigestMirrorState;
+  use?: DigestUse;
 }
 
 export interface DigestStore {
@@ -114,12 +157,11 @@ export interface DigestStore {
   digests: DigestRecord[];
 }
 
-/** The two bulk actions. File is deferred (#96); could-not-read has none. */
-export type DigestAction = "top" | "close";
-
-export function actionFate(action: DigestAction): DigestFate {
-  return action === "top" ? "worth-it" : "close";
-}
+/**
+ * The section action. File is deferred (#96); could-not-read has none; the
+ * shortlist's is the window-wide Focus (`tab-order.ts`).
+ */
+export type DigestAction = "close";
 
 export function effectiveFate(item: Pick<DigestItemRecord, "fate" | "userFate">): DigestFate {
   return item.userFate ?? item.fate;
@@ -142,8 +184,8 @@ export interface LiveTab {
   active: boolean;
   hidden: boolean;
   discarded: boolean;
-  /** In a tab group. Moving it to the top would take it out of its group. */
-  grouped?: boolean;
+  /** The tab group it is in, if any; Focus and Clear move a group whole. */
+  groupId?: number;
   lastAccessed?: number;
   favIconUrl?: string;
 }
@@ -294,16 +336,12 @@ export interface DigestPlan {
 
 /**
  * Why a resolved tab is left alone by this action, or null when it may be
- * acted on. Pinned tabs never (they already lead the list, and the skill never
- * makes them candidates); active tabs are not closed out from under the user;
- * Firefox-hidden tabs are not moved, which is unmeasured; a tab in a tab group
- * is not moved, because moving it out of the group's span ungroups it.
+ * acted on. Pinned tabs never (the skill never makes them candidates); active
+ * tabs are not closed out from under the user.
  */
 export function exclusionFor(tab: LiveTab, action: DigestAction): DigestItemOutcome | null {
   if (tab.pinned) return "pinned";
   if (action === "close" && tab.active) return "active";
-  if (action === "top" && tab.hidden) return "hidden";
-  if (action === "top" && tab.grouped) return "in-group";
   return null;
 }
 
@@ -314,7 +352,7 @@ export function planDigestAction(
   live: readonly LiveTab[],
   opts: NormalizeOpts,
 ): DigestPlan {
-  const fate = actionFate(action);
+  const fate: DigestFate = action;
   const resolutions = resolveDigestItems(record.items, live, opts);
   const plan: DigestPlan = { targets: [], skipped: [] };
   record.items.forEach((item, index) => {
@@ -415,16 +453,27 @@ export function withClose(record: DigestRecord, entry: DigestActionRecord): Dige
   return { ...record, closes: [entry, ...rest].slice(0, CLOSE_HISTORY) };
 }
 
-/** Record a Move to top. Only the latest is kept: its Undo is the only one offered. */
-export function withMove(record: DigestRecord, entry: DigestMoveRecord): DigestRecord {
-  return { ...record, top: entry };
+/** Record a Focus or Clear. Only the latest is kept: its Undo is the only one offered. */
+export function withOrder(record: DigestRecord, entry: DigestOrderRecord): DigestRecord {
+  return { ...record, order: entry };
 }
 
-/** How many tabs the latest Move to top can still put back, or null. */
-export function moveUndoState(record: Pick<DigestRecord, "top">): number | null {
-  const top = record.top;
-  if (!top || top.undoneAt !== undefined || top.from.length === 0) return null;
-  return top.from.length;
+/**
+ * Whether the latest order's Undo can put its window back exactly: `ready`
+ * while the window's live layout still is the one the order left, `changed`
+ * once anything in it moved, came, went, or changed group or pin (or the window
+ * closed), null when there is nothing to undo.
+ */
+export function orderUndoState(
+  record: Pick<DigestRecord, "order">,
+  live: readonly LiveTab[],
+): "ready" | "changed" | null {
+  const order = record.order;
+  if (!order || order.undoneAt !== undefined || !order.after) return null;
+  // Nothing moved, so there is nothing to put back.
+  if (sameLayout(order.before, order.after)) return null;
+  const now = stripIndexes(layoutFrom(live.filter((t) => t.windowId === order.windowId)));
+  return undoTarget(now, order.before, order.after) ? "ready" : "changed";
 }
 
 // --- ids, retention, parsing ---------------------------------------------------
@@ -480,12 +529,9 @@ const optNum = (v: unknown): boolean => v === undefined || isNum(v);
 const isFate = (v: unknown): v is DigestFate =>
   isStr(v) && (DIGEST_FATES as readonly string[]).includes(v);
 const OUTCOMES: ReadonlySet<string> = new Set([
-  "moved",
   "closed",
   "pinned",
   "active",
-  "hidden",
-  "in-group",
   "gone",
   "ambiguous",
   "changed",
@@ -532,16 +578,53 @@ function isAction(value: unknown): value is DigestActionRecord {
   );
 }
 
-function isMove(value: unknown): value is DigestMoveRecord {
+function isLayout(value: unknown): value is OrderBlock[] {
+  return (
+    Array.isArray(value) &&
+    value.every((x) => {
+      const b = asRecord(x);
+      return (
+        b !== null &&
+        Array.isArray(b.tabIds) &&
+        b.tabIds.length > 0 &&
+        b.tabIds.every(isNum) &&
+        optNum(b.groupId) &&
+        (b.fixed === undefined || b.fixed === true)
+      );
+    })
+  );
+}
+
+function isOrder(value: unknown): value is DigestOrderRecord {
   const o = asRecord(value);
   return (
     o !== null &&
-    isAction(value) &&
-    optNum(o.undoneAt) &&
-    Array.isArray(o.from) &&
-    o.from.every((x) => {
+    (o.direction === "focus" || o.direction === "clear") &&
+    isNum(o.windowId) &&
+    isNum(o.startedAt) &&
+    isLayout(o.before) &&
+    (o.after === undefined || isLayout(o.after)) &&
+    (o.complete === undefined || typeof o.complete === "boolean") &&
+    optNum(o.moves) &&
+    isNum(o.ranked) &&
+    isNum(o.elsewhere) &&
+    optNum(o.undoneAt)
+  );
+}
+
+function isUse(value: unknown): value is DigestUse {
+  const o = asRecord(value);
+  return (
+    o !== null &&
+    Array.isArray(o.reopened) &&
+    o.reopened.every((x) => {
       const r = asRecord(x);
-      return r !== null && isNum(r.tabId) && isNum(r.windowId) && isNum(r.index);
+      return r !== null && isNum(r.index) && isNum(r.at);
+    }) &&
+    Array.isArray(o.undone) &&
+    o.undone.every((x) => {
+      const r = asRecord(x);
+      return r !== null && isNum(r.at) && Array.isArray(r.indexes) && r.indexes.every(isNum);
     })
   );
 }
@@ -585,10 +668,11 @@ function isRecord(value: unknown): value is DigestRecord {
     o.items.length > 0 &&
     o.items.every(isItem) &&
     optNum(o.openedAt) &&
-    (o.top === undefined || isMove(o.top)) &&
+    (o.order === undefined || isOrder(o.order)) &&
     Array.isArray(o.closes) &&
     o.closes.every(isAction) &&
-    isMirror(o.mirror)
+    isMirror(o.mirror) &&
+    (o.use === undefined || isUse(o.use))
   );
 }
 
@@ -607,11 +691,16 @@ export function parseDigestStore(raw: unknown): {
     return { digests: [], unknownVersion: obj ? obj.v : typeof raw };
   }
   const list = Array.isArray(obj.digests) ? obj.digests.filter(isRecord) : [];
-  // 0.5.0's Keep in a group left a `keep` record; there is nothing to undo or
-  // show from it now, so it is dropped rather than carried along.
+  // 0.5.0's Keep in a group left a `keep` record and 0.5.1's Move to top a
+  // `top` one; there is nothing to undo or show from either now, so they are
+  // dropped rather than carried along.
   const current = list.map((d) => {
-    if (!("keep" in d)) return d;
-    const { keep: _legacy, ...rest } = d as DigestRecord & { keep?: unknown };
+    if (!("keep" in d) && !("top" in d)) return d;
+    const {
+      keep: _keep,
+      top: _top,
+      ...rest
+    } = d as DigestRecord & { keep?: unknown; top?: unknown };
     return rest;
   });
   return { digests: retainDigests(current) };
@@ -650,18 +739,16 @@ export interface DigestItemView {
   active: boolean;
   hidden: boolean;
   discarded: boolean;
-  grouped: boolean;
   favIconUrl?: string;
   /** The named tab was not open on this page when the report arrived. */
   unmatchedAtReport: boolean;
   /** The extension's own read of this tab on this page, when there was one. */
   page?: DigestPageView;
-  /** What the latest action for this item's section did to it. */
+  /** What the latest close did to it, for a row in Close. */
   outcome?: DigestItemOutcome;
   /**
    * A close already took this row and no tab is open on its page, so it cannot be
-   * moved to another section. A row moved to the top stays movable: its tab is
-   * open, where it was put.
+   * moved to another section.
    */
   locked: boolean;
 }
@@ -683,13 +770,26 @@ export interface DigestView {
   sitting: DigestRecord["sitting"];
   mirror: DigestMirrorState;
   items: DigestItemView[];
-  top?: DigestMoveRecord;
+  /** The latest Focus or Clear, without its layouts. */
+  order?: DigestOrderView;
   lastClose?: DigestActionRecord;
   undo: DigestUndoState | null;
-  /** Tabs the latest Move to top can put back, or null when there is nothing to undo. */
-  moveUndo: number | null;
   /** Where Devour would file the File section, by the user's own setting. */
   fileTo?: FileDestination;
+  /** What the user did with the digest's closes, once a close has taken anything. */
+  receipt?: DigestReceipt;
+}
+
+export interface DigestOrderView {
+  direction: OrderDirection;
+  complete?: boolean;
+  moves?: number;
+  ranked: number;
+  elsewhere: number;
+  /** Undo ran: the line no longer describes where the tabs are. */
+  undone?: true;
+  /** See `orderUndoState`. */
+  undo: "ready" | "changed" | null;
 }
 
 /** The destination the File section names. Zotero routing is per page, so it is a note, not a chip. */
@@ -727,16 +827,17 @@ export function buildDigestView(
   live: readonly LiveTab[],
   log: readonly UndoBatch[],
   opts: NormalizeOpts,
-  context: { facts?: readonly PageFacts[]; fileTo?: FileDestination } = {},
+  context: {
+    facts?: readonly PageFacts[];
+    fileTo?: FileDestination;
+    /** The window the view is shown in: a reorder of another window is not this one's to show or undo. */
+    windowId?: number;
+  } = {},
 ): DigestView {
   const resolutions = resolveDigestItems(record.items, live, opts);
   const lastClose = record.closes[0];
-  const outcomeFor = (index: number, fate: DigestFate): DigestItemOutcome | undefined => {
-    // An undone move no longer describes where the tabs are.
-    const top = record.top?.undoneAt === undefined ? record.top : undefined;
-    const action = fate === "worth-it" ? top : fate === "close" ? lastClose : undefined;
-    return action?.outcomes.find((o) => o.index === index)?.outcome;
-  };
+  const outcomeFor = (index: number, fate: DigestFate): DigestItemOutcome | undefined =>
+    fate === "close" ? lastClose?.outcomes.find((o) => o.index === index)?.outcome : undefined;
   const facts = context.facts ?? [];
   const items = record.items.map((item, index): DigestItemView => {
     const r = resolutions[index] ?? { kind: "gone" };
@@ -768,7 +869,6 @@ export function buildDigestView(
       active: tab?.active ?? false,
       hidden: tab?.hidden ?? false,
       discarded: tab?.discarded ?? false,
-      grouped: tab?.grouped ?? false,
       ...(favIconUrl ? { favIconUrl } : {}),
       unmatchedAtReport: !item.observed.open,
       ...(page ? { page } : {}),
@@ -786,11 +886,26 @@ export function buildDigestView(
     sitting: record.sitting,
     mirror: record.mirror,
     items,
-    ...(record.top ? { top: record.top } : {}),
+    ...(record.order && record.order.windowId === context.windowId
+      ? { order: orderView(record, live) }
+      : {}),
     ...(lastClose ? { lastClose } : {}),
     undo: digestUndoState(record, log, opts),
-    moveUndo: moveUndoState(record),
     ...(context.fileTo ? { fileTo: context.fileTo } : {}),
+  };
+}
+
+function orderView(record: DigestRecord, live: readonly LiveTab[]): DigestOrderView {
+  const { direction, complete, moves, ranked, elsewhere, undoneAt } =
+    record.order as DigestOrderRecord;
+  return {
+    direction,
+    ...(complete !== undefined ? { complete } : {}),
+    ...(moves !== undefined ? { moves } : {}),
+    ranked,
+    elsewhere,
+    ...(undoneAt !== undefined ? { undone: true as const } : {}),
+    undo: orderUndoState(record, live),
   };
 }
 
