@@ -594,8 +594,8 @@ describe("tab-scoped tools", () => {
     expect(sent.map((s) => s.method)).toEqual(["tab_clip"]);
   });
 
-  // Issue #50: the popup routes papers to Zotero, so the bridge does too, and a
-  // Connector save that resolved is the browser's own confirmation. Gullet does
+  // Issue #50: the popup routes papers to Zotero, so the bridge does too, and an
+  // item read back from the library is the browser's own confirmation. Gullet does
   // not speak to Zotero and must not go looking in the vault for a note that was
   // never written.
   test("tab_clip closes a Zotero-routed clip without touching the vault", async () => {

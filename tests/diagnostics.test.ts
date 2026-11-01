@@ -23,6 +23,7 @@ function backgroundFacts(
     scope: "hidden-false",
     clipDestination: "obsidian",
     zoteroRouting: false,
+    zoteroConnected: false,
     dupNotice: { enabled: false, threshold: 10 },
     bridge: {
       enabled: true,
@@ -171,6 +172,16 @@ describe("renderDiagnostics", () => {
         "```",
       ].join("\n"),
     );
+  });
+
+  test("says whether Zotero routing can save, without the key", () => {
+    const on = (zoteroConnected: boolean): string =>
+      renderDiagnostics(
+        facts({ background: backgroundFacts({ zoteroRouting: true, zoteroConnected }) }),
+        T0,
+      );
+    expect(on(true)).toContain("clips        obsidian · zotero routing on · connected");
+    expect(on(false)).toContain("clips        obsidian · zotero routing on · not connected");
   });
 
   test("names the connected port and the fixed port mode", () => {

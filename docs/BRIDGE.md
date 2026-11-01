@@ -487,7 +487,7 @@ extension and Gullet so the contract is typechecked from one definition.
 | `tabs_list`     | `tabs.query`                                                                          | id, title, url, `windowId` (hoisted when shared), and — only when true — `lastAccessed`, `discarded`, `pinned`, `active`, `hidden`. Also `clipped` (`launched` / `verified`) on a page Tabglutton remembers filing. Filtered with `query`, ordered with `sort`, capped by `limit`, or collapsed to counts with `groupBy: "domain"`. **On Zen, covers the active workspace only.** See below.                                                                             |
 | `tabs_load`     | `tabs.reload` + `tabs.onUpdated`                                                      | Wakes discarded tabs so they can be read. Batched (≤20), three at a time, under a 30s deadline; per-tab `ready`/`pending`/`failed`. Gated on a settings toggle, default off — answers `not-enabled` until then.                                                                                                                                                                                                                                                          |
 | `tab_read`      | `scripting.executeScript` + existing `clip-current.ts`                                | Returns Defuddle markdown + metadata. Fails cleanly on discarded tabs (see below). An extraction under `MIN_CLIP_CONTENT_CHARS` of visible text — usually a bot check served at the parked URL — still returns, with a `thin` note saying how little there was and whether a challenge signature matched; a read files and closes nothing, so it labels rather than refuses. `tab_clip` refuses the same page with `thin-content`, before it can file or close anything. |
-| `tab_clip`      | existing `clip-format.ts` + `obsidian://new` handoff, or `clip-file.ts` + `downloads` | Files exactly as manual Devour does, into whichever destination `clipDestination` names — the vault (including the extension-origin redirect-page dance on both engines) or a markdown file — unless **Route papers to Zotero** is on and the Connector reads the tab as scholarly, which takes it instead. An optional `vault` overrides all of that for one call. See below.                                                                                           |
+| `tab_clip`      | existing `clip-format.ts` + `obsidian://new` handoff, or `clip-file.ts` + `downloads` | Files exactly as manual Devour does, into whichever destination `clipDestination` names — the vault (including the extension-origin redirect-page dance on both engines) or a markdown file — unless **Route papers to Zotero** is on and the tab carries citation data, which takes it instead. An optional `vault` overrides all of that for one call. See below.                                                                                                      |
 | `tabs_close`    | `tabs.remove`                                                                         | Batched, ids deduplicated. Entries (title, url, pinned, window, index, private) are recorded in an undo log in `storage.local` _before_ the removal, and the batch id comes back with the result.                                                                                                                                                                                                                                                                        |
 | `undo_close`    | reopen from the log                                                                   | Safety valve for the one destructive act. Omit the batch id to undo the most recent.                                                                                                                                                                                                                                                                                                                                                                                     |
 | `digest_report` | `storage.local` (`digests`), then a note written by Gullet                            | An agent's verdict on a sitting's tabs, one fate per item (`worth-it` / `file` / `close` / `could-not-read`). Stored and shown in the full view's Digest panel; **nothing is grouped or closed on receipt** — the user acts from the panel. Idempotent by content hash. Gullet overwrites `reporter` from MCP `clientInfo`, then writes the note to disk and reports it back through the sidecar-only `digest_mirror`.                                                   |
@@ -553,37 +553,36 @@ the cheaper of the two mistakes.
 clearing a backlog for a user who had switched **Route papers to Zotero** on filed their
 papers into Obsidian — silently, since nothing reported a destination the user had not
 chosen. That is the same split the file destination had, and it gets the same answer: the
-setting is the user's answer to "where do papers go", and the bridge obeys it. The routing
-function is _injected_ (`routesToZotero` in `BridgeMethodDeps`) rather than re-derived, so
-the verdict cannot drift and every Connector wire detail stays in `src/zotero.ts` — which is
-also what insulates this from the upstream API question the POC is still waiting on
-(`docs/ZOTERO_POC.md`).
+setting is the user's answer to "where do papers go", and the bridge obeys it. Both halves
+are _injected_ (`zoteroCitation` and `saveToZotero` in `BridgeMethodDeps`) rather than
+re-derived, so the verdict cannot drift and every local API wire detail stays in
+`src/zotero.ts` ([#113](https://github.com/mlsimon734/tabglutton/issues/113);
+`docs/ZOTERO_POC.md`).
 
 **The same function is not the same precondition, though, and that gap is real.** Devour
-wakes a tab before asking the Connector, precisely because asking a backlog tab early yields
-a translator-less `ready` that routes to Obsidian silently. The bridge cannot wake: that is
+wakes a tab before reading its citation tags, because a discarded tab has no document to
+read and would route to the note destination silently. The bridge cannot wake: that is
 `tabs_load`'s own gated act, and a read must never navigate as a side effect. So a discarded
-tab is refused outright (`tab-discarded`, with `tabs_load` as the remedy) rather than asked
-about — but a tab that is _loaded and still navigating_ is asked, and can be answered
-`ready` with no translator and filed as a note. `ZOTERO_DETECTION_ATTEMPTS` polling for two
-seconds makes that window narrow; it does not close it. Waking on the bridge's behalf would,
-and is the wrong trade.
+tab is refused outright (`tab-discarded`, with `tabs_load` as the remedy) rather than read —
+but a tab that is _loaded and still navigating_ is read, and a page whose `<head>` has not
+arrived carries no tags yet and is filed as a note. The window is the head's own load time;
+waking on the bridge's behalf would close it, and is the wrong trade.
 
 A Zotero clip is `destination: "zotero"` with `confirmedBy: "browser"`, no `file` and no
-`vault`. Nothing is extracted: the Connector owns the page and its translator state, so a
-paper costs neither a Defuddle injection nor Tabglutton's host permission — exactly as in
-Devour's phase 1. `confirmedBy` is `"browser"` because the Connector answered
-`status: "saved"`, which is the same evidence the popup closes a routed tab on; it is the
-Connector's word that its own save resolved rather than an inspection of the library item,
-and nothing outside Zotero can supply the latter. Gullet therefore verifies nothing here —
-unlike the file destination, where it _could_ look and declines to, it genuinely cannot: it
-does not speak to Zotero. A save that fails raises `zotero-failed` and leaves the tab open;
-routing never falls through to Obsidian, because a paper quietly filed into the wrong place
-is the bug, not the remedy.
+`vault`. Nothing is extracted: routing injects only a reader of the page's `citation_*` meta
+tags, so a paper costs no Defuddle run, though it needs the site access any injection does.
+`confirmedBy` is `"browser"` because the extension read the item back from the library after
+writing it — title and collection, and the PDF attachment's MD5 when one was attached —
+which is the same evidence the popup closes a routed tab on. Gullet verifies nothing here:
+unlike the file destination, where it _could_ look and declines to, it does not speak to
+Zotero. `pdf` says whether the PDF made it (`attached`, `none`, or `failed` with `pdfNote`);
+the item is the save, so a PDF that could not be fetched leaves a saved item and a closed
+tab. A save that fails raises `zotero-failed` and leaves the tab open; routing never falls
+through to Obsidian, because a paper quietly filed into the wrong place is the bug, not the
+remedy.
 
 The routing check comes _before_ the vault-missing check and needs a loaded tab, so a
-discarded tab is reported `tab-discarded` — the Connector's answer for one is a two-second
-detection poll ending in "still detecting", where "wake it with `tabs_load`" is the remedy
+discarded tab is reported `tab-discarded`, where "wake it with `tabs_load`" is the remedy
 the agent can act on. The `vault` override still outranks everything: it is a destination
 the caller stated outright.
 

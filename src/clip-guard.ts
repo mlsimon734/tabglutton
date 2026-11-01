@@ -4,7 +4,7 @@
  * Devour's phase 1 reloads every discarded tab in a run, which is precisely the
  * traffic pattern a bot check answers with an interstitial served at the parked
  * URL. Nothing downstream can tell that page from the one that was there: it has
- * no translator, so it falls past the Zotero route to the note destinations, and
+ * no citation data, so it falls past the Zotero route to the note destinations, and
  * Defuddle extracting "Just a moment…" is a *successful* clip. The user then
  * loses the tab and gains junk, which is worse than failing ([#49]).
  *

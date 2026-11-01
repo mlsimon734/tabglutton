@@ -31,7 +31,8 @@ describe("defaults()", () => {
       siteRules: seedRules(),
       groupingSkipList: [],
       zoteroRoutingEnabled: false,
-      zoteroConnectorId: IS_CHROME ? "ekhagklcjbdpajgpjgmbionohlpdbjgc" : "zotero@chnm.gmu.edu",
+      zoteroApiKey: "",
+      zoteroCollection: "",
       optionsInTab: true,
       onboardingComplete: false,
       bridgeEnabled: false,
@@ -111,8 +112,12 @@ describe("clipNeedsPageAccess()", () => {
     expect(clipNeedsPageAccess({ ...defaults(), clipDestination: "file" })).toBe(true);
   });
 
-  test("a Zotero-only run does not, so it must not spend the click's activation", () => {
-    expect(clipNeedsPageAccess({ ...defaults(), zoteroRoutingEnabled: true })).toBe(false);
+  test("so does Zotero routing, which reads each page's citation data to route it", () => {
+    expect(clipNeedsPageAccess({ ...defaults(), zoteroRoutingEnabled: true })).toBe(true);
+  });
+
+  test("nothing configured injects nothing", () => {
+    expect(clipNeedsPageAccess(defaults())).toBe(false);
   });
 });
 
@@ -132,7 +137,8 @@ describe("normalizeOptsFrom()", () => {
       siteRules: [],
       groupingSkipList: [],
       zoteroRoutingEnabled: true,
-      zoteroConnectorId: "connector@example.test",
+      zoteroApiKey: "",
+      zoteroCollection: "Papers",
       optionsInTab: true,
       onboardingComplete: true,
       bridgeEnabled: false,
