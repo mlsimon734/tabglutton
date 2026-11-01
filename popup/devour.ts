@@ -843,7 +843,7 @@ function renderInspectorPreview(tab: PopupTab, root: string): HTMLElement {
         ? "Kept open — a site rule keeps this site out of Devour."
         : disposition === "auto-close"
           ? "Closed without saving — a site rule."
-          : "Saved to Zotero through its Connector — a site rule.";
+          : "Saved to Zotero — a site rule.";
   }
   pathSection.append(pathLabel, path);
   wrap.append(pathSection);

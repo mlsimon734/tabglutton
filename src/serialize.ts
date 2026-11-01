@@ -8,11 +8,10 @@
 // read-modify-write two closes can interleave and lose) and the OS clipboard the
 // Obsidian handoff borrows.
 //
-// Not every shared resource wants one caller, though. Zotero's client is
-// understood to serve concurrent saves by design, each carrying its own session
-// — read off upstream's `/connector/updateSession` and its one-entry
-// `SITE_ACCESS_LIMIT_TRANSLATORS`, not measured here — so what that dispatch
-// needs is a ceiling rather than a queue, and `createTaskPool` is that ceiling.
+// Not every shared resource wants one caller, though. Zotero's local API serves
+// concurrent writes, each its own request, so what the Zotero dispatch needs is
+// a ceiling on the request rate and the PDFs held in flight rather than a queue,
+// and `createTaskPool` is that ceiling.
 //
 // Pure, so the ordering and error-isolation rules are unit-testable.
 

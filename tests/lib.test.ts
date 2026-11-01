@@ -251,6 +251,7 @@ function summary(partial: Partial<ClipSelectedTabsResponse> = {}): ClipSelectedT
     obsidianSaved: 0,
     fileSaved: 0,
     zoteroSaved: 0,
+    zoteroPdfMissing: 0,
     ruleClosed: 0,
     ruleClosedRestorable: [],
     failures: [],
@@ -279,6 +280,12 @@ describe("clipSummary", () => {
     expect(clipSummary(summary({ zoteroSaved: 3 }))).toBe("Saved 3 to Zotero");
     expect(clipSummary(summary({ zoteroSaved: 3, obsidianSaved: 1 }))).toBe(
       "Saved 3 to Zotero, 1 to Obsidian",
+    );
+  });
+
+  test("an item filed without its PDF is said, since its tab is already closed", () => {
+    expect(clipSummary(summary({ zoteroSaved: 3, zoteroPdfMissing: 1, obsidianSaved: 1 }))).toBe(
+      "Saved 3 to Zotero (1 without its PDF), 1 to Obsidian",
     );
   });
 
