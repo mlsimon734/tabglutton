@@ -2,7 +2,13 @@
 
 All notable changes to Tabglutton are documented here.
 
-## [0.5.2](https://github.com/mlsimon734/tabglutton/compare/v0.5.1...v0.5.2) (unreleased)
+## [0.5.2](https://github.com/mlsimon734/tabglutton/compare/v0.5.1...v0.5.2) (2026-11-02)
+
+Three threads. Route papers to Zotero now saves straight into Zotero 10 and no longer needs a
+patched Zotero Connector; if you ran the patched one, swap it for the stock Connector and press
+**Connect to Zotero** in settings. A digest now keeps a receipt of what you did with
+it. And Dedup stops closing pages on Zen when more than one window is open. The bridge protocol
+and the manifest's permissions are unchanged, so no running hub has to be stopped.
 
 ### Features
 
