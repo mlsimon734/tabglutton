@@ -5,7 +5,7 @@
     { "filename": "gullet/package.json", "type": "json" }
   ],
   "scripts": {
-    "postbump": "bun scripts/sync-gullet-version.ts && bunx oxfmt package.json manifest.json gullet/package.json"
+    "postbump": "bun scripts/sync-gullet-version.ts && bun fmt package.json manifest.json gullet/package.json"
   },
   "header": "# Changelog\n\nAll notable changes to Tabglutton are documented here.\n",
   "types": [

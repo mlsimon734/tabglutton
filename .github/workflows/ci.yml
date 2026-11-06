@@ -34,7 +34,7 @@ jobs:
       - name: Test
         run: bun test
 
-      - name: Format check (oxfmt)
+      - name: Format check (bun fmt)
         run: bun run format:check
 
       - name: Lint JS/TS (oxlint)

@@ -73,7 +73,7 @@ Bun-powered TypeScript WebExtension ("Tabglutton") for Zen Browser, Firefox, and
 
 ## Coding style
 
-TypeScript ES modules with explicit relative `.js` specifiers (`import "./normalize.js"`). Strict typing under `tsconfig.json`: no unused locals or parameters, no implicit `any`, no switch fallthrough. Two-space indent, double quotes, trailing commas in multiline calls, small exported functions. kebab-case filenames, camelCase identifiers. oxfmt formats, oxlint lints.
+TypeScript ES modules with explicit relative `.js` specifiers (`import "./normalize.js"`). Strict typing under `tsconfig.json`: no unused locals or parameters, no implicit `any`, no switch fallthrough. Two-space indent, double quotes, trailing commas in multiline calls, small exported functions. kebab-case filenames, camelCase identifiers. `bun fmt` formats; `.oxfmtrc.json` preserves the existing style without the oxfmt dependency. oxlint lints.
 
 ## Testing
 
