@@ -11,9 +11,9 @@ repos:
 
   - repo: local
     hooks:
-      - id: oxfmt
-        name: oxfmt (format check)
-        entry: bunx oxfmt --check
+      - id: bun-fmt
+        name: bun fmt (format check)
+        entry: bun fmt --check
         language: system
         files: \.(ts|tsx|js|jsx|json|jsonc|css|md|ya?ml)$
         pass_filenames: true

@@ -14,8 +14,8 @@
     "typecheck:ext": "bunx tsc --noEmit -p tsconfig.test.json",
     "typecheck:gullet": "bunx tsc --noEmit -p gullet/tsconfig.json",
     "test": "bun test",
-    "format": "bunx oxfmt .",
-    "format:check": "bunx oxfmt --check .",
+    "format": "bun fmt .",
+    "format:check": "bun fmt --check .",
     "lint:js": "bunx oxlint --format=default .",
     "lint:ext": "bun run build:firefox && bunx web-ext lint --source-dir=dist-firefox",
     "lint": "bun run lint:js && bun run lint:ext",
@@ -48,7 +48,6 @@
     "@types/webextension-polyfill": "^0.12.5",
     "bun-types": "^1.4.0",
     "commit-and-tag-version": "^13.0.0",
-    "oxfmt": "^0.75.0",
     "oxlint": "^1",
     "typescript": "^7.0.0",
     "web-ext": "^10.0.0"
